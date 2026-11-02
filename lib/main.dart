@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'features/products/presentation/products_page.dart';
 import 'features/inventory/presentation/inventory_page.dart';
 
 void main() {
@@ -301,6 +302,8 @@ class _DashboardPageState extends State<DashboardPage> {
               )
             : _selectedIndex == 2
             ? const InventoryPage()
+            : _selectedIndex == 3
+            ? const ProductsPage()
             : _ModulePlaceholder(
                 title: _sections[_selectedIndex],
                 index: _selectedIndex,
@@ -631,23 +634,29 @@ class _OrdersCard extends StatelessWidget {
                 ),
                 title: Text(
                   '${order.customer} · ${order.items}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 subtitle: Text('Pedido ${order.number} · Bs ${order.total}'),
-                trailing: DropdownButton<OrderStatus>(
-                  value: order.status,
-                  underline: const SizedBox(),
-                  items: OrderStatus.values
-                      .map(
-                        (status) => DropdownMenuItem(
-                          value: status,
-                          child: StatusChip(status: status),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (status) {
-                    if (status != null) onOrderChanged(order, status);
-                  },
+                trailing: SizedBox(
+                  width: 132,
+                  child: DropdownButton<OrderStatus>(
+                    value: order.status,
+                    isExpanded: true,
+                    underline: const SizedBox(),
+                    items: OrderStatus.values
+                        .map(
+                          (status) => DropdownMenuItem(
+                            value: status,
+                            child: StatusChip(status: status),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (status) {
+                      if (status != null) onOrderChanged(order, status);
+                    },
+                  ),
                 ),
               ),
           ],
@@ -807,82 +816,85 @@ class _QuickSaleSheetState extends State<_QuickSaleSheet> {
         bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
       ),
       child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Registrar venta',
-                  style: Theme.of(context).textTheme.headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: category,
-              decoration: const InputDecoration(labelText: 'Categoría'),
-              items: ['Todos', 'Desayuno', 'Almuerzo']
-                  .map(
-                    (value) =>
-                        DropdownMenuItem(value: value, child: Text(value)),
-                  )
-                  .toList(),
-              onChanged: (value) => setState(() => category = value ?? 'Todos'),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: products.keys
-                  .map(
-                    (product) => FilterChip(
-                      label: Text(
-                        '$product · Bs ${products[product]!.toStringAsFixed(0)}',
-                      ),
-                      selected: selected.containsKey(product),
-                      onSelected: (isSelected) => setState(() {
-                        if (isSelected) {
-                          selected[product] = 1;
-                        } else {
-                          selected.remove(product);
-                        }
-                      }),
-                    ),
-                  )
-                  .toList(),
-            ),
-            const SizedBox(height: 18),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Total', style: Theme.of(context).textTheme.titleLarge),
-                Text(
-                  'Bs ${total.toStringAsFixed(2)}',
-                  style: Theme.of(context).textTheme.titleLarge
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: selected.isEmpty
-                    ? null
-                    : () => Navigator.pop(context),
-                icon: const Icon(Icons.check),
-                label: const Text('Cobrar y confirmar'),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Registrar venta',
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: category,
+                decoration: const InputDecoration(labelText: 'Categoría'),
+                items: ['Todos', 'Desayuno', 'Almuerzo']
+                    .map(
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text(value)),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setState(() => category = value ?? 'Todos'),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: products.keys
+                    .map(
+                      (product) => FilterChip(
+                        label: Text(
+                          '$product · Bs ${products[product]!.toStringAsFixed(0)}',
+                        ),
+                        selected: selected.containsKey(product),
+                        onSelected: (isSelected) => setState(() {
+                          if (isSelected) {
+                            selected[product] = 1;
+                          } else {
+                            selected.remove(product);
+                          }
+                        }),
+                      ),
+                    )
+                    .toList(),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Total', style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    'Bs ${total.toStringAsFixed(2)}',
+                    style: Theme.of(context).textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: selected.isEmpty
+                      ? null
+                      : () => Navigator.pop(context),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Cobrar y confirmar'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

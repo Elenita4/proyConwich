@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/inventory_repository.dart';
@@ -23,14 +26,25 @@ class _InventoryPageState extends State<InventoryPage> {
 
   void _reload() => _itemsFuture = _repository.getItems();
 
-  Future<void> _openForm([InventoryItem? item]) async {
+  Future<void> _openForm() async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => InventoryFormDialog(item: item, repository: _repository),
+      builder: (_) => InventoryFormDialog(repository: _repository),
     );
     if (saved == true && mounted) {
       setState(_reload);
       _showMessage('Insumo guardado correctamente.');
+    }
+  }
+
+  Future<void> _addStock(InventoryItem item) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => AddStockDialog(item: item, repository: _repository),
+    );
+    if (saved == true && mounted) {
+      setState(_reload);
+      _showMessage('Existencia agregada correctamente.');
     }
   }
 
@@ -68,22 +82,26 @@ class _InventoryPageState extends State<InventoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final horizontalPadding = MediaQuery.sizeOf(context).width < 600
+        ? 16.0
+        : 24.0;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(horizontalPadding),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1400),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                runSpacing: 12,
                 children: [
-                  Expanded(
-                    child: Text(
-                      'Inventario de insumos',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
+                  Text(
+                    'Inventario de insumos',
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   FilledButton.icon(
                     onPressed: () => _openForm(),
@@ -133,7 +151,7 @@ class _InventoryPageState extends State<InventoryPage> {
                   if (items.isEmpty) return const _EmptyState();
                   return _InventoryTable(
                     items: items,
-                    onEdit: _openForm,
+                    onAddStock: _addStock,
                     onDelete: _delete,
                   );
                 },
@@ -149,11 +167,11 @@ class _InventoryPageState extends State<InventoryPage> {
 class _InventoryTable extends StatelessWidget {
   const _InventoryTable({
     required this.items,
-    required this.onEdit,
+    required this.onAddStock,
     required this.onDelete,
   });
   final List<InventoryItem> items;
-  final ValueChanged<InventoryItem> onEdit;
+  final ValueChanged<InventoryItem> onAddStock;
   final ValueChanged<InventoryItem> onDelete;
 
   @override
@@ -166,7 +184,7 @@ class _InventoryTable extends StatelessWidget {
           columns: const [
             DataColumn(label: Text('Insumo')),
             DataColumn(label: Text('Categoría')),
-            DataColumn(label: Text('Existencia')),
+            DataColumn(label: Text('Unidades existentes')),
             DataColumn(label: Text('Mínimo')),
             DataColumn(label: Text('Costo promedio')),
             DataColumn(label: Text('Estado')),
@@ -189,6 +207,16 @@ class _InventoryTable extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodySmall
                             ?.copyWith(color: Colors.black54),
                       ),
+                      if (item.photo != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Image.memory(
+                            item.photo!,
+                            width: 48,
+                            height: 48,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -214,9 +242,9 @@ class _InventoryTable extends StatelessWidget {
                   Row(
                     children: [
                       IconButton(
-                        tooltip: 'Editar',
-                        onPressed: () => onEdit(item),
-                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: 'Agregar existencia',
+                        onPressed: () => onAddStock(item),
+                        icon: const Icon(Icons.add_box_outlined),
                       ),
                       IconButton(
                         tooltip: 'Eliminar',
@@ -236,12 +264,7 @@ class _InventoryTable extends StatelessWidget {
 }
 
 class InventoryFormDialog extends StatefulWidget {
-  const InventoryFormDialog({
-    super.key,
-    required this.item,
-    required this.repository,
-  });
-  final InventoryItem? item;
+  const InventoryFormDialog({super.key, required this.repository});
   final InventoryRepository repository;
 
   @override
@@ -261,19 +284,49 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
   int? _unitId;
   bool _loading = true;
   String? _saveError;
+  Uint8List? _photo;
 
   @override
   void initState() {
     super.initState();
-    final item = widget.item;
-    _code = TextEditingController(text: item?.code);
-    _name = TextEditingController(text: item?.name);
-    _stock = TextEditingController(text: item?.currentStock.toString());
-    _minimum = TextEditingController(text: item?.minimumStock.toString());
-    _cost = TextEditingController(text: item?.averageCost.toString());
-    _categoryId = item?.categoryId;
-    _unitId = item?.unitId;
+    _code = TextEditingController();
+    _name = TextEditingController();
+    _stock = TextEditingController(text: '0');
+    _minimum = TextEditingController(text: '0');
+    _cost = TextEditingController(text: '0');
     _loadLookups();
+  }
+
+  Future<void> _pickPhoto() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Elegir de la galería'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Abrir cámara'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    final selected = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 1200,
+    );
+    if (selected == null || !mounted) return;
+    final bytes = await selected.readAsBytes();
+    if (!mounted) return;
+    setState(() => _photo = bytes);
   }
 
   Future<void> _loadLookups() async {
@@ -310,7 +363,6 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
     try {
       await widget.repository.saveItem(
         InventoryItem(
-          id: widget.item?.id,
           code: _code.text.trim(),
           name: _name.text.trim(),
           categoryId: _categoryId!,
@@ -321,6 +373,7 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
           minimumStock: double.parse(_minimum.text),
           averageCost: double.parse(_cost.text),
           active: true,
+          photo: _photo,
         ),
       );
     } on DatabaseException catch (error) {
@@ -345,9 +398,11 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.item == null ? 'Nuevo insumo' : 'Editar insumo'),
+      title: const Text('Nuevo insumo'),
       content: SizedBox(
-        width: 520,
+        width: MediaQuery.sizeOf(context).width < 600
+            ? MediaQuery.sizeOf(context).width - 64
+            : 520,
         child: _loading
             ? const SizedBox(
                 height: 150,
@@ -371,6 +426,29 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
                         ),
                         validator: _required,
                       ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: _pickPhoto,
+                          icon: const Icon(Icons.photo_outlined),
+                          label: Text(
+                            _photo == null
+                                ? 'Agregar foto (opcional)'
+                                : 'Cambiar foto',
+                          ),
+                        ),
+                      ),
+                      if (_photo != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Image.memory(
+                            _photo!,
+                            height: 120,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
                       const SizedBox(height: 12),
                       Row(
                         children: [
@@ -481,6 +559,128 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
         FilledButton(
           onPressed: _loading ? null : _save,
           child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+class AddStockDialog extends StatefulWidget {
+  const AddStockDialog({
+    super.key,
+    required this.item,
+    required this.repository,
+  });
+
+  final InventoryItem item;
+  final InventoryRepository repository;
+
+  @override
+  State<AddStockDialog> createState() => _AddStockDialogState();
+}
+
+class _AddStockDialogState extends State<AddStockDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _quantity;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _quantity = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _quantity.dispose();
+    super.dispose();
+  }
+
+  String? _positiveNumber(String? value) {
+    final number = double.tryParse(value ?? '');
+    return number == null || number <= 0
+        ? 'Ingresa un número mayor que 0'
+        : null;
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.addStock(
+        itemId: widget.item.id!,
+        quantity: double.parse(_quantity.text),
+      );
+      if (mounted) Navigator.pop(context, true);
+    } on DatabaseException {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'No se pudo agregar la existencia. Intenta nuevamente.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Agregar existencia: ${widget.item.name}'),
+      content: Form(
+        key: _formKey,
+        child: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Stock actual: ${widget.item.currentStock.toStringAsFixed(2)} '
+                  '${widget.item.unitAbbreviation}',
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _quantity,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText:
+                      'Cantidad a agregar (${widget.item.unitAbbreviation})',
+                ),
+                validator: _positiveNumber,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Agregar'),
         ),
       ],
     );

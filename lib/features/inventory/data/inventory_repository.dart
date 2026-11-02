@@ -1,5 +1,7 @@
 import '../../../data/database/app_database.dart';
 
+import 'dart:typed_data';
+
 class InventoryItem {
   const InventoryItem({
     this.id,
@@ -13,6 +15,7 @@ class InventoryItem {
     required this.minimumStock,
     required this.averageCost,
     required this.active,
+    this.photo,
   });
 
   final int? id;
@@ -26,6 +29,7 @@ class InventoryItem {
   final double minimumStock;
   final double averageCost;
   final bool active;
+  final Uint8List? photo;
 
   bool get lowStock => currentStock <= minimumStock;
 
@@ -38,6 +42,7 @@ class InventoryItem {
     'stock_minimo': minimumStock,
     'costo_promedio': averageCost,
     'estado': active ? 1 : 0,
+    'foto': photo,
   };
 
   factory InventoryItem.fromMap(Map<String, Object?> map) => InventoryItem(
@@ -52,11 +57,16 @@ class InventoryItem {
     minimumStock: (map['stock_minimo'] as num).toDouble(),
     averageCost: (map['costo_promedio'] as num).toDouble(),
     active: (map['estado'] as int) == 1,
+    photo: map['foto'] as Uint8List?,
   );
 }
 
 class InventoryLookup {
-  const InventoryLookup({required this.id, required this.name, this.abbreviation});
+  const InventoryLookup({
+    required this.id,
+    required this.name,
+    this.abbreviation,
+  });
   final int id;
   final String name;
   final String? abbreviation;
@@ -84,7 +94,12 @@ class InventoryRepository {
       orderBy: 'nombre COLLATE NOCASE',
     );
     return rows
-        .map((row) => InventoryLookup(id: row['id_categoria']! as int, name: row['nombre']! as String))
+        .map(
+          (row) => InventoryLookup(
+            id: row['id_categoria']! as int,
+            name: row['nombre']! as String,
+          ),
+        )
         .toList();
   }
 
@@ -96,11 +111,13 @@ class InventoryRepository {
       orderBy: 'nombre COLLATE NOCASE',
     );
     return rows
-        .map((row) => InventoryLookup(
-          id: row['id_unidad']! as int,
-          name: row['nombre']! as String,
-          abbreviation: row['abreviatura']! as String,
-        ))
+        .map(
+          (row) => InventoryLookup(
+            id: row['id_unidad']! as int,
+            name: row['nombre']! as String,
+            abbreviation: row['abreviatura']! as String,
+          ),
+        )
         .toList();
   }
 
@@ -116,6 +133,23 @@ class InventoryRepository {
         whereArgs: [item.id],
       );
     }
+  }
+
+  Future<void> addStock({required int itemId, required double quantity}) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((transaction) async {
+      await transaction.rawUpdate(
+        'UPDATE insumos SET stock_actual = stock_actual + ? '
+        'WHERE id_insumo = ?',
+        [quantity, itemId],
+      );
+      await transaction.insert('movimientos_inventario', {
+        'id_insumo': itemId,
+        'tipo': 'ENTRADA',
+        'origen': 'Carga manual',
+        'cantidad': quantity,
+      });
+    });
   }
 
   Future<void> deleteItem(int id) async {

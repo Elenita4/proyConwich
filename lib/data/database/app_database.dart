@@ -19,7 +19,60 @@ class AppDatabase {
   Future<Database> _openDatabase() async {
     configureDatabaseFactory();
     final path = join(await getDatabasesPath(), 'sazon_restaurante.db');
-    return openDatabase(path, version: 1, onCreate: _createSchema);
+    return openDatabase(
+      path,
+      version: 3,
+      onCreate: _createSchema,
+      onUpgrade: _upgradeSchema,
+    );
+  }
+
+  Future<void> _upgradeSchema(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE insumos ADD COLUMN foto BLOB');
+    }
+    if (oldVersion < 3) {
+      await _createProductSchema(db);
+    }
+  }
+
+  Future<void> _createProductSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE productos (
+        id_producto INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT NOT NULL UNIQUE,
+        nombre TEXT NOT NULL,
+        descripcion TEXT,
+        precio_venta REAL NOT NULL DEFAULT 0,
+        foto BLOB,
+        estado INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE recetas (
+        id_receta INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_producto INTEGER NOT NULL UNIQUE,
+        nombre TEXT NOT NULL,
+        instrucciones TEXT,
+        estado INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (id_producto) REFERENCES productos(id_producto)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE receta_detalle (
+        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_receta INTEGER NOT NULL,
+        id_insumo INTEGER NOT NULL,
+        cantidad REAL NOT NULL,
+        FOREIGN KEY (id_receta) REFERENCES recetas(id_receta),
+        FOREIGN KEY (id_insumo) REFERENCES insumos(id_insumo),
+        UNIQUE (id_receta, id_insumo)
+      )
+    ''');
   }
 
   Future<void> _createSchema(Database db, int version) async {
@@ -48,6 +101,7 @@ class AppDatabase {
         stock_minimo REAL NOT NULL DEFAULT 0,
         costo_promedio REAL NOT NULL DEFAULT 0,
         estado INTEGER NOT NULL DEFAULT 1,
+        foto BLOB,
         FOREIGN KEY (id_categoria) REFERENCES categorias_insumo(id_categoria),
         FOREIGN KEY (id_unidad) REFERENCES unidades_medida(id_unidad)
       )
@@ -65,6 +119,7 @@ class AppDatabase {
         FOREIGN KEY (id_insumo) REFERENCES insumos(id_insumo)
       )
     ''');
+    await _createProductSchema(db);
 
     await db.insert('categorias_insumo', {'nombre': 'Bebidas'});
     await db.insert('categorias_insumo', {'nombre': 'Alimentos'});
