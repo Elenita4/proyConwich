@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'features/sales/presentation/sales_page.dart';
 import 'features/products/presentation/products_page.dart';
 import 'features/inventory/presentation/inventory_page.dart';
 
@@ -304,6 +305,8 @@ class _DashboardPageState extends State<DashboardPage> {
             ? const InventoryPage()
             : _selectedIndex == 3
             ? const ProductsPage()
+            : _selectedIndex == 1
+            ? const SalesPage()
             : _ModulePlaceholder(
                 title: _sections[_selectedIndex],
                 index: _selectedIndex,

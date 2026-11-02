@@ -85,78 +85,82 @@ class _InventoryPageState extends State<InventoryPage> {
     final horizontalPadding = MediaQuery.sizeOf(context).width < 600
         ? 16.0
         : 24.0;
-    return SingleChildScrollView(
-      padding: EdgeInsets.all(horizontalPadding),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1400),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 12,
-                children: [
-                  Text(
-                    'Inventario de insumos',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  FilledButton.icon(
-                    onPressed: () => _openForm(),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Nuevo insumo'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Administra existencias, costos y niveles mínimos.',
-                style: Theme.of(context).textTheme.bodyLarge
-                    ?.copyWith(color: Colors.black54),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                onChanged: (value) =>
-                    setState(() => _search = value.trim().toLowerCase()),
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Buscar por código o nombre',
+    return RefreshIndicator(
+      onRefresh: () async => setState(_reload),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.all(horizontalPadding),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1400),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  runSpacing: 12,
+                  children: [
+                    Text(
+                      'Inventario de insumos',
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => _openForm(),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Nuevo insumo'),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 20),
-              FutureBuilder<List<InventoryItem>>(
-                future: _itemsFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(40),
-                        child: CircularProgressIndicator(),
-                      ),
+                const SizedBox(height: 8),
+                Text(
+                  'Administra existencias, costos y niveles mínimos.',
+                  style: Theme.of(context).textTheme.bodyLarge
+                      ?.copyWith(color: Colors.black54),
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  onChanged: (value) =>
+                      setState(() => _search = value.trim().toLowerCase()),
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Buscar por código o nombre',
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FutureBuilder<List<InventoryItem>>(
+                  future: _itemsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(40),
+                          child: CircularProgressIndicator(),
+                        ),
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return _ErrorState(onRetry: () => setState(_reload));
+                    }
+                    final items = (snapshot.data ?? [])
+                        .where(
+                          (item) =>
+                              _search.isEmpty ||
+                              item.name.toLowerCase().contains(_search) ||
+                              item.code.toLowerCase().contains(_search),
+                        )
+                        .toList();
+                    if (items.isEmpty) return const _EmptyState();
+                    return _InventoryTable(
+                      items: items,
+                      onAddStock: _addStock,
+                      onDelete: _delete,
                     );
-                  }
-                  if (snapshot.hasError) {
-                    return _ErrorState(onRetry: () => setState(_reload));
-                  }
-                  final items = (snapshot.data ?? [])
-                      .where(
-                        (item) =>
-                            _search.isEmpty ||
-                            item.name.toLowerCase().contains(_search) ||
-                            item.code.toLowerCase().contains(_search),
-                      )
-                      .toList();
-                  if (items.isEmpty) return const _EmptyState();
-                  return _InventoryTable(
-                    items: items,
-                    onAddStock: _addStock,
-                    onDelete: _delete,
-                  );
-                },
-              ),
-            ],
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),

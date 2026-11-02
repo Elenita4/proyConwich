@@ -39,43 +39,6 @@ class _ProductsPageState extends State<ProductsPage> {
   }
 
   Future<void> _addRecipe(Product product) async {
-    if (product.recipeId != null) {
-      final ingredients = await _repository.getRecipe(product.id!);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Receta de ${product.name}'),
-          content: SizedBox(
-            width: 420,
-            child: ingredients.isEmpty
-                ? const Text('La receta no tiene insumos configurados.')
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: ingredients
-                        .map(
-                          (ingredient) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(ingredient.ingredientName),
-                            trailing: Text(
-                              '${ingredient.quantity} '
-                              '${ingredient.unitAbbreviation}',
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cerrar'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => RecipeDialog(product: product, repository: _repository),
@@ -93,86 +56,90 @@ class _ProductsPageState extends State<ProductsPage> {
   @override
   Widget build(BuildContext context) {
     final padding = MediaQuery.sizeOf(context).width < 600 ? 16.0 : 24.0;
-    return SingleChildScrollView(
-      padding: EdgeInsets.all(padding),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1400),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 12,
-                children: [
-                  Text(
-                    'Productos',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  FilledButton.icon(
-                    onPressed: _newProduct,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Nuevo producto'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Administra los productos que estarán disponibles para futuras ventas.',
-                style: Theme.of(context).textTheme.bodyLarge
-                    ?.copyWith(color: Colors.black54),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                onChanged: (value) =>
-                    setState(() => _search = value.trim().toLowerCase()),
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Buscar por código o nombre',
+    return RefreshIndicator(
+      onRefresh: () async => setState(_reload),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.all(padding),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1400),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  runSpacing: 12,
+                  children: [
+                    Text(
+                      'Productos',
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _newProduct,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Nuevo producto'),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 20),
-              FutureBuilder<List<Product>>(
-                future: _productsFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(40),
-                        child: CircularProgressIndicator(),
-                      ),
-                    );
-                  }
-                  if (snapshot.hasError) {
-                    return const Text('No se pudieron cargar los productos.');
-                  }
-                  final products = (snapshot.data ?? [])
-                      .where(
-                        (product) =>
-                            _search.isEmpty ||
-                            product.name.toLowerCase().contains(_search) ||
-                            product.code.toLowerCase().contains(_search),
-                      )
-                      .toList();
-                  if (products.isEmpty) {
-                    return const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(32),
-                        child: Center(
-                          child: Text('No hay productos registrados.'),
+                const SizedBox(height: 8),
+                Text(
+                  'Administra los productos que estarán disponibles para futuras ventas.',
+                  style: Theme.of(context).textTheme.bodyLarge
+                      ?.copyWith(color: Colors.black54),
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  onChanged: (value) =>
+                      setState(() => _search = value.trim().toLowerCase()),
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Buscar por código o nombre',
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FutureBuilder<List<Product>>(
+                  future: _productsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(40),
+                          child: CircularProgressIndicator(),
                         ),
-                      ),
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return const Text('No se pudieron cargar los productos.');
+                    }
+                    final products = (snapshot.data ?? [])
+                        .where(
+                          (product) =>
+                              _search.isEmpty ||
+                              product.name.toLowerCase().contains(_search) ||
+                              product.code.toLowerCase().contains(_search),
+                        )
+                        .toList();
+                    if (products.isEmpty) {
+                      return const Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(
+                            child: Text('No hay productos registrados.'),
+                          ),
+                        ),
+                      );
+                    }
+                    return _ProductTable(
+                      products: products,
+                      onAddRecipe: _addRecipe,
                     );
-                  }
-                  return _ProductTable(
-                    products: products,
-                    onAddRecipe: _addRecipe,
-                  );
-                },
-              ),
-            ],
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -194,6 +161,7 @@ class _ProductTable extends StatelessWidget {
         child: DataTable(
           columns: const [
             DataColumn(label: Text('Producto')),
+            DataColumn(label: Text('Categoría')),
             DataColumn(label: Text('Precio')),
             DataColumn(label: Text('Receta')),
             DataColumn(label: Text('Acciones')),
@@ -232,6 +200,12 @@ class _ProductTable extends StatelessWidget {
                             ],
                           ),
                         ],
+                      ),
+                    ),
+                    DataCell(
+                      StatusLabel(
+                        text: product.categoryName,
+                        color: Color(product.categoryColor),
                       ),
                     ),
                     DataCell(
@@ -287,8 +261,27 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
   final _description = TextEditingController();
   final _price = TextEditingController(text: '0');
   Uint8List? _photo;
+  List<ProductCategory> _categories = [];
+  int? _categoryId;
+  bool _loadingCategories = true;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    final categories = await widget.repository.getCategories();
+    if (!mounted) return;
+    setState(() {
+      _categories = categories;
+      _categoryId = categories.isEmpty ? null : categories.first.id;
+      _loadingCategories = false;
+    });
+  }
 
   @override
   void dispose() {
@@ -345,6 +338,9 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
               ? null
               : _description.text.trim(),
           salePrice: double.parse(_price.text),
+          categoryId: _categoryId!,
+          categoryName: '',
+          categoryColor: 4280391418,
           photo: _photo,
           active: true,
         ),
@@ -386,6 +382,24 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
                   controller: _code,
                   decoration: const InputDecoration(labelText: 'Código'),
                   validator: _required,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: _categoryId,
+                  decoration: const InputDecoration(labelText: 'Categoría'),
+                  items: _categories
+                      .map(
+                        (category) => DropdownMenuItem(
+                          value: category.id,
+                          child: Text(category.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: _loadingCategories
+                      ? null
+                      : (value) => setState(() => _categoryId = value),
+                  validator: (value) =>
+                      value == null ? 'Selecciona una categoría' : null,
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -499,6 +513,9 @@ class _RecipeDialogState extends State<RecipeDialog> {
 
   Future<void> _loadIngredients() async {
     final ingredients = await InventoryRepository().getItems();
+    final existing = widget.product.recipeId == null
+        ? <RecipeIngredient>[]
+        : await widget.repository.getRecipe(widget.product.id!);
     if (!mounted) return;
     setState(() {
       _ingredients = ingredients
@@ -510,6 +527,8 @@ class _RecipeDialogState extends State<RecipeDialog> {
             ),
           )
           .toList();
+      _name.text = widget.product.name;
+      _recipeIngredients.addAll(existing);
       _loading = false;
     });
   }

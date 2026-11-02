@@ -21,7 +21,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'sazon_restaurante.db');
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createSchema,
       onUpgrade: _upgradeSchema,
     );
@@ -38,9 +38,34 @@ class AppDatabase {
     if (oldVersion < 3) {
       await _createProductSchema(db);
     }
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS categorias_producto (
+          id_categoria_producto INTEGER PRIMARY KEY AUTOINCREMENT,
+          nombre TEXT NOT NULL UNIQUE,
+          color INTEGER NOT NULL DEFAULT 4280391418,
+          estado INTEGER NOT NULL DEFAULT 1
+        )
+      ''');
+      if (oldVersion >= 3) {
+        await db.execute(
+          'ALTER TABLE productos ADD COLUMN id_categoria_producto INTEGER',
+        );
+      }
+      await _createSalesSchema(db);
+      await _seedProductCategories(db);
+    }
   }
 
   Future<void> _createProductSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE categorias_producto (
+        id_categoria_producto INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL UNIQUE,
+        color INTEGER NOT NULL DEFAULT 4280391418,
+        estado INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
     await db.execute('''
       CREATE TABLE productos (
         id_producto INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +73,7 @@ class AppDatabase {
         nombre TEXT NOT NULL,
         descripcion TEXT,
         precio_venta REAL NOT NULL DEFAULT 0,
+        id_categoria_producto INTEGER,
         foto BLOB,
         estado INTEGER NOT NULL DEFAULT 1
       )
@@ -73,6 +99,46 @@ class AppDatabase {
         UNIQUE (id_receta, id_insumo)
       )
     ''');
+    await _createSalesSchema(db);
+    await _seedProductCategories(db);
+  }
+
+  Future<void> _createSalesSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ventas (
+        id_venta INTEGER PRIMARY KEY AUTOINCREMENT,
+        total REAL NOT NULL,
+        estado TEXT NOT NULL CHECK (estado IN ('PENDIENTE', 'REALIZADA')),
+        fecha_hora TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS venta_detalle (
+        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_venta INTEGER NOT NULL,
+        id_producto INTEGER NOT NULL,
+        cantidad INTEGER NOT NULL,
+        precio_unitario REAL NOT NULL,
+        subtotal REAL NOT NULL,
+        FOREIGN KEY (id_venta) REFERENCES ventas(id_venta),
+        FOREIGN KEY (id_producto) REFERENCES productos(id_producto)
+      )
+    ''');
+  }
+
+  Future<void> _seedProductCategories(Database db) async {
+    for (final category in [
+      {'nombre': 'Desayunos', 'color': 4294940672},
+      {'nombre': 'Almuerzos', 'color': 4283215696},
+      {'nombre': 'Bebidas', 'color': 4280391418},
+      {'nombre': 'Postres', 'color': 4294924066},
+    ]) {
+      await db.insert(
+        'categorias_producto',
+        category,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
   }
 
   Future<void> _createSchema(Database db, int version) async {
