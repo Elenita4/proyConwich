@@ -69,6 +69,35 @@ class RecipeIngredient {
 }
 
 class ProductRepository {
+  Future<String> generateCode(int categoryId) async {
+    final db = await AppDatabase.instance.database;
+    final category = await db.query(
+      'categorias_producto',
+      columns: ['nombre'],
+      where: 'id_categoria_producto = ?',
+      whereArgs: [categoryId],
+      limit: 1,
+    );
+    if (category.isEmpty) throw StateError('La categoría no existe.');
+    final normalized = (category.first['nombre'] as String)
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z]'), '');
+    final prefix = normalized.padRight(3, 'X').substring(0, 3);
+    final rows = await db.query(
+      'productos',
+      columns: ['codigo'],
+      where: 'codigo LIKE ?',
+      whereArgs: ['$prefix%'],
+    );
+    var next = 1;
+    for (final row in rows) {
+      final match = RegExp('^$prefix(\\d+)\$').firstMatch(row['codigo'] as String);
+      final number = int.tryParse(match?.group(1) ?? '');
+      if (number != null && number >= next) next = number + 1;
+    }
+    return '$prefix${next.toString().padLeft(4, '0')}';
+  }
+
   Future<List<ProductCategory>> getCategories() async {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
@@ -104,7 +133,16 @@ class ProductRepository {
 
   Future<void> saveProduct(Product product) async {
     final db = await AppDatabase.instance.database;
-    await db.insert('productos', product.toMap());
+    if (product.id == null) {
+      await db.insert('productos', product.toMap());
+    } else {
+      await db.update(
+        'productos',
+        product.toMap(),
+        where: 'id_producto = ?',
+        whereArgs: [product.id],
+      );
+    }
   }
 
   Future<List<RecipeIngredient>> getRecipe(int productId) async {
@@ -175,7 +213,10 @@ class ProductRepository {
     });
   }
 
-  Future<void> completeSale(List<CartLine> lines) async {
+  Future<void> completeSale(
+    List<CartLine> lines, {
+    required String paymentMethod,
+  }) async {
     final db = await AppDatabase.instance.database;
     await db.transaction((transaction) async {
       final total = lines.fold<double>(
@@ -185,6 +226,7 @@ class ProductRepository {
       final saleId = await transaction.insert('ventas', {
         'total': total,
         'estado': 'REALIZADA',
+        'metodo_pago': paymentMethod,
       });
       for (final line in lines) {
         final recipeRows = await transaction.rawQuery(

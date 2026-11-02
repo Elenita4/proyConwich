@@ -35,6 +35,18 @@ class _InventoryPageState extends State<InventoryPage> {
       setState(_reload);
       _showMessage('Insumo guardado correctamente.');
     }
+
+  }
+
+  Future<void> _edit(InventoryItem item) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => InventoryFormDialog(repository: _repository, item: item),
+    );
+    if (saved == true && mounted) {
+      setState(_reload);
+      _showMessage('Insumo actualizado correctamente.');
+    }
   }
 
   Future<void> _addStock(InventoryItem item) async {
@@ -155,6 +167,7 @@ class _InventoryPageState extends State<InventoryPage> {
                     return _InventoryTable(
                       items: items,
                       onAddStock: _addStock,
+                      onEdit: _edit,
                       onDelete: _delete,
                     );
                   },
@@ -172,10 +185,12 @@ class _InventoryTable extends StatelessWidget {
   const _InventoryTable({
     required this.items,
     required this.onAddStock,
+    required this.onEdit,
     required this.onDelete,
   });
   final List<InventoryItem> items;
   final ValueChanged<InventoryItem> onAddStock;
+  final ValueChanged<InventoryItem> onEdit;
   final ValueChanged<InventoryItem> onDelete;
 
   @override
@@ -251,6 +266,11 @@ class _InventoryTable extends StatelessWidget {
                         icon: const Icon(Icons.add_box_outlined),
                       ),
                       IconButton(
+                        tooltip: 'Editar insumo',
+                        onPressed: () => onEdit(item),
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                      IconButton(
                         tooltip: 'Eliminar',
                         onPressed: () => onDelete(item),
                         icon: const Icon(Icons.delete_outline),
@@ -268,8 +288,9 @@ class _InventoryTable extends StatelessWidget {
 }
 
 class InventoryFormDialog extends StatefulWidget {
-  const InventoryFormDialog({super.key, required this.repository});
+  const InventoryFormDialog({super.key, required this.repository, this.item});
   final InventoryRepository repository;
+  final InventoryItem? item;
 
   @override
   State<InventoryFormDialog> createState() => _InventoryFormDialogState();
@@ -293,11 +314,15 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
   @override
   void initState() {
     super.initState();
-    _code = TextEditingController();
-    _name = TextEditingController();
-    _stock = TextEditingController(text: '0');
-    _minimum = TextEditingController(text: '0');
-    _cost = TextEditingController(text: '0');
+    final item = widget.item;
+    _code = TextEditingController(text: item?.code);
+    _name = TextEditingController(text: item?.name);
+    _stock = TextEditingController(text: (item?.currentStock ?? 0).toString());
+    _minimum = TextEditingController(text: (item?.minimumStock ?? 0).toString());
+    _cost = TextEditingController(text: (item?.averageCost ?? 0).toString());
+    _categoryId = item?.categoryId;
+    _unitId = item?.unitId;
+    _photo = item?.photo;
     _loadLookups();
   }
 
@@ -344,6 +369,9 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
       _unitId ??= units.isEmpty ? null : units.first.id;
       _loading = false;
     });
+    if (widget.item == null && _categoryId != null) {
+      _code.text = await widget.repository.generateCode(_categoryId!);
+    }
   }
 
   @override
@@ -367,6 +395,7 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
     try {
       await widget.repository.saveItem(
         InventoryItem(
+          id: widget.item?.id,
           code: _code.text.trim(),
           name: _name.text.trim(),
           categoryId: _categoryId!,
@@ -402,7 +431,7 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Nuevo insumo'),
+      title: Text(widget.item == null ? 'Nuevo insumo' : 'Editar insumo'),
       content: SizedBox(
         width: MediaQuery.sizeOf(context).width < 600
             ? MediaQuery.sizeOf(context).width - 64
@@ -419,7 +448,11 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
                     children: [
                       TextFormField(
                         controller: _code,
-                        decoration: const InputDecoration(labelText: 'Código'),
+                        readOnly: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Código automático',
+                          helperText: 'Se genera según la categoría',
+                        ),
                         validator: _required,
                       ),
                       const SizedBox(height: 12),
@@ -470,8 +503,15 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
                                     ),
                                   )
                                   .toList(),
-                              onChanged: (value) =>
-                                  setState(() => _categoryId = value),
+                              onChanged: widget.item != null
+                                  ? null
+                                  : (value) async {
+                                      if (value == null) return;
+                                      setState(() => _categoryId = value);
+                                      _code.text = await widget.repository
+                                          .generateCode(value);
+                                      if (mounted) setState(() {});
+                                    },
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -586,6 +626,7 @@ class AddStockDialog extends StatefulWidget {
 class _AddStockDialogState extends State<AddStockDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _quantity;
+  late final TextEditingController _unitCost;
   bool _saving = false;
   String? _error;
 
@@ -593,11 +634,15 @@ class _AddStockDialogState extends State<AddStockDialog> {
   void initState() {
     super.initState();
     _quantity = TextEditingController();
+    _unitCost = TextEditingController(
+      text: widget.item.averageCost.toStringAsFixed(2),
+    );
   }
 
   @override
   void dispose() {
     _quantity.dispose();
+    _unitCost.dispose();
     super.dispose();
   }
 
@@ -618,6 +663,7 @@ class _AddStockDialogState extends State<AddStockDialog> {
       await widget.repository.addStock(
         itemId: widget.item.id!,
         quantity: double.parse(_quantity.text),
+        unitCost: double.parse(_unitCost.text),
       );
       if (mounted) Navigator.pop(context, true);
     } on DatabaseException {
@@ -657,6 +703,18 @@ class _AddStockDialogState extends State<AddStockDialog> {
                 decoration: InputDecoration(
                   labelText:
                       'Cantidad a agregar (${widget.item.unitAbbreviation})',
+                ),
+                validator: _positiveNumber,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _unitCost,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Precio unitario de esta entrada (Bs)',
+                  helperText: 'Se usará para recalcular el costo promedio.',
                 ),
                 validator: _positiveNumber,
               ),

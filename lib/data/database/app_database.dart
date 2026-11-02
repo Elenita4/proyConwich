@@ -21,7 +21,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'sazon_restaurante.db');
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _createSchema,
       onUpgrade: _upgradeSchema,
     );
@@ -53,6 +53,12 @@ class AppDatabase {
         );
       }
       await _createSalesSchema(db);
+      await _seedProductCategories(db);
+    }
+    if (oldVersion < 5) {
+      await db.execute(
+        "ALTER TABLE ventas ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO'",
+      );
       await _seedProductCategories(db);
     }
   }
@@ -109,6 +115,7 @@ class AppDatabase {
         id_venta INTEGER PRIMARY KEY AUTOINCREMENT,
         total REAL NOT NULL,
         estado TEXT NOT NULL CHECK (estado IN ('PENDIENTE', 'REALIZADA')),
+        metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO',
         fecha_hora TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     ''');
@@ -129,9 +136,10 @@ class AppDatabase {
   Future<void> _seedProductCategories(Database db) async {
     for (final category in [
       {'nombre': 'Desayunos', 'color': 4294940672},
-      {'nombre': 'Almuerzos', 'color': 4283215696},
-      {'nombre': 'Bebidas', 'color': 4280391418},
-      {'nombre': 'Postres', 'color': 4294924066},
+      {'nombre': 'Sandwiches', 'color': 4283215696},
+      {'nombre': 'Gaseosas', 'color': 4280391418},
+      {'nombre': 'Jugos', 'color': 4294924066},
+      {'nombre': 'Frappes', 'color': 4283215696},
     ]) {
       await db.insert(
         'categorias_producto',

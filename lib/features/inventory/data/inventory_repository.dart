@@ -73,6 +73,37 @@ class InventoryLookup {
 }
 
 class InventoryRepository {
+  Future<String> generateCode(int categoryId) async {
+    final db = await AppDatabase.instance.database;
+    final category = await db.query(
+      'categorias_insumo',
+      columns: ['nombre'],
+      where: 'id_categoria = ?',
+      whereArgs: [categoryId],
+      limit: 1,
+    );
+    if (category.isEmpty) throw StateError('La categoría no existe.');
+    final prefix = _prefix(category.first['nombre'] as String);
+    final rows = await db.query(
+      'insumos',
+      columns: ['codigo'],
+      where: 'codigo LIKE ?',
+      whereArgs: ['$prefix%'],
+    );
+    var next = 1;
+    for (final row in rows) {
+      final match = RegExp('^$prefix(\\d+)\$').firstMatch(row['codigo'] as String);
+      final number = int.tryParse(match?.group(1) ?? '');
+      if (number != null && number >= next) next = number + 1;
+    }
+    return '$prefix${next.toString().padLeft(4, '0')}';
+  }
+
+  String _prefix(String name) {
+    final normalized = name.toUpperCase().replaceAll(RegExp(r'[^A-Z]'), '');
+    return normalized.padRight(3, 'X').substring(0, 3);
+  }
+
   Future<List<InventoryItem>> getItems() async {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
@@ -135,19 +166,27 @@ class InventoryRepository {
     }
   }
 
-  Future<void> addStock({required int itemId, required double quantity}) async {
+  Future<void> addStock({
+    required int itemId,
+    required double quantity,
+    required double unitCost,
+  }) async {
     final db = await AppDatabase.instance.database;
     await db.transaction((transaction) async {
       await transaction.rawUpdate(
-        'UPDATE insumos SET stock_actual = stock_actual + ? '
+        'UPDATE insumos SET '
+        'costo_promedio = CASE WHEN stock_actual + ? = 0 THEN 0 '
+        'ELSE ((stock_actual * costo_promedio) + (? * ?)) / (stock_actual + ?) END, '
+        'stock_actual = stock_actual + ? '
         'WHERE id_insumo = ?',
-        [quantity, itemId],
+        [quantity, quantity, unitCost, quantity, quantity, itemId],
       );
       await transaction.insert('movimientos_inventario', {
         'id_insumo': itemId,
         'tipo': 'ENTRADA',
         'origen': 'Carga manual',
         'cantidad': quantity,
+        'costo_unitario': unitCost,
       });
     });
   }

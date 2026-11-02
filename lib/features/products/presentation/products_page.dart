@@ -38,6 +38,18 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
+  Future<void> _editProduct(Product product) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) =>
+          ProductFormDialog(repository: _repository, product: product),
+    );
+    if (saved == true && mounted) {
+      setState(_reload);
+      _message('Producto actualizado correctamente.');
+    }
+  }
+
   Future<void> _addRecipe(Product product) async {
     final saved = await showDialog<bool>(
       context: context,
@@ -135,6 +147,7 @@ class _ProductsPageState extends State<ProductsPage> {
                     return _ProductTable(
                       products: products,
                       onAddRecipe: _addRecipe,
+                      onEdit: _editProduct,
                     );
                   },
                 ),
@@ -148,9 +161,14 @@ class _ProductsPageState extends State<ProductsPage> {
 }
 
 class _ProductTable extends StatelessWidget {
-  const _ProductTable({required this.products, required this.onAddRecipe});
+  const _ProductTable({
+    required this.products,
+    required this.onAddRecipe,
+    required this.onEdit,
+  });
   final List<Product> products;
   final ValueChanged<Product> onAddRecipe;
+  final ValueChanged<Product> onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -222,18 +240,27 @@ class _ProductTable extends StatelessWidget {
                       ),
                     ),
                     DataCell(
-                      OutlinedButton.icon(
-                        onPressed: () => onAddRecipe(product),
-                        icon: Icon(
-                          product.recipeId == null
-                              ? Icons.menu_book_outlined
-                              : Icons.edit_note,
-                        ),
-                        label: Text(
-                          product.recipeId == null
-                              ? 'Agregar receta'
-                              : 'Ver receta',
-                        ),
+                      Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Editar producto',
+                            onPressed: () => onEdit(product),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => onAddRecipe(product),
+                            icon: Icon(
+                              product.recipeId == null
+                                  ? Icons.menu_book_outlined
+                                  : Icons.edit_note,
+                            ),
+                            label: Text(
+                              product.recipeId == null
+                                  ? 'Agregar receta'
+                                  : 'Ver receta',
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -247,8 +274,9 @@ class _ProductTable extends StatelessWidget {
 }
 
 class ProductFormDialog extends StatefulWidget {
-  const ProductFormDialog({super.key, required this.repository});
+  const ProductFormDialog({super.key, required this.repository, this.product});
   final ProductRepository repository;
+  final Product? product;
 
   @override
   State<ProductFormDialog> createState() => _ProductFormDialogState();
@@ -270,6 +298,13 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
   @override
   void initState() {
     super.initState();
+    final product = widget.product;
+    _code.text = product?.code ?? '';
+    _name.text = product?.name ?? '';
+    _description.text = product?.description ?? '';
+    _price.text = (product?.salePrice ?? 0).toString();
+    _categoryId = product?.categoryId == 0 ? null : product?.categoryId;
+    _photo = product?.photo;
     _loadCategories();
   }
 
@@ -278,9 +313,12 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
     if (!mounted) return;
     setState(() {
       _categories = categories;
-      _categoryId = categories.isEmpty ? null : categories.first.id;
+      _categoryId ??= categories.isEmpty ? null : categories.first.id;
       _loadingCategories = false;
     });
+    if (widget.product == null && _categoryId != null) {
+      _code.text = await widget.repository.generateCode(_categoryId!);
+    }
   }
 
   @override
@@ -332,6 +370,7 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
     try {
       await widget.repository.saveProduct(
         Product(
+          id: widget.product?.id,
           code: _code.text.trim(),
           name: _name.text.trim(),
           description: _description.text.trim().isEmpty
@@ -342,7 +381,7 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
           categoryName: '',
           categoryColor: 4280391418,
           photo: _photo,
-          active: true,
+          active: widget.product?.active ?? true,
         ),
       );
       if (mounted) Navigator.pop(context, true);
@@ -368,7 +407,9 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Nuevo producto'),
+      title: Text(
+        widget.product == null ? 'Nuevo producto' : 'Editar producto',
+      ),
       content: SizedBox(
         width: MediaQuery.sizeOf(context).width < 600
             ? MediaQuery.sizeOf(context).width - 64
@@ -380,7 +421,11 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
               children: [
                 TextFormField(
                   controller: _code,
-                  decoration: const InputDecoration(labelText: 'Código'),
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Código automático',
+                    helperText: 'Se genera según la categoría',
+                  ),
                   validator: _required,
                 ),
                 const SizedBox(height: 12),
@@ -395,9 +440,18 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
                         ),
                       )
                       .toList(),
-                  onChanged: _loadingCategories
+                  onChanged: _loadingCategories || widget.product != null
                       ? null
-                      : (value) => setState(() => _categoryId = value),
+                      : (value) async {
+                          if (value == null) return;
+                          setState(() => _categoryId = value);
+                          if (widget.product == null) {
+                            _code.text = await widget.repository.generateCode(
+                              value,
+                            );
+                            if (mounted) setState(() {});
+                          }
+                        },
                   validator: (value) =>
                       value == null ? 'Selecciona una categoría' : null,
                 ),

@@ -56,10 +56,18 @@ class _SalesPageState extends State<SalesPage> {
     });
   }
 
-  Future<void> _completeSale() async {
+  Future<void> _reviewAndPay() async {
     if (_cart.isEmpty) return;
+    final paymentMethod = await showDialog<String>(
+      context: context,
+      builder: (context) => _CheckoutDialog(lines: _cart.values.toList()),
+    );
+    if (paymentMethod == null || !mounted) return;
     try {
-      await _repository.completeSale(_cart.values.toList());
+      await _repository.completeSale(
+        _cart.values.toList(),
+        paymentMethod: paymentMethod,
+      );
       if (!mounted) return;
       setState(() {
         _cart.clear();
@@ -119,7 +127,7 @@ class _SalesPageState extends State<SalesPage> {
             lines: _cart.values.toList(),
             onAdd: _add,
             onRemove: _remove,
-            onComplete: _completeSale,
+            onComplete: _reviewAndPay,
             error: _error,
           );
           return ListView(
@@ -353,12 +361,80 @@ class _Cart extends StatelessWidget {
               child: FilledButton.icon(
                 onPressed: lines.isEmpty ? null : onComplete,
                 icon: const Icon(Icons.check),
-                label: const Text('Registrar venta realizada'),
+                label: const Text('Ver pedido y cobrar'),
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CheckoutDialog extends StatefulWidget {
+  const _CheckoutDialog({required this.lines});
+  final List<CartLine> lines;
+
+  @override
+  State<_CheckoutDialog> createState() => _CheckoutDialogState();
+}
+
+class _CheckoutDialogState extends State<_CheckoutDialog> {
+  String _method = 'EFECTIVO';
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.lines.fold<double>(
+      0,
+      (sum, line) => sum + line.product.salePrice * line.quantity,
+    );
+    return AlertDialog(
+      title: const Text('Ver pedido y cobrar'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ...widget.lines.map(
+              (line) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('${line.quantity} x ${line.product.name}'),
+                trailing: Text(
+                  'Bs ${(line.product.salePrice * line.quantity).toStringAsFixed(2)}',
+                ),
+              ),
+            ),
+            const Divider(),
+            Text(
+              'Total: Bs ${total.toStringAsFixed(2)}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _method,
+              decoration: const InputDecoration(labelText: 'Forma de pago'),
+              items: const [
+                DropdownMenuItem(value: 'EFECTIVO', child: Text('Efectivo')),
+                DropdownMenuItem(value: 'QR', child: Text('QR')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _method = value);
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _method),
+          child: const Text('Confirmar cobro'),
+        ),
+      ],
     );
   }
 }
