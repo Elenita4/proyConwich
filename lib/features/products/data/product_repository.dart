@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:sqflite/sqflite.dart';
+
 import '../../../data/database/app_database.dart';
 
 class Product {
@@ -58,13 +60,17 @@ class RecipeIngredient {
   const RecipeIngredient({
     required this.ingredientId,
     required this.ingredientName,
+    required this.unitId,
     required this.unitAbbreviation,
+    required this.unitFactor,
     required this.quantity,
   });
 
   final int ingredientId;
   final String ingredientName;
+  final int unitId;
   final String unitAbbreviation;
+  final double unitFactor;
   final double quantity;
 }
 
@@ -91,7 +97,8 @@ class ProductRepository {
     );
     var next = 1;
     for (final row in rows) {
-      final match = RegExp('^$prefix(\\d+)\$').firstMatch(row['codigo'] as String);
+      final match = RegExp('^$prefix(\\d+)\$')
+          .firstMatch(row['codigo'] as String);
       final number = int.tryParse(match?.group(1) ?? '');
       if (number != null && number >= next) next = number + 1;
     }
@@ -150,11 +157,13 @@ class ProductRepository {
     final rows = await db.rawQuery(
       '''
       SELECT d.id_insumo, i.nombre AS insumo_nombre,
-             u.abreviatura AS unidad_abreviatura, d.cantidad
+             d.id_unidad, u.abreviatura AS unidad_abreviatura,
+             u.factor_base AS unidad_factor, d.cantidad
       FROM receta_detalle d
       INNER JOIN recetas r ON r.id_receta = d.id_receta
       INNER JOIN insumos i ON i.id_insumo = d.id_insumo
-      INNER JOIN unidades_medida u ON u.id_unidad = i.id_unidad
+      INNER JOIN unidades_medida u
+        ON u.id_unidad = COALESCE(d.id_unidad, i.id_unidad)
       WHERE r.id_producto = ? AND r.estado = 1
       ORDER BY i.nombre COLLATE NOCASE
     ''',
@@ -165,7 +174,9 @@ class ProductRepository {
           (row) => RecipeIngredient(
             ingredientId: row['id_insumo'] as int,
             ingredientName: row['insumo_nombre'] as String,
+            unitId: row['id_unidad'] as int,
             unitAbbreviation: row['unidad_abreviatura'] as String,
+            unitFactor: (row['unidad_factor'] as num).toDouble(),
             quantity: (row['cantidad'] as num).toDouble(),
           ),
         )
@@ -207,6 +218,7 @@ class ProductRepository {
         await transaction.insert('receta_detalle', {
           'id_receta': recipeId,
           'id_insumo': ingredient.ingredientId,
+          'id_unidad': ingredient.unitId,
           'cantidad': ingredient.quantity,
         });
       }
@@ -233,39 +245,42 @@ class ProductRepository {
           'SELECT id_receta FROM recetas WHERE id_producto = ? AND estado = 1',
           [line.product.id],
         );
-        if (recipeRows.isEmpty) continue;
-        final ingredients = await transaction.query(
-          'receta_detalle',
-          where: 'id_receta = ?',
-          whereArgs: [recipeRows.first['id_receta']],
-        );
-        for (final ingredient in ingredients) {
-          final amount =
-              (ingredient['cantidad'] as num).toDouble() * line.quantity;
-          final stockRows = await transaction.query(
-            'insumos',
-            columns: ['stock_actual'],
-            where: 'id_insumo = ?',
-            whereArgs: [ingredient['id_insumo']],
+        if (recipeRows.isNotEmpty) {
+          final ingredients = await transaction.query(
+            'receta_detalle',
+            where: 'id_receta = ?',
+            whereArgs: [recipeRows.first['id_receta']],
           );
-          if (stockRows.isEmpty ||
-              (stockRows.first['stock_actual'] as num).toDouble() < amount) {
-            throw StateError(
-              'No hay existencias suficientes para completar la venta.',
+          for (final ingredient in ingredients) {
+            final amount =
+                (ingredient['cantidad'] as num).toDouble() *
+                line.quantity *
+                await _unitFactor(transaction, ingredient['id_unidad'] as int?);
+            final stockRows = await transaction.query(
+              'insumos',
+              columns: ['stock_actual'],
+              where: 'id_insumo = ?',
+              whereArgs: [ingredient['id_insumo']],
             );
+            if (stockRows.isEmpty ||
+                (stockRows.first['stock_actual'] as num).toDouble() < amount) {
+              throw StateError(
+                'No hay existencias suficientes para completar la venta.',
+              );
+            }
+            await transaction.rawUpdate(
+              'UPDATE insumos SET stock_actual = stock_actual - ? '
+              'WHERE id_insumo = ?',
+              [amount, ingredient['id_insumo']],
+            );
+            await transaction.insert('movimientos_inventario', {
+              'id_insumo': ingredient['id_insumo'],
+              'tipo': 'SALIDA',
+              'origen': 'Venta',
+              'cantidad': amount,
+              'id_referencia': saleId,
+            });
           }
-          await transaction.rawUpdate(
-            'UPDATE insumos SET stock_actual = stock_actual - ? '
-            'WHERE id_insumo = ?',
-            [amount, ingredient['id_insumo']],
-          );
-          await transaction.insert('movimientos_inventario', {
-            'id_insumo': ingredient['id_insumo'],
-            'tipo': 'SALIDA',
-            'origen': 'Venta',
-            'cantidad': amount,
-            'id_referencia': saleId,
-          });
         }
         await transaction.insert('venta_detalle', {
           'id_venta': saleId,
@@ -276,6 +291,18 @@ class ProductRepository {
         });
       }
     });
+  }
+
+  Future<double> _unitFactor(DatabaseExecutor db, int? unitId) async {
+    if (unitId == null) return 1;
+    final rows = await db.query(
+      'unidades_medida',
+      columns: ['factor_base'],
+      where: 'id_unidad = ?',
+      whereArgs: [unitId],
+      limit: 1,
+    );
+    return rows.isEmpty ? 1 : (rows.first['factor_base'] as num).toDouble();
   }
 }
 

@@ -35,7 +35,6 @@ class _InventoryPageState extends State<InventoryPage> {
       setState(_reload);
       _showMessage('Insumo guardado correctamente.');
     }
-
   }
 
   Future<void> _edit(InventoryItem item) async {
@@ -227,14 +226,16 @@ class _InventoryTable extends StatelessWidget {
                             ?.copyWith(color: Colors.black54),
                       ),
                       if (item.photo != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Image.memory(
-                            item.photo!,
-                            width: 48,
-                            height: 48,
-                            fit: BoxFit.cover,
+                        TextButton.icon(
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: Text('Foto de ${item.name}'),
+                              content: Image.memory(item.photo!),
+                            ),
                           ),
+                          icon: const Icon(Icons.photo_outlined, size: 18),
+                          label: const Text('Ver foto'),
                         ),
                     ],
                   ),
@@ -242,18 +243,27 @@ class _InventoryTable extends StatelessWidget {
                 DataCell(Text(item.categoryName)),
                 DataCell(
                   Text(
-                    '${item.currentStock.toStringAsFixed(2)} ${item.unitAbbreviation}',
+                    '${(item.currentStock / item.unitFactor).toStringAsFixed(2)} '
+                    '${item.unitAbbreviation}',
                   ),
                 ),
                 DataCell(
                   Text(
-                    '${item.minimumStock.toStringAsFixed(2)} ${item.unitAbbreviation}',
+                    '${(item.minimumStock / item.unitFactor).toStringAsFixed(2)} '
+                    '${item.unitAbbreviation}',
                   ),
                 ),
-                DataCell(Text('Bs ${item.averageCost.toStringAsFixed(2)}')),
+                DataCell(
+                  Text(
+                    'Bs ${(item.averageCost * item.unitFactor).toStringAsFixed(2)} '
+                    'por ${item.unitAbbreviation}',
+                  ),
+                ),
                 DataCell(
                   StatusBadge(
-                    text: item.lowStock ? 'Stock bajo' : 'Disponible',
+                    text: item.lowStock
+                        ? 'Alerta: por debajo del mínimo'
+                        : 'Stock suficiente',
                     color: item.lowStock ? Colors.orange : Colors.teal,
                   ),
                 ),
@@ -317,9 +327,15 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
     final item = widget.item;
     _code = TextEditingController(text: item?.code);
     _name = TextEditingController(text: item?.name);
-    _stock = TextEditingController(text: (item?.currentStock ?? 0).toString());
-    _minimum = TextEditingController(text: (item?.minimumStock ?? 0).toString());
-    _cost = TextEditingController(text: (item?.averageCost ?? 0).toString());
+    _stock = TextEditingController(
+      text: ((item?.currentStock ?? 0) / (item?.unitFactor ?? 1)).toString(),
+    );
+    _minimum = TextEditingController(
+      text: ((item?.minimumStock ?? 0) / (item?.unitFactor ?? 1)).toString(),
+    );
+    _cost = TextEditingController(
+      text: ((item?.averageCost ?? 0) * (item?.unitFactor ?? 1)).toString(),
+    );
     _categoryId = item?.categoryId;
     _unitId = item?.unitId;
     _photo = item?.photo;
@@ -402,6 +418,7 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
           categoryName: category.name,
           unitId: _unitId!,
           unitAbbreviation: unit.abbreviation ?? unit.name,
+          unitFactor: unit.factor,
           currentStock: double.parse(_stock.text),
           minimumStock: double.parse(_minimum.text),
           averageCost: double.parse(_cost.text),
@@ -431,6 +448,7 @@ class _InventoryFormDialogState extends State<InventoryFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: Text(widget.item == null ? 'Nuevo insumo' : 'Editar insumo'),
       content: SizedBox(
         width: MediaQuery.sizeOf(context).width < 600
@@ -627,6 +645,9 @@ class _AddStockDialogState extends State<AddStockDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _quantity;
   late final TextEditingController _unitCost;
+  List<InventoryLookup> _units = [];
+  int? _unitId;
+  double _unitFactor = 1;
   bool _saving = false;
   String? _error;
 
@@ -635,8 +656,19 @@ class _AddStockDialogState extends State<AddStockDialog> {
     super.initState();
     _quantity = TextEditingController();
     _unitCost = TextEditingController(
-      text: widget.item.averageCost.toStringAsFixed(2),
+      text: (widget.item.averageCost * widget.item.unitFactor).toStringAsFixed(
+        2,
+      ),
     );
+    _unitId = widget.item.unitId;
+    _unitFactor = widget.item.unitFactor;
+    _loadUnits();
+  }
+
+  Future<void> _loadUnits() async {
+    final units = await widget.repository.getUnits();
+    if (!mounted) return;
+    setState(() => _units = units);
   }
 
   @override
@@ -664,6 +696,7 @@ class _AddStockDialogState extends State<AddStockDialog> {
         itemId: widget.item.id!,
         quantity: double.parse(_quantity.text),
         unitCost: double.parse(_unitCost.text),
+        unitFactor: _unitFactor,
       );
       if (mounted) Navigator.pop(context, true);
     } on DatabaseException {
@@ -678,6 +711,7 @@ class _AddStockDialogState extends State<AddStockDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: Text('Agregar existencia: ${widget.item.name}'),
       content: Form(
         key: _formKey,
@@ -689,7 +723,8 @@ class _AddStockDialogState extends State<AddStockDialog> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Stock actual: ${widget.item.currentStock.toStringAsFixed(2)} '
+                  'Stock actual: '
+                  '${(widget.item.currentStock / widget.item.unitFactor).toStringAsFixed(2)} '
                   '${widget.item.unitAbbreviation}',
                 ),
               ),
@@ -705,6 +740,34 @@ class _AddStockDialogState extends State<AddStockDialog> {
                       'Cantidad a agregar (${widget.item.unitAbbreviation})',
                 ),
                 validator: _positiveNumber,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _units.any((unit) => unit.id == _unitId)
+                    ? _unitId
+                    : null,
+                decoration: const InputDecoration(
+                  labelText: 'Unidad de entrada',
+                  helperText: 'Se convertirá automáticamente a la unidad base.',
+                ),
+                items: _units
+                    .map(
+                      (unit) => DropdownMenuItem(
+                        value: unit.id,
+                        child: Text(
+                          '${unit.name} (${unit.abbreviation ?? ''})',
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  final unit = _units.firstWhere((item) => item.id == value);
+                  setState(() {
+                    _unitId = value;
+                    _unitFactor = unit.factor;
+                  });
+                },
               ),
               const SizedBox(height: 12),
               TextFormField(

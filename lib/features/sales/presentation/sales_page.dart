@@ -256,8 +256,8 @@ class _Catalog extends StatelessWidget {
                                   if (product.photo != null)
                                     Image.memory(
                                       product.photo!,
-                                      width: 52,
-                                      height: 52,
+                                      width: 82,
+                                      height: 82,
                                       fit: BoxFit.cover,
                                     ),
                                   const Spacer(),
@@ -389,6 +389,7 @@ class _CheckoutDialogState extends State<_CheckoutDialog> {
       (sum, line) => sum + line.product.salePrice * line.quantity,
     );
     return AlertDialog(
+      scrollable: true,
       title: const Text('Ver pedido y cobrar'),
       content: SizedBox(
         width: 420,

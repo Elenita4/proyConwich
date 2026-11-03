@@ -407,6 +407,7 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: Text(
         widget.product == null ? 'Nuevo producto' : 'Editar producto',
       ),
@@ -552,8 +553,10 @@ class _RecipeDialogState extends State<RecipeDialog> {
   final _name = TextEditingController();
   final _instructions = TextEditingController();
   List<InventoryLookup> _ingredients = [];
+  List<InventoryLookup> _units = [];
   final List<RecipeIngredient> _recipeIngredients = [];
   int? _selectedIngredient;
+  int? _selectedUnit;
   final _quantity = TextEditingController();
   bool _loading = true;
   bool _saving = false;
@@ -567,6 +570,7 @@ class _RecipeDialogState extends State<RecipeDialog> {
 
   Future<void> _loadIngredients() async {
     final ingredients = await InventoryRepository().getItems();
+    final units = await InventoryRepository().getUnits();
     final existing = widget.product.recipeId == null
         ? <RecipeIngredient>[]
         : await widget.repository.getRecipe(widget.product.id!);
@@ -578,9 +582,11 @@ class _RecipeDialogState extends State<RecipeDialog> {
               id: item.id!,
               name: item.name,
               abbreviation: item.unitAbbreviation,
+              factor: item.unitFactor,
             ),
           )
           .toList();
+      _units = units;
       _name.text = widget.product.name;
       _recipeIngredients.addAll(existing);
       _loading = false;
@@ -598,6 +604,12 @@ class _RecipeDialogState extends State<RecipeDialog> {
     final ingredient = _ingredients.firstWhere(
       (value) => value.id == _selectedIngredient,
     );
+    final unit = _units.firstWhere(
+      (value) => value.id == _selectedUnit,
+      orElse: () => _units.firstWhere(
+        (value) => value.abbreviation == ingredient.abbreviation,
+      ),
+    );
     setState(() {
       _recipeIngredients.removeWhere(
         (value) => value.ingredientId == ingredient.id,
@@ -606,7 +618,9 @@ class _RecipeDialogState extends State<RecipeDialog> {
         RecipeIngredient(
           ingredientId: ingredient.id,
           ingredientName: ingredient.name,
-          unitAbbreviation: ingredient.abbreviation ?? '',
+          unitId: unit.id,
+          unitAbbreviation: unit.abbreviation ?? unit.name,
+          unitFactor: unit.factor,
           quantity: quantity,
         ),
       );
@@ -654,6 +668,7 @@ class _RecipeDialogState extends State<RecipeDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: Text('Receta de ${widget.product.name}'),
       content: SizedBox(
         width: MediaQuery.sizeOf(context).width < 600
@@ -688,44 +703,67 @@ class _RecipeDialogState extends State<RecipeDialog> {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Row(
+                      Column(
                         children: [
-                          Expanded(
-                            child: DropdownButtonFormField<int>(
-                              initialValue: _selectedIngredient,
-                              decoration: const InputDecoration(
-                                labelText: 'Insumo',
-                              ),
-                              items: _ingredients
-                                  .map(
-                                    (ingredient) => DropdownMenuItem(
-                                      value: ingredient.id,
-                                      child: Text(ingredient.name),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) =>
-                                  setState(() => _selectedIngredient = value),
+                          DropdownButtonFormField<int>(
+                            initialValue: _selectedIngredient,
+                            decoration: const InputDecoration(
+                              labelText: 'Insumo',
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 100,
-                            child: TextField(
-                              controller: _quantity,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
+                            items: _ingredients
+                                .map(
+                                  (ingredient) => DropdownMenuItem(
+                                    value: ingredient.id,
+                                    child: Text(ingredient.name),
                                   ),
-                              decoration: const InputDecoration(
-                                labelText: 'Cantidad',
-                              ),
-                            ),
+                                )
+                                .toList(),
+                            onChanged: (value) =>
+                                setState(() => _selectedIngredient = value),
                           ),
-                          IconButton(
-                            tooltip: 'Agregar insumo',
-                            onPressed: _addIngredient,
-                            icon: const Icon(Icons.add_circle_outline),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 100,
+                                child: TextField(
+                                  controller: _quantity,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Cantidad',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: _selectedUnit,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Unidad',
+                                  ),
+                                  items: _units
+                                      .map(
+                                        (unit) => DropdownMenuItem(
+                                          value: unit.id,
+                                          child: Text(
+                                            unit.abbreviation ?? unit.name,
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (value) =>
+                                      setState(() => _selectedUnit = value),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Agregar insumo',
+                                onPressed: _addIngredient,
+                                icon: const Icon(Icons.add_circle_outline),
+                              ),
+                            ],
                           ),
                         ],
                       ),

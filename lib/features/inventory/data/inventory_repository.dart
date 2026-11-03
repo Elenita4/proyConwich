@@ -11,6 +11,7 @@ class InventoryItem {
     required this.categoryName,
     required this.unitId,
     required this.unitAbbreviation,
+    required this.unitFactor,
     required this.currentStock,
     required this.minimumStock,
     required this.averageCost,
@@ -25,6 +26,7 @@ class InventoryItem {
   final String categoryName;
   final int unitId;
   final String unitAbbreviation;
+  final double unitFactor;
   final double currentStock;
   final double minimumStock;
   final double averageCost;
@@ -53,6 +55,7 @@ class InventoryItem {
     categoryName: map['categoria_nombre'] as String,
     unitId: map['id_unidad'] as int,
     unitAbbreviation: map['unidad_abreviatura'] as String,
+    unitFactor: (map['unidad_factor'] as num).toDouble(),
     currentStock: (map['stock_actual'] as num).toDouble(),
     minimumStock: (map['stock_minimo'] as num).toDouble(),
     averageCost: (map['costo_promedio'] as num).toDouble(),
@@ -66,10 +69,12 @@ class InventoryLookup {
     required this.id,
     required this.name,
     this.abbreviation,
+    this.factor = 1,
   });
   final int id;
   final String name;
   final String? abbreviation;
+  final double factor;
 }
 
 class InventoryRepository {
@@ -92,7 +97,8 @@ class InventoryRepository {
     );
     var next = 1;
     for (final row in rows) {
-      final match = RegExp('^$prefix(\\d+)\$').firstMatch(row['codigo'] as String);
+      final match = RegExp('^$prefix(\\d+)\$')
+          .firstMatch(row['codigo'] as String);
       final number = int.tryParse(match?.group(1) ?? '');
       if (number != null && number >= next) next = number + 1;
     }
@@ -108,6 +114,7 @@ class InventoryRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT i.*, c.nombre AS categoria_nombre, u.abreviatura AS unidad_abreviatura
+             , u.factor_base AS unidad_factor
       FROM insumos i
       INNER JOIN categorias_insumo c ON c.id_categoria = i.id_categoria
       INNER JOIN unidades_medida u ON u.id_unidad = i.id_unidad
@@ -138,7 +145,7 @@ class InventoryRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
       'unidades_medida',
-      columns: ['id_unidad', 'nombre', 'abreviatura'],
+      columns: ['id_unidad', 'nombre', 'abreviatura', 'factor_base'],
       orderBy: 'nombre COLLATE NOCASE',
     );
     return rows
@@ -147,6 +154,7 @@ class InventoryRepository {
             id: row['id_unidad']! as int,
             name: row['nombre']! as String,
             abbreviation: row['abreviatura']! as String,
+            factor: (row['factor_base'] as num?)?.toDouble() ?? 1,
           ),
         )
         .toList();
@@ -154,12 +162,25 @@ class InventoryRepository {
 
   Future<void> saveItem(InventoryItem item) async {
     final db = await AppDatabase.instance.database;
+    final unit = await db.query(
+      'unidades_medida',
+      columns: ['factor_base'],
+      where: 'id_unidad = ?',
+      whereArgs: [item.unitId],
+      limit: 1,
+    );
+    if (unit.isEmpty) throw StateError('La unidad de medida no existe.');
+    final factor = (unit.first['factor_base'] as num).toDouble();
+    final values = item.toMap()
+      ..['stock_actual'] = item.currentStock * factor
+      ..['stock_minimo'] = item.minimumStock * factor
+      ..['costo_promedio'] = item.averageCost / factor;
     if (item.id == null) {
-      await db.insert('insumos', item.toMap());
+      await db.insert('insumos', values);
     } else {
       await db.update(
         'insumos',
-        item.toMap(),
+        values,
         where: 'id_insumo = ?',
         whereArgs: [item.id],
       );
@@ -170,8 +191,11 @@ class InventoryRepository {
     required int itemId,
     required double quantity,
     required double unitCost,
+    double? unitFactor,
   }) async {
     final db = await AppDatabase.instance.database;
+    final factor = unitFactor ?? 1;
+    final normalizedQuantity = quantity * factor;
     await db.transaction((transaction) async {
       await transaction.rawUpdate(
         'UPDATE insumos SET '
@@ -179,14 +203,21 @@ class InventoryRepository {
         'ELSE ((stock_actual * costo_promedio) + (? * ?)) / (stock_actual + ?) END, '
         'stock_actual = stock_actual + ? '
         'WHERE id_insumo = ?',
-        [quantity, quantity, unitCost, quantity, quantity, itemId],
+        [
+          normalizedQuantity,
+          normalizedQuantity,
+          unitCost / factor,
+          normalizedQuantity,
+          normalizedQuantity,
+          itemId,
+        ],
       );
       await transaction.insert('movimientos_inventario', {
         'id_insumo': itemId,
         'tipo': 'ENTRADA',
         'origen': 'Carga manual',
-        'cantidad': quantity,
-        'costo_unitario': unitCost,
+        'cantidad': normalizedQuantity,
+        'costo_unitario': unitCost / factor,
       });
     });
   }

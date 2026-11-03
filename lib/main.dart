@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'features/sales/presentation/sales_page.dart';
 import 'features/products/presentation/products_page.dart';
 import 'features/inventory/presentation/inventory_page.dart';
+import 'features/reports/presentation/reports_page.dart';
 
 void main() {
   runApp(const RestaurantApp());
@@ -307,6 +308,8 @@ class _DashboardPageState extends State<DashboardPage> {
             ? const ProductsPage()
             : _selectedIndex == 1
             ? const SalesPage()
+            : _selectedIndex == 5
+            ? const ReportsPage()
             : _ModulePlaceholder(
                 title: _sections[_selectedIndex],
                 index: _selectedIndex,
@@ -360,34 +363,91 @@ class _DashboardPageState extends State<DashboardPage> {
               : content,
           bottomNavigationBar: wide
               ? null
-              : NavigationBar(
-                  selectedIndex: _selectedIndex > 3 ? 0 : _selectedIndex,
-                  onDestinationSelected: (value) =>
-                      setState(() => _selectedIndex = value),
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Icon(Icons.dashboard_outlined),
-                      selectedIcon: Icon(Icons.dashboard),
-                      label: 'Inicio',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.receipt_long_outlined),
-                      selectedIcon: Icon(Icons.receipt_long),
-                      label: 'Ventas',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.inventory_2_outlined),
-                      selectedIcon: Icon(Icons.inventory_2),
-                      label: 'Stock',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.more_horiz),
-                      label: 'Más',
-                    ),
-                  ],
+              : _MobileNavigationMenu(
+                  selectedIndex: _selectedIndex,
+                  onSelected: (value) => setState(() => _selectedIndex = value),
                 ),
         );
       },
+    );
+  }
+}
+
+class _MobileNavigationMenu extends StatelessWidget {
+  const _MobileNavigationMenu({
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    const destinations = [
+      (Icons.dashboard_outlined, Icons.dashboard, 'Inicio'),
+      (Icons.receipt_long_outlined, Icons.receipt_long, 'Ventas'),
+      (Icons.inventory_2_outlined, Icons.inventory_2, 'Stock'),
+      (Icons.restaurant_menu_outlined, Icons.restaurant_menu, 'Productos'),
+      (Icons.point_of_sale_outlined, Icons.point_of_sale, 'Caja'),
+      (Icons.bar_chart_outlined, Icons.bar_chart, 'Reportes'),
+    ];
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Material(
+      color: colorScheme.surface,
+      elevation: 3,
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              for (var index = 0; index < destinations.length; index++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => onSelected(index),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            selectedIndex == index
+                                ? destinations[index].$2
+                                : destinations[index].$1,
+                            color: selectedIndex == index
+                                ? colorScheme.primary
+                                : colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            destinations[index].$3,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: selectedIndex == index
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: selectedIndex == index
+                                  ? colorScheme.primary
+                                  : colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

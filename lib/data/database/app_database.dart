@@ -21,7 +21,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'sazon_restaurante.db');
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: _createSchema,
       onUpgrade: _upgradeSchema,
     );
@@ -32,7 +32,7 @@ class AppDatabase {
     int oldVersion,
     int newVersion,
   ) async {
-    if (oldVersion < 2) {
+    if (oldVersion < 2 && !await _hasColumn(db, 'insumos', 'foto')) {
       await db.execute('ALTER TABLE insumos ADD COLUMN foto BLOB');
     }
     if (oldVersion < 3) {
@@ -47,7 +47,8 @@ class AppDatabase {
           estado INTEGER NOT NULL DEFAULT 1
         )
       ''');
-      if (oldVersion >= 3) {
+      if (oldVersion >= 3 &&
+          !await _hasColumn(db, 'productos', 'id_categoria_producto')) {
         await db.execute(
           'ALTER TABLE productos ADD COLUMN id_categoria_producto INTEGER',
         );
@@ -55,12 +56,59 @@ class AppDatabase {
       await _createSalesSchema(db);
       await _seedProductCategories(db);
     }
-    if (oldVersion < 5) {
+    if (oldVersion < 5 && !await _hasColumn(db, 'ventas', 'metodo_pago')) {
       await db.execute(
         "ALTER TABLE ventas ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO'",
       );
       await _seedProductCategories(db);
     }
+    if (oldVersion < 6) {
+      if (!await _hasColumn(db, 'unidades_medida', 'factor_base')) {
+        await db.execute(
+          'ALTER TABLE unidades_medida ADD COLUMN factor_base REAL NOT NULL DEFAULT 1',
+        );
+      }
+      if (!await _hasColumn(db, 'receta_detalle', 'id_unidad')) {
+        await db.execute(
+          'ALTER TABLE receta_detalle ADD COLUMN id_unidad INTEGER',
+        );
+      }
+      await _setUnitFactors(db);
+      final items = await db.rawQuery('''
+        SELECT i.id_insumo,
+               COALESCE(i.stock_actual, 0) AS stock_actual,
+               COALESCE(i.stock_minimo, 0) AS stock_minimo,
+               COALESCE(i.costo_promedio, 0) AS costo_promedio,
+               COALESCE(u.factor_base, 1) AS factor_base
+        FROM insumos i
+        INNER JOIN unidades_medida u ON u.id_unidad = i.id_unidad
+      ''');
+      for (final item in items) {
+        final factor = (item['factor_base'] as num?)?.toDouble() ?? 1;
+        await db.update(
+          'insumos',
+          {
+            'stock_actual':
+                ((item['stock_actual'] as num?)?.toDouble() ?? 0) * factor,
+            'stock_minimo':
+                ((item['stock_minimo'] as num?)?.toDouble() ?? 0) * factor,
+            'costo_promedio':
+                ((item['costo_promedio'] as num?)?.toDouble() ?? 0) / factor,
+          },
+          where: 'id_insumo = ?',
+          whereArgs: [item['id_insumo']],
+        );
+      }
+    }
+  }
+
+  Future<bool> _hasColumn(
+    Database db,
+    String tableName,
+    String columnName,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
+    return columns.any((column) => column['name'] == columnName);
   }
 
   Future<void> _createProductSchema(Database db) async {
@@ -99,9 +147,11 @@ class AppDatabase {
         id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
         id_receta INTEGER NOT NULL,
         id_insumo INTEGER NOT NULL,
+        id_unidad INTEGER,
         cantidad REAL NOT NULL,
         FOREIGN KEY (id_receta) REFERENCES recetas(id_receta),
         FOREIGN KEY (id_insumo) REFERENCES insumos(id_insumo),
+        FOREIGN KEY (id_unidad) REFERENCES unidades_medida(id_unidad),
         UNIQUE (id_receta, id_insumo)
       )
     ''');
@@ -161,7 +211,8 @@ class AppDatabase {
       CREATE TABLE unidades_medida (
         id_unidad INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
-        abreviatura TEXT NOT NULL
+        abreviatura TEXT NOT NULL,
+        factor_base REAL NOT NULL DEFAULT 1
       )
     ''');
     await db.execute('''
@@ -206,6 +257,25 @@ class AppDatabase {
       {'nombre': 'Unidad', 'abreviatura': 'und'},
     ]) {
       await db.insert('unidades_medida', unit);
+    }
+    await _setUnitFactors(db);
+  }
+
+  Future<void> _setUnitFactors(Database db) async {
+    final factors = <String, double>{
+      'Kilogramo': 1000,
+      'Gramo': 1,
+      'Litro': 1000,
+      'Mililitro': 1,
+      'Unidad': 1,
+    };
+    for (final entry in factors.entries) {
+      await db.update(
+        'unidades_medida',
+        {'factor_base': entry.value},
+        where: 'nombre = ?',
+        whereArgs: [entry.key],
+      );
     }
   }
 }
