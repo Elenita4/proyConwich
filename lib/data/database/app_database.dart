@@ -16,265 +16,429 @@ class AppDatabase {
     return _database!;
   }
 
+  Future<void> close() async {
+    await _database?.close();
+    _database = null;
+  }
+
   Future<Database> _openDatabase() async {
     configureDatabaseFactory();
-    final path = join(await getDatabasesPath(), 'sazon_restaurante.db');
+    final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
     return openDatabase(
       path,
-      version: 6,
+      version: 1,
+      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _createSchema,
-      onUpgrade: _upgradeSchema,
+      onUpgrade: (db, oldVersion, newVersion) =>
+          _createSchema(db, newVersion),
     );
   }
 
-  Future<void> _upgradeSchema(
-    Database db,
-    int oldVersion,
-    int newVersion,
-  ) async {
-    if (oldVersion < 2 && !await _hasColumn(db, 'insumos', 'foto')) {
-      await db.execute('ALTER TABLE insumos ADD COLUMN foto BLOB');
-    }
-    if (oldVersion < 3) {
-      await _createProductSchema(db);
-    }
-    if (oldVersion < 4) {
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS categorias_producto (
-          id_categoria_producto INTEGER PRIMARY KEY AUTOINCREMENT,
-          nombre TEXT NOT NULL UNIQUE,
-          color INTEGER NOT NULL DEFAULT 4280391418,
-          estado INTEGER NOT NULL DEFAULT 1
-        )
-      ''');
-      if (oldVersion >= 3 &&
-          !await _hasColumn(db, 'productos', 'id_categoria_producto')) {
-        await db.execute(
-          'ALTER TABLE productos ADD COLUMN id_categoria_producto INTEGER',
-        );
-      }
-      await _createSalesSchema(db);
-      await _seedProductCategories(db);
-    }
-    if (oldVersion < 5 && !await _hasColumn(db, 'ventas', 'metodo_pago')) {
-      await db.execute(
-        "ALTER TABLE ventas ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO'",
-      );
-      await _seedProductCategories(db);
-    }
-    if (oldVersion < 6) {
-      if (!await _hasColumn(db, 'unidades_medida', 'factor_base')) {
-        await db.execute(
-          'ALTER TABLE unidades_medida ADD COLUMN factor_base REAL NOT NULL DEFAULT 1',
-        );
-      }
-      if (!await _hasColumn(db, 'receta_detalle', 'id_unidad')) {
-        await db.execute(
-          'ALTER TABLE receta_detalle ADD COLUMN id_unidad INTEGER',
-        );
-      }
-      await _setUnitFactors(db);
-      final items = await db.rawQuery('''
-        SELECT i.id_insumo,
-               COALESCE(i.stock_actual, 0) AS stock_actual,
-               COALESCE(i.stock_minimo, 0) AS stock_minimo,
-               COALESCE(i.costo_promedio, 0) AS costo_promedio,
-               COALESCE(u.factor_base, 1) AS factor_base
-        FROM insumos i
-        INNER JOIN unidades_medida u ON u.id_unidad = i.id_unidad
-      ''');
-      for (final item in items) {
-        final factor = (item['factor_base'] as num?)?.toDouble() ?? 1;
-        await db.update(
-          'insumos',
-          {
-            'stock_actual':
-                ((item['stock_actual'] as num?)?.toDouble() ?? 0) * factor,
-            'stock_minimo':
-                ((item['stock_minimo'] as num?)?.toDouble() ?? 0) * factor,
-            'costo_promedio':
-                ((item['costo_promedio'] as num?)?.toDouble() ?? 0) / factor,
-          },
-          where: 'id_insumo = ?',
-          whereArgs: [item['id_insumo']],
-        );
-      }
-    }
-  }
+  Future<void> _createSchema(Database db, int version) async {
+    final batch = db.batch();
 
-  Future<bool> _hasColumn(
-    Database db,
-    String tableName,
-    String columnName,
-  ) async {
-    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
-    return columns.any((column) => column['name'] == columnName);
-  }
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL,
+        usuario TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        rol TEXT NOT NULL CHECK (rol IN ('ADMIN','CAJERO')),
+        turno_asignado TEXT CHECK (turno_asignado IN ('MAÑANA','TARDE','AMBOS')),
+        sueldo_base REAL NOT NULL DEFAULT 0,
+        activo INTEGER NOT NULL DEFAULT 1,
+        creado_en TEXT NOT NULL
+      )
+    ''');
 
-  Future<void> _createProductSchema(Database db) async {
-    await db.execute('''
-      CREATE TABLE categorias_producto (
-        id_categoria_producto INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS usuario_permisos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER NOT NULL,
+        permiso TEXT NOT NULL,
+        UNIQUE (usuario_id, permiso),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS categorias_producto (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
         color INTEGER NOT NULL DEFAULT 4280391418,
-        estado INTEGER NOT NULL DEFAULT 1
+        siempre_disponible INTEGER NOT NULL DEFAULT 0,
+        orden INTEGER NOT NULL DEFAULT 0,
+        activo INTEGER NOT NULL DEFAULT 1
       )
     ''');
-    await db.execute('''
-      CREATE TABLE productos (
-        id_producto INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT NOT NULL UNIQUE,
-        nombre TEXT NOT NULL,
-        descripcion TEXT,
-        precio_venta REAL NOT NULL DEFAULT 0,
-        id_categoria_producto INTEGER,
-        foto BLOB,
-        estado INTEGER NOT NULL DEFAULT 1
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE recetas (
-        id_receta INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_producto INTEGER NOT NULL UNIQUE,
-        nombre TEXT NOT NULL,
-        instrucciones TEXT,
-        estado INTEGER NOT NULL DEFAULT 1,
-        FOREIGN KEY (id_producto) REFERENCES productos(id_producto)
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE receta_detalle (
-        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_receta INTEGER NOT NULL,
-        id_insumo INTEGER NOT NULL,
-        id_unidad INTEGER,
-        cantidad REAL NOT NULL,
-        FOREIGN KEY (id_receta) REFERENCES recetas(id_receta),
-        FOREIGN KEY (id_insumo) REFERENCES insumos(id_insumo),
-        FOREIGN KEY (id_unidad) REFERENCES unidades_medida(id_unidad),
-        UNIQUE (id_receta, id_insumo)
-      )
-    ''');
-    await _createSalesSchema(db);
-    await _seedProductCategories(db);
-  }
 
-  Future<void> _createSalesSchema(Database db) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS ventas (
-        id_venta INTEGER PRIMARY KEY AUTOINCREMENT,
-        total REAL NOT NULL,
-        estado TEXT NOT NULL CHECK (estado IN ('PENDIENTE', 'REALIZADA')),
-        metodo_pago TEXT NOT NULL DEFAULT 'EFECTIVO',
-        fecha_hora TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS venta_detalle (
-        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_venta INTEGER NOT NULL,
-        id_producto INTEGER NOT NULL,
-        cantidad INTEGER NOT NULL,
-        precio_unitario REAL NOT NULL,
-        subtotal REAL NOT NULL,
-        FOREIGN KEY (id_venta) REFERENCES ventas(id_venta),
-        FOREIGN KEY (id_producto) REFERENCES productos(id_producto)
-      )
-    ''');
-  }
-
-  Future<void> _seedProductCategories(Database db) async {
-    for (final category in [
-      {'nombre': 'Desayunos', 'color': 4294940672},
-      {'nombre': 'Sandwiches', 'color': 4283215696},
-      {'nombre': 'Gaseosas', 'color': 4280391418},
-      {'nombre': 'Jugos', 'color': 4294924066},
-      {'nombre': 'Frappes', 'color': 4283215696},
-    ]) {
-      await db.insert(
-        'categorias_producto',
-        category,
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-    }
-  }
-
-  Future<void> _createSchema(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE categorias_insumo (
-        id_categoria INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL UNIQUE,
-        estado INTEGER NOT NULL DEFAULT 1
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE unidades_medida (
-        id_unidad INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS unidades_medida (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
         abreviatura TEXT NOT NULL,
-        factor_base REAL NOT NULL DEFAULT 1
+        activo INTEGER NOT NULL DEFAULT 1
       )
     ''');
-    await db.execute('''
-      CREATE TABLE insumos (
-        id_insumo INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT NOT NULL UNIQUE,
-        nombre TEXT NOT NULL,
-        id_categoria INTEGER NOT NULL,
-        id_unidad INTEGER NOT NULL,
-        stock_actual REAL NOT NULL DEFAULT 0,
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS productos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL UNIQUE,
+        categoria_id INTEGER NOT NULL,
+        descripcion TEXT,
+        precio REAL NOT NULL DEFAULT 0,
+        imagen BLOB,
+        tipo TEXT NOT NULL CHECK (tipo IN ('DIRECTO','PREPARADO')),
+        stock_minimo REAL NOT NULL DEFAULT 0,
+        costo_unitario REAL NOT NULL DEFAULT 0,
+        activo INTEGER NOT NULL DEFAULT 1,
+        creado_en TEXT NOT NULL,
+        FOREIGN KEY (categoria_id) REFERENCES categorias_producto(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS insumos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL UNIQUE,
+        unidad_id INTEGER NOT NULL,
+        modo_control TEXT NOT NULL CHECK (modo_control IN ('UNIDAD','PORCION','DISPONIBILIDAD')),
+        disponible INTEGER NOT NULL DEFAULT 1,
         stock_minimo REAL NOT NULL DEFAULT 0,
         costo_promedio REAL NOT NULL DEFAULT 0,
-        estado INTEGER NOT NULL DEFAULT 1,
-        foto BLOB,
-        FOREIGN KEY (id_categoria) REFERENCES categorias_insumo(id_categoria),
-        FOREIGN KEY (id_unidad) REFERENCES unidades_medida(id_unidad)
+        presentacion_compra TEXT,
+        factor_compra REAL NOT NULL DEFAULT 1,
+        activo INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (unidad_id) REFERENCES unidades_medida(id)
       )
     ''');
-    await db.execute('''
-      CREATE TABLE movimientos_inventario (
-        id_movimiento INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_insumo INTEGER NOT NULL,
-        tipo TEXT NOT NULL CHECK (tipo IN ('ENTRADA', 'SALIDA', 'AJUSTE')),
-        origen TEXT NOT NULL,
-        cantidad REAL NOT NULL,
-        costo_unitario REAL,
-        id_referencia INTEGER,
-        fecha_hora TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (id_insumo) REFERENCES insumos(id_insumo)
-      )
-    ''');
-    await _createProductSchema(db);
 
-    await db.insert('categorias_insumo', {'nombre': 'Bebidas'});
-    await db.insert('categorias_insumo', {'nombre': 'Alimentos'});
-    await db.insert('categorias_insumo', {'nombre': 'Desechables'});
-    for (final unit in [
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS receta_insumos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        producto_id INTEGER NOT NULL,
+        insumo_id INTEGER NOT NULL,
+        cantidad REAL NOT NULL DEFAULT 0,
+        UNIQUE (producto_id, insumo_id),
+        FOREIGN KEY (producto_id) REFERENCES productos(id),
+        FOREIGN KEY (insumo_id) REFERENCES insumos(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS menus_dia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha TEXT NOT NULL,
+        tipo TEXT NOT NULL CHECK (tipo IN ('DESAYUNO','ALMUERZO')),
+        estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','PUBLICADO','CERRADO')),
+        usuario_id INTEGER NOT NULL,
+        observacion TEXT,
+        publicado_en TEXT,
+        creado_en TEXT NOT NULL,
+        UNIQUE (fecha, tipo),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS menu_dia_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        menu_dia_id INTEGER NOT NULL,
+        producto_id INTEGER NOT NULL,
+        disponible INTEGER NOT NULL DEFAULT 1,
+        motivo_agotado TEXT,
+        orden INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (menu_dia_id, producto_id),
+        FOREIGN KEY (menu_dia_id) REFERENCES menus_dia(id),
+        FOREIGN KEY (producto_id) REFERENCES productos(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS cajas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha TEXT NOT NULL,
+        turno TEXT NOT NULL CHECK (turno IN ('MAÑANA','TARDE')),
+        usuario_apertura_id INTEGER NOT NULL,
+        usuario_cierre_id INTEGER,
+        fecha_apertura TEXT NOT NULL,
+        fecha_cierre TEXT,
+        fondo_inicial REAL NOT NULL DEFAULT 0,
+        efectivo_contado REAL,
+        qr_verificado REAL,
+        estado TEXT NOT NULL DEFAULT 'ABIERTA' CHECK (estado IN ('ABIERTA','CERRADA')),
+        observacion TEXT,
+        UNIQUE (fecha, turno),
+        FOREIGN KEY (usuario_apertura_id) REFERENCES usuarios(id),
+        FOREIGN KEY (usuario_cierre_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS pedidos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referencia TEXT,
+        usuario_id INTEGER NOT NULL,
+        caja_id INTEGER NOT NULL,
+        menu_dia_id INTEGER,
+        fecha TEXT NOT NULL,
+        estado_pago TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (estado_pago IN ('PENDIENTE','PAGADO','ANULADO')),
+        estado_entrega TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (estado_entrega IN ('PENDIENTE','EN_PREPARACION','LISTO','ENTREGADO','ANULADO')),
+        total REAL NOT NULL DEFAULT 0,
+        observacion TEXT,
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id),
+        FOREIGN KEY (menu_dia_id) REFERENCES menus_dia(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS detalle_pedido (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_id INTEGER NOT NULL,
+        producto_id INTEGER NOT NULL,
+        menu_dia_item_id INTEGER,
+        nombre_producto TEXT NOT NULL,
+        cantidad REAL NOT NULL,
+        precio_unitario REAL NOT NULL,
+        subtotal REAL NOT NULL,
+        costo_unitario REAL NOT NULL DEFAULT 0,
+        observacion TEXT,
+        FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
+        FOREIGN KEY (producto_id) REFERENCES productos(id),
+        FOREIGN KEY (menu_dia_item_id) REFERENCES menu_dia_items(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS pagos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_id INTEGER NOT NULL,
+        caja_id INTEGER NOT NULL,
+        usuario_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        monto REAL NOT NULL,
+        metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+        estado TEXT NOT NULL DEFAULT 'CONFIRMADO' CHECK (estado IN ('CONFIRMADO','ANULADO')),
+        referencia TEXT,
+        FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS compras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+        caja_id INTEGER,
+        total REAL NOT NULL DEFAULT 0,
+        observacion TEXT,
+        estado TEXT NOT NULL DEFAULT 'REGISTRADA' CHECK (estado IN ('REGISTRADA','ANULADA')),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS detalle_compra (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        compra_id INTEGER NOT NULL,
+        insumo_id INTEGER,
+        producto_id INTEGER,
+        cantidad REAL NOT NULL,
+        costo_unitario REAL NOT NULL,
+        subtotal REAL NOT NULL,
+        FOREIGN KEY (compra_id) REFERENCES compras(id),
+        FOREIGN KEY (insumo_id) REFERENCES insumos(id),
+        FOREIGN KEY (producto_id) REFERENCES productos(id),
+        CHECK (
+          (insumo_id IS NOT NULL AND producto_id IS NULL) OR
+          (insumo_id IS NULL AND producto_id IS NOT NULL)
+        )
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS consumos_insumo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        insumo_id INTEGER NOT NULL,
+        pedido_id INTEGER,
+        detalle_pedido_id INTEGER,
+        fecha TEXT NOT NULL,
+        cantidad REAL NOT NULL,
+        costo_unitario REAL NOT NULL DEFAULT 0,
+        estado TEXT NOT NULL DEFAULT 'CONFIRMADO' CHECK (estado IN ('CONFIRMADO','ANULADO')),
+        FOREIGN KEY (insumo_id) REFERENCES insumos(id),
+        FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
+        FOREIGN KEY (detalle_pedido_id) REFERENCES detalle_pedido(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS conteos_inventario (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha TEXT NOT NULL UNIQUE,
+        usuario_id INTEGER NOT NULL,
+        estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','CERRADO')),
+        observacion TEXT,
+        creado_en TEXT NOT NULL,
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS detalle_conteo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conteo_id INTEGER NOT NULL,
+        insumo_id INTEGER NOT NULL,
+        stock_sistema REAL NOT NULL,
+        stock_contado REAL NOT NULL,
+        diferencia REAL NOT NULL,
+        costo_unitario REAL NOT NULL DEFAULT 0,
+        UNIQUE (conteo_id, insumo_id),
+        FOREIGN KEY (conteo_id) REFERENCES conteos_inventario(id),
+        FOREIGN KEY (insumo_id) REFERENCES insumos(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS categorias_gasto (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL UNIQUE,
+        activo INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        categoria_gasto_id INTEGER NOT NULL,
+        usuario_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        monto REAL NOT NULL,
+        metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+        caja_id INTEGER,
+        descripcion TEXT,
+        estado TEXT NOT NULL DEFAULT 'REGISTRADO' CHECK (estado IN ('REGISTRADO','ANULADO')),
+        FOREIGN KEY (categoria_gasto_id) REFERENCES categorias_gasto(id),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS sueldos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        periodo TEXT NOT NULL,
+        monto REAL NOT NULL,
+        metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+        caja_id INTEGER,
+        observacion TEXT,
+        estado TEXT NOT NULL DEFAULT 'REGISTRADO' CHECK (estado IN ('REGISTRADO','ANULADO')),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id)
+      )
+    ''');
+
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_productos_categoria ON productos(categoria_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_receta_producto ON receta_insumos(producto_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_menu_fecha ON menus_dia(fecha, tipo)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_menu_items ON menu_dia_items(menu_dia_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_pedidos_fecha ON pedidos(fecha)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_pedidos_caja ON pedidos(caja_id)',
+    );
+    batch.execute('CREATE INDEX IF NOT EXISTS idx_pagos_fecha ON pagos(fecha)');
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_compras_fecha ON compras(fecha)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_consumos_fecha ON consumos_insumo(fecha)',
+    );
+    batch.execute('CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha)');
+    batch.execute('CREATE INDEX IF NOT EXISTS idx_sueldos_fecha ON sueldos(fecha)');
+
+    batch.execute('''
+      CREATE VIEW IF NOT EXISTS v_stock_insumos AS
+      SELECT
+        i.id AS insumo_id,
+        COALESCE((
+          SELECT SUM(dc.cantidad)
+          FROM detalle_compra dc
+          INNER JOIN compras c ON c.id = dc.compra_id
+          WHERE dc.insumo_id = i.id AND c.estado = 'REGISTRADA'
+        ), 0)
+        - COALESCE((
+          SELECT SUM(ci.cantidad)
+          FROM consumos_insumo ci
+          WHERE ci.insumo_id = i.id AND ci.estado = 'CONFIRMADO'
+        ), 0)
+        + COALESCE((
+          SELECT SUM(dt.diferencia)
+          FROM detalle_conteo dt
+          INNER JOIN conteos_inventario ct ON ct.id = dt.conteo_id
+          WHERE dt.insumo_id = i.id AND ct.estado = 'CERRADO'
+        ), 0) AS stock
+      FROM insumos i
+    ''');
+
+    batch.execute('''
+      CREATE VIEW IF NOT EXISTS v_stock_productos AS
+      SELECT
+        p.id AS producto_id,
+        COALESCE((
+          SELECT SUM(dc.cantidad)
+          FROM detalle_compra dc
+          INNER JOIN compras c ON c.id = dc.compra_id
+          WHERE dc.producto_id = p.id AND c.estado = 'REGISTRADA'
+        ), 0)
+        - COALESCE((
+          SELECT SUM(dp.cantidad)
+          FROM detalle_pedido dp
+          INNER JOIN pedidos pe ON pe.id = dp.pedido_id
+          WHERE dp.producto_id = p.id
+            AND pe.estado_pago <> 'ANULADO'
+            AND pe.estado_entrega <> 'ANULADO'
+        ), 0) AS stock
+      FROM productos p
+      WHERE p.tipo = 'DIRECTO'
+    ''');
+
+    await batch.commit(noResult: true);
+
+    await _seedUnits(db);
+  }
+
+  Future<void> _seedUnits(Database db) async {
+    const units = [
+      {'nombre': 'Unidad', 'abreviatura': 'und'},
+      {'nombre': 'Porción', 'abreviatura': 'porc'},
       {'nombre': 'Kilogramo', 'abreviatura': 'kg'},
       {'nombre': 'Gramo', 'abreviatura': 'g'},
       {'nombre': 'Litro', 'abreviatura': 'L'},
       {'nombre': 'Mililitro', 'abreviatura': 'ml'},
-      {'nombre': 'Unidad', 'abreviatura': 'und'},
-    ]) {
-      await db.insert('unidades_medida', unit);
-    }
-    await _setUnitFactors(db);
-  }
-
-  Future<void> _setUnitFactors(Database db) async {
-    final factors = <String, double>{
-      'Kilogramo': 1000,
-      'Gramo': 1,
-      'Litro': 1000,
-      'Mililitro': 1,
-      'Unidad': 1,
-    };
-    for (final entry in factors.entries) {
-      await db.update(
+    ];
+    for (final unit in units) {
+      await db.insert(
         'unidades_medida',
-        {'factor_base': entry.value},
-        where: 'nombre = ?',
-        whereArgs: [entry.key],
+        unit,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
       );
     }
   }

@@ -1,11 +1,20 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:sqflite/sqflite.dart';
 
-import '../../inventory/data/inventory_repository.dart';
-import '../data/product_repository.dart';
+import '../../../core/catalog_repository.dart';
+import '../../../core/date_utils.dart';
+import '../../../ui/common.dart';
+
+class _ProductsData {
+  const _ProductsData({
+    required this.productos,
+    required this.categorias,
+    required this.insumos,
+  });
+
+  final List<Producto> productos;
+  final List<CategoriaProducto> categorias;
+  final List<Insumo> insumos;
+}
 
 class ProductsPage extends StatefulWidget {
   const ProductsPage({super.key});
@@ -15,9 +24,11 @@ class ProductsPage extends StatefulWidget {
 }
 
 class _ProductsPageState extends State<ProductsPage> {
-  final _repository = ProductRepository();
-  late Future<List<Product>> _productsFuture;
+  final _repository = CatalogRepository();
+  late Future<_ProductsData> _future;
   String _search = '';
+  int? _categoriaId;
+  bool _soloActivos = false;
 
   @override
   void initState() {
@@ -25,491 +36,540 @@ class _ProductsPageState extends State<ProductsPage> {
     _reload();
   }
 
-  void _reload() => _productsFuture = _repository.getProducts();
+  void _reload() => _future = _load();
 
-  Future<void> _newProduct() async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ProductFormDialog(repository: _repository),
+  Future<_ProductsData> _load() async {
+    final productos = await _repository.getProductos();
+    final categorias = await _repository.getCategorias();
+    final insumos = await _repository.getInsumos(soloActivos: true);
+    return _ProductsData(
+      productos: productos,
+      categorias: categorias,
+      insumos: insumos,
     );
-    if (saved == true && mounted) {
+  }
+
+  Future<void> _openForm([Producto? producto]) async {
+    final data = await _future;
+    if (!mounted) return;
+    final saved = await showDialog<int>(
+      context: context,
+      builder: (_) => _ProductDialog(
+        repository: _repository,
+        producto: producto,
+        categorias: data.categorias,
+      ),
+    );
+    if (saved != null && mounted) {
       setState(_reload);
-      _message('Producto guardado correctamente.');
+      showAppMessage(context, 'Producto guardado correctamente.');
     }
   }
 
-  Future<void> _editProduct(Product product) async {
+  Future<void> _openRecipe(Producto producto) async {
+    final data = await _future;
+    final receta = await _repository.getReceta(producto.id!);
+    if (!mounted) return;
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) =>
-          ProductFormDialog(repository: _repository, product: product),
+      builder: (_) => _RecipeDialog(
+        repository: _repository,
+        producto: producto,
+        insumos: data.insumos,
+        receta: receta,
+      ),
     );
     if (saved == true && mounted) {
       setState(_reload);
-      _message('Producto actualizado correctamente.');
+      showAppMessage(context, 'Receta actualizada.');
     }
   }
 
-  Future<void> _addRecipe(Product product) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => RecipeDialog(product: product, repository: _repository),
-    );
-    if (saved == true && mounted) {
-      setState(_reload);
-      _message('Receta guardada correctamente.');
-    }
-  }
-
-  void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  Future<void> _toggle(Producto producto, bool activo) async {
+    await _repository.setProductoActivo(producto.id!, activo);
+    if (!mounted) return;
+    setState(_reload);
   }
 
   @override
   Widget build(BuildContext context) {
-    final padding = MediaQuery.sizeOf(context).width < 600 ? 16.0 : 24.0;
-    return RefreshIndicator(
-      onRefresh: () async => setState(_reload),
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.all(padding),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1400),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+    return FutureBuilder<_ProductsData>(
+      future: _future,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        final productos = data?.productos ?? [];
+        final categorias = data?.categorias ?? [];
+        final filtrados = productos.where((producto) {
+          if (_soloActivos && !producto.activo) return false;
+          if (_categoriaId != null && producto.categoriaId != _categoriaId) {
+            return false;
+          }
+          final term = _search.trim().toLowerCase();
+          if (term.isEmpty) return true;
+          return producto.nombre.toLowerCase().contains(term);
+        }).toList();
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              PageHeader(
+                title: 'Productos',
+                subtitle:
+                    'Platos, bebidas y productos directos. Los precios solo se cambian aquí.',
+                actions: [
+                  FilledButton.icon(
+                    onPressed: snapshot.hasData ? () => _openForm() : null,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Nuevo producto'),
+                  ),
+                ],
+              ),
+              AppCard(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 12,
                   runSpacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text(
-                      'Productos',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
+                    SizedBox(
+                      width: 280,
+                      child: TextField(
+                        decoration: appInput(
+                          label: 'Buscar producto',
+                          icon: Icons.search,
+                        ),
+                        onChanged: (value) => setState(() => _search = value),
+                      ),
                     ),
-                    FilledButton.icon(
-                      onPressed: _newProduct,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Nuevo producto'),
+                    SizedBox(
+                      width: 230,
+                      child: DropdownButtonFormField<int?>(
+                        initialValue: _categoriaId,
+                        decoration: appInput(label: 'Categoría'),
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('Todas'),
+                          ),
+                          ...categorias.map(
+                            (categoria) => DropdownMenuItem<int?>(
+                              value: categoria.id,
+                              child: Text(categoria.nombre),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) =>
+                            setState(() => _categoriaId = value),
+                      ),
+                    ),
+                    FilterChip(
+                      label: const Text('Solo activos'),
+                      selected: _soloActivos,
+                      onSelected: (value) =>
+                          setState(() => _soloActivos = value),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Administra los productos que estarán disponibles para futuras ventas.',
-                  style: Theme.of(context).textTheme.bodyLarge
-                      ?.copyWith(color: Colors.black54),
-                ),
-                const SizedBox(height: 20),
-                TextField(
-                  onChanged: (value) =>
-                      setState(() => _search = value.trim().toLowerCase()),
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
-                    hintText: 'Buscar por código o nombre',
+              ),
+              const SizedBox(height: 16),
+              if (snapshot.connectionState == ConnectionState.waiting)
+                const LoadingView()
+              else if (snapshot.hasError)
+                ErrorView(
+                  message: '${snapshot.error}',
+                  onRetry: () => setState(_reload),
+                )
+              else if (categorias.isEmpty)
+                EmptyState(
+                  icon: Icons.category_outlined,
+                  title: 'Primero crea una categoría',
+                  message:
+                      'Los productos necesitan una categoría. Ve a Categorías para crear la primera.',
+                  action: FilledButton.icon(
+                    onPressed: () => setState(_reload),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Actualizar'),
+                  ),
+                )
+              else if (filtrados.isEmpty)
+                const EmptyState(
+                  icon: Icons.lunch_dining_outlined,
+                  title: 'No hay productos que coincidan',
+                  message: 'Crea un producto o ajusta los filtros.',
+                )
+              else
+                ...filtrados.map(
+                  (producto) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ProductRow(
+                      producto: producto,
+                      onEdit: () => _openForm(producto),
+                      onRecipe: producto.esDirecto
+                          ? null
+                          : () => _openRecipe(producto),
+                      onToggle: (value) => _toggle(producto, value),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                FutureBuilder<List<Product>>(
-                  future: _productsFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(40),
-                          child: CircularProgressIndicator(),
-                        ),
-                      );
-                    }
-                    if (snapshot.hasError) {
-                      return const Text('No se pudieron cargar los productos.');
-                    }
-                    final products = (snapshot.data ?? [])
-                        .where(
-                          (product) =>
-                              _search.isEmpty ||
-                              product.name.toLowerCase().contains(_search) ||
-                              product.code.toLowerCase().contains(_search),
-                        )
-                        .toList();
-                    if (products.isEmpty) {
-                      return const Card(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(
-                            child: Text('No hay productos registrados.'),
-                          ),
-                        ),
-                      );
-                    }
-                    return _ProductTable(
-                      products: products,
-                      onAddRecipe: _addRecipe,
-                      onEdit: _editProduct,
-                    );
-                  },
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ProductRow extends StatelessWidget {
+  const _ProductRow({
+    required this.producto,
+    required this.onEdit,
+    required this.onRecipe,
+    required this.onToggle,
+  });
+
+  final Producto producto;
+  final VoidCallback onEdit;
+  final VoidCallback? onRecipe;
+  final ValueChanged<bool> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Color(producto.categoriaColor).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              producto.esDirecto
+                  ? Icons.inventory_2_outlined
+                  : Icons.restaurant,
+              color: Color(producto.categoriaColor),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            flex: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  producto.nombre,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${producto.categoriaNombre} · ${producto.esDirecto ? 'Directo' : 'Preparado'}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                if (producto.descripcion != null)
+                  Text(
+                    producto.descripcion!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  formatMoney(producto.precio),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  producto.esDirecto
+                      ? 'Stock: ${formatQty(producto.stock)}'
+                      : 'Receta: ${producto.esDirecto ? '—' : 'configurable'}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: producto.esDirecto && producto.stock <= producto.stockMinimo
+                        ? scheme.error
+                        : scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
           ),
-        ),
+          if (onRecipe != null)
+            OutlinedButton.icon(
+              onPressed: onRecipe,
+              icon: const Icon(Icons.receipt_long_outlined, size: 18),
+              label: const Text('Receta'),
+            ),
+          const SizedBox(width: 8),
+          Switch(value: producto.activo, onChanged: onToggle),
+          IconButton(
+            tooltip: 'Editar',
+            onPressed: onEdit,
+            icon: const Icon(Icons.edit_outlined),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _ProductTable extends StatelessWidget {
-  const _ProductTable({
-    required this.products,
-    required this.onAddRecipe,
-    required this.onEdit,
+class _ProductDialog extends StatefulWidget {
+  const _ProductDialog({
+    required this.repository,
+    required this.categorias,
+    this.producto,
   });
-  final List<Product> products;
-  final ValueChanged<Product> onAddRecipe;
-  final ValueChanged<Product> onEdit;
+
+  final CatalogRepository repository;
+  final List<CategoriaProducto> categorias;
+  final Producto? producto;
 
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          columns: const [
-            DataColumn(label: Text('Producto')),
-            DataColumn(label: Text('Categoría')),
-            DataColumn(label: Text('Precio')),
-            DataColumn(label: Text('Receta')),
-            DataColumn(label: Text('Acciones')),
-          ],
-          rows: products
-              .map(
-                (product) => DataRow(
-                  cells: [
-                    DataCell(
-                      Row(
-                        children: [
-                          if (product.photo != null)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 10),
-                              child: Image.memory(
-                                product.photo!,
-                                width: 48,
-                                height: 48,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                product.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              Text(
-                                product.code,
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    DataCell(
-                      StatusLabel(
-                        text: product.categoryName,
-                        color: Color(product.categoryColor),
-                      ),
-                    ),
-                    DataCell(
-                      Text('Bs ${product.salePrice.toStringAsFixed(2)}'),
-                    ),
-                    DataCell(
-                      StatusLabel(
-                        text: product.recipeId == null
-                            ? 'Pendiente'
-                            : 'Configurada',
-                        color: product.recipeId == null
-                            ? Colors.orange
-                            : Colors.teal,
-                      ),
-                    ),
-                    DataCell(
-                      Row(
-                        children: [
-                          IconButton(
-                            tooltip: 'Editar producto',
-                            onPressed: () => onEdit(product),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: () => onAddRecipe(product),
-                            icon: Icon(
-                              product.recipeId == null
-                                  ? Icons.menu_book_outlined
-                                  : Icons.edit_note,
-                            ),
-                            label: Text(
-                              product.recipeId == null
-                                  ? 'Agregar receta'
-                                  : 'Ver receta',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              )
-              .toList(),
-        ),
-      ),
-    );
-  }
+  State<_ProductDialog> createState() => _ProductDialogState();
 }
 
-class ProductFormDialog extends StatefulWidget {
-  const ProductFormDialog({super.key, required this.repository, this.product});
-  final ProductRepository repository;
-  final Product? product;
-
-  @override
-  State<ProductFormDialog> createState() => _ProductFormDialogState();
-}
-
-class _ProductFormDialogState extends State<ProductFormDialog> {
+class _ProductDialogState extends State<_ProductDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _code = TextEditingController();
-  final _name = TextEditingController();
-  final _description = TextEditingController();
-  final _price = TextEditingController(text: '0');
-  Uint8List? _photo;
-  List<ProductCategory> _categories = [];
-  int? _categoryId;
-  bool _loadingCategories = true;
+  late final TextEditingController _nombre;
+  late final TextEditingController _descripcion;
+  late final TextEditingController _precio;
+  late final TextEditingController _stockMinimo;
+  late final TextEditingController _costo;
+  late int? _categoriaId;
+  late String _tipo;
+  late bool _activo;
   bool _saving = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    final product = widget.product;
-    _code.text = product?.code ?? '';
-    _name.text = product?.name ?? '';
-    _description.text = product?.description ?? '';
-    _price.text = (product?.salePrice ?? 0).toString();
-    _categoryId = product?.categoryId == 0 ? null : product?.categoryId;
-    _photo = product?.photo;
-    _loadCategories();
-  }
-
-  Future<void> _loadCategories() async {
-    final categories = await widget.repository.getCategories();
-    if (!mounted) return;
-    setState(() {
-      _categories = categories;
-      _categoryId ??= categories.isEmpty ? null : categories.first.id;
-      _loadingCategories = false;
-    });
-    if (widget.product == null && _categoryId != null) {
-      _code.text = await widget.repository.generateCode(_categoryId!);
-    }
+    final producto = widget.producto;
+    _nombre = TextEditingController(text: producto?.nombre ?? '');
+    _descripcion = TextEditingController(text: producto?.descripcion ?? '');
+    _precio = TextEditingController(
+      text: producto == null ? '' : producto.precio.toStringAsFixed(2),
+    );
+    _stockMinimo = TextEditingController(
+      text: producto == null ? '0' : formatQty(producto.stockMinimo),
+    );
+    _costo = TextEditingController(
+      text: producto == null ? '0' : producto.costoUnitario.toStringAsFixed(2),
+    );
+    final activas = widget.categorias
+        .where((categoria) => categoria.activo)
+        .toList();
+    _categoriaId = producto?.categoriaId ??
+        (activas.isEmpty ? null : activas.first.id);
+    _tipo = producto?.tipo ?? 'PREPARADO';
+    _activo = producto?.activo ?? true;
   }
 
   @override
   void dispose() {
-    _code.dispose();
-    _name.dispose();
-    _description.dispose();
-    _price.dispose();
+    _nombre.dispose();
+    _descripcion.dispose();
+    _precio.dispose();
+    _stockMinimo.dispose();
+    _costo.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickPhoto() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Elegir de la galería'),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Abrir cámara'),
-              onTap: () => Navigator.pop(context, ImageSource.camera),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (source == null) return;
-    final image = await ImagePicker().pickImage(
-      source: source,
-      imageQuality: 80,
-      maxWidth: 1200,
-    );
-    if (image == null || !mounted) return;
-    final bytes = await image.readAsBytes();
-    if (mounted) setState(() => _photo = bytes);
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_categoriaId == null) {
+      setState(() => _error = 'Selecciona una categoría.');
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await widget.repository.saveProduct(
-        Product(
-          id: widget.product?.id,
-          code: _code.text.trim(),
-          name: _name.text.trim(),
-          description: _description.text.trim().isEmpty
-              ? null
-              : _description.text.trim(),
-          salePrice: double.parse(_price.text),
-          categoryId: _categoryId!,
-          categoryName: '',
-          categoryColor: 4280391418,
-          photo: _photo,
-          active: widget.product?.active ?? true,
+      final categoria = widget.categorias.firstWhere(
+        (item) => item.id == _categoriaId,
+      );
+      final id = await widget.repository.saveProducto(
+        Producto(
+          id: widget.producto?.id,
+          nombre: _nombre.text,
+          categoriaId: _categoriaId!,
+          categoriaNombre: categoria.nombre,
+          categoriaColor: categoria.color,
+          descripcion: _descripcion.text,
+          precio: parseAmount(_precio.text),
+          tipo: _tipo,
+          stockMinimo: _tipo == 'DIRECTO' ? parseAmount(_stockMinimo.text) : 0,
+          costoUnitario: _tipo == 'DIRECTO' ? parseAmount(_costo.text) : 0,
+          activo: _activo,
+          stock: widget.producto?.stock ?? 0,
         ),
       );
-      if (mounted) Navigator.pop(context, true);
-    } on DatabaseException catch (error) {
+      if (!mounted) return;
+      Navigator.pop(context, id);
+    } catch (error) {
       if (!mounted) return;
       setState(() {
+        _error = 'No se pudo guardar: $error';
         _saving = false;
-        _error = error.isUniqueConstraintError()
-            ? 'El código ya está registrado.'
-            : 'No se pudo guardar el producto.';
       });
     }
   }
 
-  String? _required(String? value) =>
-      value == null || value.trim().isEmpty ? 'Campo obligatorio' : null;
-
-  String? _priceValidator(String? value) {
-    final number = double.tryParse(value ?? '');
-    return number == null || number < 0 ? 'Ingresa un precio válido' : null;
-  }
-
   @override
   Widget build(BuildContext context) {
+    final directo = _tipo == 'DIRECTO';
     return AlertDialog(
-      scrollable: true,
-      title: Text(
-        widget.product == null ? 'Nuevo producto' : 'Editar producto',
-      ),
+      title: Text(widget.producto == null ? 'Nuevo producto' : 'Editar producto'),
       content: SizedBox(
-        width: MediaQuery.sizeOf(context).width < 600
-            ? MediaQuery.sizeOf(context).width - 64
-            : 520,
+        width: 520,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 TextFormField(
-                  controller: _code,
-                  readOnly: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Código automático',
-                    helperText: 'Se genera según la categoría',
-                  ),
-                  validator: _required,
+                  controller: _nombre,
+                  decoration: appInput(label: 'Nombre del producto'),
+                  validator: (value) =>
+                      (value == null || value.trim().isEmpty)
+                      ? 'Ingresa un nombre'
+                      : null,
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<int>(
-                  initialValue: _categoryId,
-                  decoration: const InputDecoration(labelText: 'Categoría'),
-                  items: _categories
+                  initialValue: _categoriaId,
+                  decoration: appInput(label: 'Categoría'),
+                  items: widget.categorias
                       .map(
-                        (category) => DropdownMenuItem(
-                          value: category.id,
-                          child: Text(category.name),
+                        (categoria) => DropdownMenuItem(
+                          value: categoria.id,
+                          child: Text(
+                            categoria.activo
+                                ? categoria.nombre
+                                : '${categoria.nombre} (inactiva)',
+                          ),
                         ),
                       )
                       .toList(),
-                  onChanged: _loadingCategories || widget.product != null
-                      ? null
-                      : (value) async {
-                          if (value == null) return;
-                          setState(() => _categoryId = value);
-                          if (widget.product == null) {
-                            _code.text = await widget.repository.generateCode(
-                              value,
-                            );
-                            if (mounted) setState(() {});
-                          }
-                        },
+                  onChanged: (value) => setState(() => _categoriaId = value),
                   validator: (value) =>
                       value == null ? 'Selecciona una categoría' : null,
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _name,
-                  decoration: const InputDecoration(labelText: 'Nombre'),
-                  validator: _required,
+                DropdownButtonFormField<String>(
+                  initialValue: _tipo,
+                  decoration: appInput(label: 'Tipo de producto'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'PREPARADO',
+                      child: Text('Preparado (usa receta de insumos)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'DIRECTO',
+                      child: Text('Directo (stock propio en unidades)'),
+                    ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _tipo = value ?? 'PREPARADO'),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
-                  controller: _description,
+                  controller: _descripcion,
                   maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Descripción (opcional)',
+                  decoration: appInput(
+                    label: 'Descripción (opcional)',
                   ),
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _price,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Precio de venta (Bs)',
-                  ),
-                  validator: _priceValidator,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _precio,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: appInput(
+                          label: 'Precio de venta (Bs)',
+                          icon: Icons.sell_outlined,
+                        ),
+                        validator: (value) {
+                          if (parseAmount(value ?? '') < 0) {
+                            return 'Precio inválido';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                    if (directo) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _stockMinimo,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                          decoration: appInput(
+                            label: 'Stock mínimo',
+                            icon: Icons.warning_amber_outlined,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: _pickPhoto,
-                    icon: const Icon(Icons.photo_outlined),
-                    label: Text(
-                      _photo == null
-                          ? 'Agregar foto (opcional)'
-                          : 'Cambiar foto',
+                if (directo) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _costo,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: appInput(
+                      label: 'Costo unitario (Bs)',
+                      hint: 'Se actualiza con las compras',
+                      icon: Icons.price_check,
                     ),
                   ),
-                ),
-                if (_photo != null)
-                  Image.memory(
-                    _photo!,
-                    height: 120,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
+                ],
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Producto activo'),
+                  subtitle: Text(
+                    directo
+                        ? 'El stock se registra desde Compras.'
+                        : 'Configura la receta desde la lista de productos.',
                   ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
+                  value: _activo,
+                  onChanged: (value) => setState(() => _activo = value),
+                ),
+                if (_error != null)
                   Text(
                     _error!,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                ],
               ],
             ),
           ),
@@ -522,124 +582,62 @@ class _ProductFormDialogState extends State<ProductFormDialog> {
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
-          child: _saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Guardar'),
+          child: Text(_saving ? 'Guardando…' : 'Guardar'),
         ),
       ],
     );
   }
 }
 
-class RecipeDialog extends StatefulWidget {
-  const RecipeDialog({
-    super.key,
-    required this.product,
+class _RecipeDialog extends StatefulWidget {
+  const _RecipeDialog({
     required this.repository,
+    required this.producto,
+    required this.insumos,
+    required this.receta,
   });
-  final Product product;
-  final ProductRepository repository;
+
+  final CatalogRepository repository;
+  final Producto producto;
+  final List<Insumo> insumos;
+  final List<RecetaLinea> receta;
 
   @override
-  State<RecipeDialog> createState() => _RecipeDialogState();
+  State<_RecipeDialog> createState() => _RecipeDialogState();
 }
 
-class _RecipeDialogState extends State<RecipeDialog> {
+class _RecipeDialogState extends State<_RecipeDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _name = TextEditingController();
-  final _instructions = TextEditingController();
-  List<InventoryLookup> _ingredients = [];
-  List<InventoryLookup> _units = [];
-  final List<RecipeIngredient> _recipeIngredients = [];
-  int? _selectedIngredient;
-  int? _selectedUnit;
-  final _quantity = TextEditingController();
-  bool _loading = true;
+  final _cantidades = <int, TextEditingController>{};
+  final _seleccionados = <int>{};
   bool _saving = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadIngredients();
-  }
-
-  Future<void> _loadIngredients() async {
-    final ingredients = await InventoryRepository().getItems();
-    final units = await InventoryRepository().getUnits();
-    final existing = widget.product.recipeId == null
-        ? <RecipeIngredient>[]
-        : await widget.repository.getRecipe(widget.product.id!);
-    if (!mounted) return;
-    setState(() {
-      _ingredients = ingredients
-          .map(
-            (item) => InventoryLookup(
-              id: item.id!,
-              name: item.name,
-              abbreviation: item.unitAbbreviation,
-              factor: item.unitFactor,
-            ),
-          )
-          .toList();
-      _units = units;
-      _name.text = widget.product.name;
-      _recipeIngredients.addAll(existing);
-      _loading = false;
-    });
-  }
-
-  void _addIngredient() {
-    final quantity = double.tryParse(_quantity.text);
-    if (_selectedIngredient == null || quantity == null || quantity <= 0) {
-      setState(
-        () => _error = 'Selecciona un insumo e ingresa una cantidad válida.',
-      );
-      return;
+    for (final insumo in widget.insumos) {
+      _cantidades[insumo.id!] = TextEditingController();
     }
-    final ingredient = _ingredients.firstWhere(
-      (value) => value.id == _selectedIngredient,
-    );
-    final unit = _units.firstWhere(
-      (value) => value.id == _selectedUnit,
-      orElse: () => _units.firstWhere(
-        (value) => value.abbreviation == ingredient.abbreviation,
-      ),
-    );
-    setState(() {
-      _recipeIngredients.removeWhere(
-        (value) => value.ingredientId == ingredient.id,
-      );
-      _recipeIngredients.add(
-        RecipeIngredient(
-          ingredientId: ingredient.id,
-          ingredientName: ingredient.name,
-          unitId: unit.id,
-          unitAbbreviation: unit.abbreviation ?? unit.name,
-          unitFactor: unit.factor,
-          quantity: quantity,
-        ),
-      );
-      _quantity.clear();
-      _error = null;
-    });
+    for (final linea in widget.receta) {
+      if (!_cantidades.containsKey(linea.insumoId)) continue;
+      _seleccionados.add(linea.insumoId);
+      _cantidades[linea.insumoId]?.text = formatQty(linea.cantidad);
+    }
   }
 
   @override
   void dispose() {
-    _name.dispose();
-    _instructions.dispose();
-    _quantity.dispose();
+    for (final controller in _cantidades.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate() || _recipeIngredients.isEmpty) {
-      setState(() => _error = 'Agrega al menos un insumo a la receta.');
+    if (!_formKey.currentState!.validate()) return;
+    if (_seleccionados.isEmpty) {
+      setState(() => _error = 'Selecciona al menos un insumo.');
       return;
     }
     setState(() {
@@ -647,20 +645,20 @@ class _RecipeDialogState extends State<RecipeDialog> {
       _error = null;
     });
     try {
-      await widget.repository.saveRecipe(
-        productId: widget.product.id!,
-        name: _name.text.trim(),
-        instructions: _instructions.text.trim(),
-        ingredients: _recipeIngredients,
+      await widget.repository.saveRecetaCantidades(
+        widget.producto.id!,
+        {
+          for (final id in _seleccionados)
+            id: parseAmount(_cantidades[id]!.text),
+        },
       );
-      if (mounted) Navigator.pop(context, true);
-    } on DatabaseException catch (error) {
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
       if (!mounted) return;
       setState(() {
+        _error = 'No se pudo guardar la receta: $error';
         _saving = false;
-        _error = error.isUniqueConstraintError()
-            ? 'Este producto ya tiene una receta.'
-            : 'No se pudo guardar la receta.';
       });
     }
   }
@@ -668,163 +666,120 @@ class _RecipeDialogState extends State<RecipeDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      scrollable: true,
-      title: Text('Receta de ${widget.product.name}'),
+      title: Text('Receta · ${widget.producto.nombre}'),
       content: SizedBox(
-        width: MediaQuery.sizeOf(context).width < 600
-            ? MediaQuery.sizeOf(context).width - 64
-            : 560,
-        child: _loading
-            ? const SizedBox(
-                height: 150,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            : Form(
-                key: _formKey,
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: _name,
-                        decoration: const InputDecoration(
-                          labelText: 'Nombre de la receta',
-                        ),
-                        validator: (value) =>
-                            value == null || value.trim().isEmpty
-                            ? 'Campo obligatorio'
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _instructions,
-                        maxLines: 2,
-                        decoration: const InputDecoration(
-                          labelText: 'Preparación (opcional)',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Column(
-                        children: [
-                          DropdownButtonFormField<int>(
-                            initialValue: _selectedIngredient,
-                            decoration: const InputDecoration(
-                              labelText: 'Insumo',
-                            ),
-                            items: _ingredients
-                                .map(
-                                  (ingredient) => DropdownMenuItem(
-                                    value: ingredient.id,
-                                    child: Text(ingredient.name),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) =>
-                                setState(() => _selectedIngredient = value),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
+        width: 560,
+        height: 460,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              Text(
+                'Indica cuánto de cada insumo consume una porción vendida.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: widget.insumos.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.inventory_2_outlined,
+                        title: 'No hay insumos activos',
+                        message:
+                            'Crea insumos en la sección Insumos para poder armar la receta.',
+                      )
+                    : ListView.separated(
+                        itemCount: widget.insumos.length,
+                        separatorBuilder: (_, _) => const Divider(),
+                        itemBuilder: (context, index) {
+                          final insumo = widget.insumos[index];
+                          final id = insumo.id!;
+                          final seleccionado = _seleccionados.contains(id);
+                          return Row(
                             children: [
+                              Checkbox(
+                                value: seleccionado,
+                                onChanged: (value) {
+                                  setState(() {
+                                    if (value == true) {
+                                      _seleccionados.add(id);
+                                    } else {
+                                      _seleccionados.remove(id);
+                                    }
+                                  });
+                                },
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(insumo.nombre),
+                                    Text(
+                                      '${insumo.modoControl} · stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                               SizedBox(
-                                width: 100,
-                                child: TextField(
-                                  controller: _quantity,
+                                width: 130,
+                                child: TextFormField(
+                                  controller: _cantidades[id],
+                                  enabled: seleccionado,
                                   keyboardType:
                                       const TextInputType.numberWithOptions(
                                         decimal: true,
                                       ),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Cantidad',
+                                  decoration: appInput(
+                                    label: 'Cantidad',
+                                    hint: insumo.unidadAbreviatura,
                                   ),
+                                  validator: (value) {
+                                    if (!seleccionado) return null;
+                                    final cantidad = parseAmount(value ?? '');
+                                    if (cantidad <= 0) {
+                                      return 'Mayor a 0';
+                                    }
+                                    return null;
+                                  },
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: DropdownButtonFormField<int>(
-                                  initialValue: _selectedUnit,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Unidad',
-                                  ),
-                                  items: _units
-                                      .map(
-                                        (unit) => DropdownMenuItem(
-                                          value: unit.id,
-                                          child: Text(
-                                            unit.abbreviation ?? unit.name,
-                                          ),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) =>
-                                      setState(() => _selectedUnit = value),
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'Agregar insumo',
-                                onPressed: _addIngredient,
-                                icon: const Icon(Icons.add_circle_outline),
                               ),
                             ],
-                          ),
-                        ],
+                          );
+                        },
                       ),
-                      const SizedBox(height: 12),
-                      ..._recipeIngredients.map(
-                        (ingredient) => ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(ingredient.ingredientName),
-                          subtitle: Text(
-                            '${ingredient.quantity} ${ingredient.unitAbbreviation}',
-                          ),
-                          trailing: IconButton(
-                            onPressed: () => setState(
-                              () => _recipeIngredients.remove(ingredient),
-                            ),
-                            icon: const Icon(Icons.remove_circle_outline),
-                          ),
-                        ),
-                      ),
-                      if (_error != null)
-                        Text(
-                          _error!,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                    ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
                   ),
                 ),
-              ),
+              ],
+            ],
+          ),
+        ),
       ),
       actions: [
         TextButton(
-          onPressed: _saving ? null : () => Navigator.pop(context),
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
           child: const Text('Cancelar'),
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
-          child: const Text('Guardar receta'),
+          child: Text(_saving ? 'Guardando…' : 'Guardar receta'),
         ),
       ],
     );
   }
-}
-
-class StatusLabel extends StatelessWidget {
-  const StatusLabel({super.key, required this.text, required this.color});
-  final String text;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: .12),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      text,
-      style: TextStyle(color: color, fontWeight: FontWeight.w600),
-    ),
-  );
 }
