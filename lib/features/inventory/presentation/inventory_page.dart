@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
+import '../../../core/session.dart';
 import '../../../ui/common.dart';
 
 class _InsumosData {
@@ -12,7 +13,14 @@ class _InsumosData {
 }
 
 class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key});
+  const InventoryPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
+
+  final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<InventoryPage> createState() => _InventoryPageState();
@@ -31,7 +39,17 @@ class _InventoryPageState extends State<InventoryPage> {
     _reload();
   }
 
-  void _reload() => _future = _load();
+  @override
+  void didUpdateWidget(InventoryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_InsumosData> _load() async {
     final insumos = await _repository.getInsumos();
@@ -48,6 +66,7 @@ class _InventoryPageState extends State<InventoryPage> {
         repository: _repository,
         unidades: data.unidades,
         insumo: insumo,
+        usuarioId: widget.usuario.id,
       ),
     );
     if (saved == true && mounted) {
@@ -62,10 +81,30 @@ class _InventoryPageState extends State<InventoryPage> {
     setState(_reload);
   }
 
-  Future<void> _toggleDisponible(Insumo insumo, bool disponible) async {
-    await _repository.setInsumoDisponible(insumo.id!, disponible);
-    if (!mounted) return;
-    setState(_reload);
+  Future<void> _ajustarStock(Insumo insumo) async {
+    final nuevo = await showDialog<double>(
+      context: context,
+      builder: (_) => _StockDialog(
+        titulo: 'Ajustar stock de ${insumo.nombre}',
+        stockActual: insumo.stock,
+        unidad: insumo.unidadAbreviatura,
+      ),
+    );
+    if (nuevo == null) return;
+    try {
+      await _repository.ajustarStockInsumo(
+        insumoId: insumo.id!,
+        nuevoStock: nuevo,
+        usuarioId: widget.usuario.id,
+        motivo: 'Ajuste manual',
+      );
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(context, 'Stock actualizado.');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, 'No se pudo ajustar: $error', error: true);
+    }
   }
 
   @override
@@ -91,7 +130,7 @@ class _InventoryPageState extends State<InventoryPage> {
               PageHeader(
                 title: 'Insumos',
                 subtitle:
-                    'Materias primas y su control de stock. El stock se calcula con compras, consumos y conteos.',
+                    'Materias primas y su stock. Al vender un plato se descuentan según su receta.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -184,9 +223,8 @@ class _InventoryPageState extends State<InventoryPage> {
                     child: _InsumoRow(
                       insumo: insumo,
                       onEdit: () => _openForm(insumo),
+                      onAjustarStock: () => _ajustarStock(insumo),
                       onToggleActivo: (value) => _toggleActivo(insumo, value),
-                      onToggleDisponible: (value) =>
-                          _toggleDisponible(insumo, value),
                     ),
                   ),
                 ),
@@ -202,14 +240,14 @@ class _InsumoRow extends StatelessWidget {
   const _InsumoRow({
     required this.insumo,
     required this.onEdit,
+    required this.onAjustarStock,
     required this.onToggleActivo,
-    required this.onToggleDisponible,
   });
 
   final Insumo insumo;
   final VoidCallback onEdit;
+  final VoidCallback onAjustarStock;
   final ValueChanged<bool> onToggleActivo;
-  final ValueChanged<bool> onToggleDisponible;
 
   @override
   Widget build(BuildContext context) {
@@ -229,9 +267,7 @@ class _InsumoRow extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              insumo.porDisponibilidad
-                  ? Icons.check_circle_outline
-                  : Icons.inventory_2_outlined,
+              Icons.inventory_2_outlined,
               color: alerta ? scheme.error : scheme.primary,
             ),
           ),
@@ -248,7 +284,7 @@ class _InsumoRow extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${insumo.modoControl} · ${insumo.unidadAbreviatura} · costo ${formatMoney(insumo.costoPromedio)}',
+                  '${insumo.unidadAbreviatura} · costo ${formatMoney(insumo.costoPromedio)}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
@@ -262,30 +298,26 @@ class _InsumoRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  insumo.porDisponibilidad
-                      ? (insumo.disponible ? 'Disponible' : 'Agotado')
-                      : 'Stock: ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
+                  'Stock: ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w700,
                     color: alerta ? scheme.error : null,
                   ),
                 ),
-                if (!insumo.porDisponibilidad)
-                  Text(
-                    'Mínimo: ${formatQty(insumo.stockMinimo)}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                Text(
+                  'Mínimo: ${formatQty(insumo.stockMinimo)}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
                   ),
+                ),
               ],
             ),
           ),
-          if (insumo.porDisponibilidad)
-            FilterChip(
-              label: Text(insumo.disponible ? 'Disponible' : 'Agotado'),
-              selected: insumo.disponible,
-              onSelected: onToggleDisponible,
-            ),
+          OutlinedButton.icon(
+            onPressed: onAjustarStock,
+            icon: const Icon(Icons.tune, size: 18),
+            label: const Text('Ajustar stock'),
+          ),
           const SizedBox(width: 8),
           Switch(value: insumo.activo, onChanged: onToggleActivo),
           IconButton(
@@ -303,11 +335,13 @@ class _InsumoDialog extends StatefulWidget {
   const _InsumoDialog({
     required this.repository,
     required this.unidades,
+    required this.usuarioId,
     this.insumo,
   });
 
   final CatalogRepository repository;
   final List<UnidadMedida> unidades;
+  final int usuarioId;
   final Insumo? insumo;
 
   @override
@@ -318,12 +352,9 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nombre;
   late final TextEditingController _stockMinimo;
+  late final TextEditingController _stockActual;
   late final TextEditingController _costo;
-  late final TextEditingController _presentacion;
-  late final TextEditingController _factor;
   late int? _unidadId;
-  late String _modo;
-  late bool _disponible;
   late bool _activo;
   bool _saving = false;
   String? _error;
@@ -336,19 +367,14 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     _stockMinimo = TextEditingController(
       text: insumo == null ? '0' : formatQty(insumo.stockMinimo),
     );
+    _stockActual = TextEditingController(
+      text: insumo == null ? '0' : formatQty(insumo.stock),
+    );
     _costo = TextEditingController(
       text: insumo == null ? '0' : insumo.costoPromedio.toStringAsFixed(2),
     );
-    _presentacion = TextEditingController(
-      text: insumo?.presentacionCompra ?? '',
-    );
-    _factor = TextEditingController(
-      text: insumo == null ? '1' : formatQty(insumo.factorCompra),
-    );
     _unidadId = insumo?.unidadId ??
         (widget.unidades.isEmpty ? null : widget.unidades.first.id);
-    _modo = insumo?.modoControl ?? 'UNIDAD';
-    _disponible = insumo?.disponible ?? true;
     _activo = insumo?.activo ?? true;
   }
 
@@ -356,9 +382,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   void dispose() {
     _nombre.dispose();
     _stockMinimo.dispose();
+    _stockActual.dispose();
     _costo.dispose();
-    _presentacion.dispose();
-    _factor.dispose();
     super.dispose();
   }
 
@@ -376,27 +401,23 @@ class _InsumoDialogState extends State<_InsumoDialog> {
       final unidad = widget.unidades.firstWhere(
         (item) => item.id == _unidadId,
       );
-      await widget.repository.saveInsumo(
+      final id = await widget.repository.saveInsumo(
         Insumo(
           id: widget.insumo?.id,
           nombre: _nombre.text,
           unidadId: _unidadId!,
           unidadAbreviatura: unidad.abreviatura,
-          modoControl: _modo,
-          disponible: _disponible,
-          stockMinimo: _modo == 'DISPONIBILIDAD'
-              ? 0
-              : parseAmount(_stockMinimo.text),
-          costoPromedio: _modo == 'DISPONIBILIDAD'
-              ? 0
-              : parseAmount(_costo.text),
-          presentacionCompra: _presentacion.text,
-          factorCompra: _modo == 'DISPONIBILIDAD'
-              ? 1
-              : parseAmount(_factor.text),
+          stockMinimo: parseAmount(_stockMinimo.text),
+          costoPromedio: parseAmount(_costo.text),
           activo: _activo,
           stock: widget.insumo?.stock ?? 0,
         ),
+      );
+      await widget.repository.ajustarStockInsumo(
+        insumoId: id,
+        nuevoStock: parseAmount(_stockActual.text),
+        usuarioId: widget.usuarioId,
+        motivo: 'Carga inicial',
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -411,7 +432,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final porDisponibilidad = _modo == 'DISPONIBILIDAD';
     return AlertDialog(
       title: Text(widget.insumo == null ? 'Nuevo insumo' : 'Editar insumo'),
       content: SizedBox(
@@ -449,99 +469,49 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                       value == null ? 'Selecciona una unidad' : null,
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: _modo,
-                  decoration: appInput(label: 'Modo de control'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'UNIDAD',
-                      child: Text('UNIDAD · stock en unidades'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _stockActual,
+                        keyboardType:
+                            const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                        decoration: appInput(
+                          label: 'Stock actual',
+                          icon: Icons.inventory_2_outlined,
+                        ),
+                      ),
                     ),
-                    DropdownMenuItem(
-                      value: 'PORCION',
-                      child: Text('PORCIÓN · stock por porciones'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'DISPONIBILIDAD',
-                      child: Text('DISPONIBILIDAD · solo disponible/agotado'),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _stockMinimo,
+                        keyboardType:
+                            const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                        decoration: appInput(
+                          label: 'Stock mínimo',
+                          icon: Icons.warning_amber_outlined,
+                        ),
+                      ),
                     ),
                   ],
-                  onChanged: (value) =>
-                      setState(() => _modo = value ?? 'UNIDAD'),
                 ),
-                if (!porDisponibilidad) ...[
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _stockMinimo,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
-                          decoration: appInput(
-                            label: 'Stock mínimo',
-                            icon: Icons.warning_amber_outlined,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _costo,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
-                          decoration: appInput(
-                            label: 'Costo promedio (Bs)',
-                            icon: Icons.price_check,
-                          ),
-                        ),
-                      ),
-                    ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _costo,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: TextFormField(
-                          controller: _presentacion,
-                          decoration: appInput(
-                            label: 'Presentación de compra',
-                            hint: 'Ej. bolsa 5 kg',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _factor,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
-                          decoration: appInput(
-                            label: 'Factor de compra',
-                            hint: 'Ej. 5',
-                          ),
-                        ),
-                      ),
-                    ],
+                  decoration: appInput(
+                    label: 'Costo promedio (Bs)',
+                    icon: Icons.price_check,
                   ),
-                ],
+                ),
                 const SizedBox(height: 4),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Disponible'),
-                  subtitle: const Text(
-                    'Si se marca como agotado, los platos que lo usan no se podrán vender.',
-                  ),
-                  value: _disponible,
-                  onChanged: (value) => setState(() => _disponible = value),
-                ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Insumo activo'),
@@ -568,6 +538,91 @@ class _InsumoDialogState extends State<_InsumoDialog> {
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(_saving ? 'Guardando…' : 'Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StockDialog extends StatefulWidget {
+  const _StockDialog({
+    required this.titulo,
+    required this.stockActual,
+    required this.unidad,
+  });
+
+  final String titulo;
+  final double stockActual;
+  final String unidad;
+
+  @override
+  State<_StockDialog> createState() => _StockDialogState();
+}
+
+class _StockDialogState extends State<_StockDialog> {
+  late final TextEditingController _controller;
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: formatQty(widget.stockActual));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.titulo),
+      content: SizedBox(
+        width: 380,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Stock del sistema: ${formatQty(widget.stockActual)} ${widget.unidad}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _controller,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInput(
+                  label: 'Stock real',
+                  icon: Icons.inventory_2_outlined,
+                ),
+                validator: (value) {
+                  if (parseAmount(value ?? '') < 0) return 'Cantidad inválida';
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              Navigator.pop(context, parseAmount(_controller.text));
+            }
+          },
+          child: const Text('Guardar'),
         ),
       ],
     );

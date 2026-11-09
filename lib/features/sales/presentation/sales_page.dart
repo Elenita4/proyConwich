@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/cash_repository.dart';
@@ -20,6 +22,8 @@ class _SaleProduct {
     required this.disponible,
     this.motivo,
     required this.stock,
+    required this.enMenu,
+    this.imagen,
   });
 
   final int productoId;
@@ -32,9 +36,20 @@ class _SaleProduct {
   final bool disponible;
   final String? motivo;
   final double stock;
+  final bool enMenu;
+  final Uint8List? imagen;
 
   bool get esDirecto => tipo == 'DIRECTO';
-  bool get vendible => disponible && (!esDirecto || stock > 0);
+
+  /// Solo lo que está en el menú publicado se puede vender.
+  bool get vendible => enMenu && disponible && (!esDirecto || stock > 0);
+
+  String get razon {
+    if (!enMenu) return 'Fuera del menú de hoy';
+    if (!disponible) return motivo ?? 'Agotado';
+    if (esDirecto && stock <= 0) return 'Sin stock';
+    return '';
+  }
 }
 
 class _SalesData {
@@ -52,9 +67,14 @@ class _SalesData {
 }
 
 class SalesPage extends StatefulWidget {
-  const SalesPage({super.key, required this.usuario});
+  const SalesPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
 
   final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<SalesPage> createState() => _SalesPageState();
@@ -81,32 +101,46 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   @override
+  void didUpdateWidget(SalesPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  @override
   void dispose() {
     _referencia.dispose();
     _observacion.dispose();
     super.dispose();
   }
 
-  void _reload() => _future = _load();
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_SalesData> _load() async {
     final caja = await _cashRepository.getCajaAbierta();
     final now = DateTime.now();
-    final tipo = caja == null
+    final tipoPreferido = caja == null
         ? (now.hour < 12 ? 'DESAYUNO' : 'ALMUERZO')
         : MenuRepository.tipoDesdeTurno(caja.turno);
-    final menu = await _menuRepository.getMenu(now, tipo);
+    final tipoAlterno = tipoPreferido == 'DESAYUNO' ? 'ALMUERZO' : 'DESAYUNO';
+
+    // El menú del turno es el principal; si no está publicado se usa el otro
+    // publicado de hoy para que el cajero siempre pueda vender.
+    MenuDia? menu = await _menuRepository.getMenu(now, tipoPreferido);
+    if (menu == null || !menu.publicado) {
+      final alterno = await _menuRepository.getMenu(now, tipoAlterno);
+      if (alterno != null && alterno.publicado) menu = alterno;
+    }
     final menuItems = menu != null && menu.publicado
         ? await _menuRepository.getItems(menu.id)
         : <MenuItem>[];
-    final siempre = await _catalogRepository.getProductosSiempreDisponibles();
+
     final productos = <int, _SaleProduct>{};
     for (final item in menuItems) {
-      var stock = 0.0;
-      if (item.tipoProducto == 'DIRECTO') {
-        final producto = await _catalogRepository.getProducto(item.productoId);
-        stock = producto?.stock ?? 0;
-      }
+      final producto = await _catalogRepository.getProducto(item.productoId);
       productos[item.productoId] = _SaleProduct(
         productoId: item.productoId,
         menuDiaItemId: item.id,
@@ -117,22 +151,26 @@ class _SalesPageState extends State<SalesPage> {
         tipo: item.tipoProducto,
         disponible: item.disponible,
         motivo: item.motivoAgotado,
-        stock: stock,
+        stock: producto?.stock ?? 0,
+        enMenu: true,
+        imagen: producto?.imagen,
       );
     }
-    for (final producto in siempre) {
-      productos.putIfAbsent(
-        producto.id!,
-        () => _SaleProduct(
-          productoId: producto.id!,
-          nombre: producto.nombre,
-          precio: producto.precio,
-          categoriaNombre: producto.categoriaNombre,
-          categoriaColor: producto.categoriaColor,
-          tipo: producto.tipo,
-          disponible: producto.activo,
-          stock: producto.stock,
-        ),
+    // Productos activos que no están en el menú: se muestran al final, en gris.
+    final activos = await _catalogRepository.getProductos(soloActivos: true);
+    for (final producto in activos) {
+      if (productos.containsKey(producto.id)) continue;
+      productos[producto.id!] = _SaleProduct(
+        productoId: producto.id!,
+        nombre: producto.nombre,
+        precio: producto.precio,
+        categoriaNombre: producto.categoriaNombre,
+        categoriaColor: producto.categoriaColor,
+        tipo: producto.tipo,
+        disponible: false,
+        stock: producto.stock,
+        enMenu: false,
+        imagen: producto.imagen,
       );
     }
     final abiertos = await _salesRepository.getPedidosAbiertos();
@@ -414,7 +452,7 @@ class _SalesPageState extends State<SalesPage> {
               PageHeader(
                 title: 'Ventas',
                 subtitle:
-                    'Selecciona platos del menú publicado y bebidas siempre disponibles.',
+                    'Toca el producto para agregarlo al pedido. Solo se venden los del menú publicado.',
                 actions: [
                   OutlinedButton.icon(
                     onPressed: () => setState(_reload),
@@ -501,7 +539,7 @@ class _SalesPageState extends State<SalesPage> {
             child: Text(
               publicado
                   ? 'Menú de ${menu!.tipo.toLowerCase()} publicado. Turno ${data.caja!.turno}.'
-                  : 'No hay menú publicado para este turno. Solo se muestran las bebidas y productos siempre disponibles.',
+                  : 'No hay menú publicado para este turno. El administrador debe publicarlo para poder vender.',
             ),
           ),
           Chip(
@@ -567,7 +605,7 @@ class _SalesPageState extends State<SalesPage> {
         icon: Icons.search_off,
         title: 'No hay productos disponibles',
         message:
-            'El administrador debe publicar el menú o crear productos siempre disponibles.',
+            'Crea productos activos en Productos y publícalos en el Menú del día.',
       );
     }
     return LayoutBuilder(
@@ -587,6 +625,8 @@ class _SalesPageState extends State<SalesPage> {
                   width: width,
                   child: _ProductoVentaCard(
                     producto: producto,
+                    cantidad:
+                        _cart[producto.productoId]?.cantidad.round() ?? 0,
                     onAdd: producto.vendible ? () => _add(producto) : null,
                     onAgotar:
                         producto.menuDiaItemId != null &&
@@ -886,88 +926,161 @@ class _ProductoVentaCard extends StatelessWidget {
     required this.producto,
     required this.onAdd,
     this.onAgotar,
+    this.cantidad = 0,
   });
 
   final _SaleProduct producto;
   final VoidCallback? onAdd;
   final VoidCallback? onAgotar;
+  final int cantidad;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final disponible = producto.vendible;
-    return AppCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: Color(producto.categoriaColor),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  producto.categoriaNombre,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              if (onAgotar != null)
-                IconButton(
-                  tooltip: 'Reportar agotado',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: onAgotar,
-                  icon: const Icon(Icons.block, size: 18),
-                ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            producto.nombre,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            formatMoney(producto.precio),
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: scheme.primary,
-            ),
-          ),
-          if (producto.esDirecto)
-            Text(
-              'Stock: ${formatQty(producto.stock)}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: disponible ? scheme.onSurfaceVariant : scheme.error,
+    final vendible = producto.vendible;
+    final texto = vendible ? scheme.onSurface : scheme.onSurfaceVariant;
+    return Opacity(
+      opacity: vendible ? 1 : 0.55,
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: vendible ? onAdd : null,
+          borderRadius: BorderRadius.circular(18),
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.6),
               ),
             ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: disponible
-                ? FilledButton.icon(
-                    onPressed: onAdd,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Agregar'),
-                  )
-                : OutlinedButton(
-                    onPressed: null,
-                    child: Text(producto.motivo ?? 'Agotado'),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SizedBox(
+                      height: 92,
+                      width: double.infinity,
+                      child: producto.imagen != null
+                          ? Image.memory(
+                              producto.imagen!,
+                              fit: BoxFit.cover,
+                              gaplessPlayback: true,
+                            )
+                          : Container(
+                              color: Color(
+                                producto.categoriaColor,
+                              ).withValues(alpha: 0.10),
+                              child: Icon(
+                                producto.esDirecto
+                                    ? Icons.local_drink_outlined
+                                    : Icons.restaurant,
+                                size: 34,
+                                color: Color(producto.categoriaColor),
+                              ),
+                            ),
+                    ),
                   ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Color(producto.categoriaColor),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          producto.categoriaNombre,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                      if (onAgotar != null)
+                        IconButton(
+                          tooltip: 'Reportar agotado',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: onAgotar,
+                          icon: const Icon(Icons.block, size: 18),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    producto.nombre,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: texto,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    formatMoney(producto.precio),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: vendible ? scheme.primary : texto,
+                    ),
+                  ),
+                  if (producto.esDirecto)
+                    Text(
+                      'Stock: ${formatQty(producto.stock)}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: vendible ? scheme.onSurfaceVariant : texto,
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  if (vendible)
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.add_circle_outline,
+                          size: 18,
+                          color: scheme.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          cantidad > 0
+                              ? 'Toca para agregar · $cantidad en el pedido'
+                              : 'Toca para agregar',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.block,
+                          size: 16,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            producto.razon,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
           ),
-        ],
+        ),
       ),
     );
   }

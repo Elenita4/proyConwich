@@ -9,9 +9,14 @@ import '../../../core/session.dart';
 import '../../../ui/common.dart';
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key, required this.usuario});
+  const DashboardPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
 
   final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -48,7 +53,17 @@ class _DashboardPageState extends State<DashboardPage> {
     _reload();
   }
 
-  void _reload() => _future = _load();
+  @override
+  void didUpdateWidget(DashboardPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_DashboardData> _load() async {
     final now = DateTime.now();
@@ -168,7 +183,7 @@ class _DashboardPageState extends State<DashboardPage> {
               StatCard(
                 label: 'Resultado estimado',
                 value: formatMoney(data.resumen.resultado),
-                caption: 'Ventas − costo de insumos − gastos',
+                caption: 'Ventas − costo de insumos − salidas',
                 icon: Icons.insights,
                 color: data.resumen.resultado >= 0
                     ? scheme.primary
@@ -177,7 +192,7 @@ class _DashboardPageState extends State<DashboardPage> {
               StatCard(
                 label: 'Flujo de caja',
                 value: formatMoney(data.resumen.flujoCaja),
-                caption: 'Cobros − compras − gastos − sueldos',
+                caption: 'Cobros − salidas',
                 icon: Icons.account_balance_outlined,
                 color: scheme.secondary,
               ),
@@ -423,16 +438,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   value: formatMoney(resumen.cogs),
                 ),
                 LabelValue(
-                  label: 'Compras del día',
-                  value: formatMoney(resumen.compras),
-                ),
-                LabelValue(
-                  label: 'Gastos',
-                  value: formatMoney(resumen.gastos),
-                ),
-                LabelValue(
-                  label: 'Sueldos',
-                  value: formatMoney(resumen.sueldos),
+                  label: 'Salidas de caja',
+                  value: formatMoney(resumen.salidas),
                 ),
                 LabelValue(
                   label: 'Ticket promedio',
@@ -461,7 +468,7 @@ class _DashboardPageState extends State<DashboardPage> {
             children: [
               Expanded(
                 child: Text(
-                  'Resultado (ventas − COGS − gastos − sueldos)',
+                  'Resultado (ventas − COGS − salidas)',
                   style: TextStyle(color: scheme.onSurfaceVariant),
                 ),
               ),

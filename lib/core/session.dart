@@ -1,48 +1,57 @@
 class Permiso {
+  static const tablero = 'TABLERO';
   static const ventas = 'VENTAS';
   static const caja = 'CAJA';
   static const menu = 'MENU';
   static const productos = 'PRODUCTOS';
-  static const categorias = 'CATEGORIAS';
   static const insumos = 'INSUMOS';
-  static const compras = 'COMPRAS';
-  static const conteo = 'CONTEO';
-  static const gastos = 'GASTOS';
-  static const sueldos = 'SUELDOS';
   static const usuarios = 'USUARIOS';
   static const reportes = 'REPORTES';
   static const agotamiento = 'AGOTAMIENTO';
 
   static const todos = <String>[
+    tablero,
     ventas,
     caja,
     menu,
     productos,
-    categorias,
     insumos,
-    compras,
-    conteo,
-    gastos,
-    sueldos,
     usuarios,
     reportes,
     agotamiento,
   ];
 
   static const etiquetas = <String, String>{
-    ventas: 'Registrar ventas',
-    caja: 'Abrir y cerrar su caja',
-    menu: 'Administrar menú del día',
-    productos: 'Administrar productos y recetas',
-    categorias: 'Administrar categorías',
-    insumos: 'Administrar insumos',
-    compras: 'Registrar compras',
-    conteo: 'Conteo de inventario',
-    gastos: 'Registrar gastos',
-    sueldos: 'Registrar sueldos',
-    usuarios: 'Administrar usuarios y permisos',
-    reportes: 'Ver reportes',
+    tablero: 'Tablero',
+    ventas: 'Ventas',
+    caja: 'Caja',
+    menu: 'Menú del día',
+    productos: 'Productos',
+    insumos: 'Insumos',
+    usuarios: 'Usuarios',
+    reportes: 'Reportes',
     agotamiento: 'Reportar agotamiento',
+  };
+}
+
+/// Perfiles predefinidos de usuario. Solo el administrador es fijo.
+class Perfil {
+  static const admin = 'ADMIN';
+  static const cajero = 'CAJERO';
+  static const vendedor = 'VENDEDOR';
+
+  static const todos = <String>[admin, cajero, vendedor];
+
+  static const nombres = <String, String>{
+    admin: 'Administrador',
+    cajero: 'Cajero',
+    vendedor: 'Vendedor',
+  };
+
+  static const vistasPorDefecto = <String, Set<String>>{
+    admin: {...Permiso.todos},
+    cajero: {Permiso.ventas, Permiso.caja, Permiso.agotamiento},
+    vendedor: {Permiso.ventas, Permiso.agotamiento},
   };
 }
 
@@ -51,9 +60,7 @@ class Usuario {
     required this.id,
     required this.nombre,
     required this.usuario,
-    required this.rol,
-    required this.turnoAsignado,
-    required this.sueldoBase,
+    required this.perfil,
     required this.activo,
     Set<String>? permisos,
   }) : permisos = permisos ?? <String>{};
@@ -61,13 +68,13 @@ class Usuario {
   final int id;
   final String nombre;
   final String usuario;
-  final String rol;
-  final String? turnoAsignado;
-  final double sueldoBase;
+  final String perfil;
   final bool activo;
   final Set<String> permisos;
 
-  bool get esAdmin => rol == 'ADMIN';
+  bool get esAdmin => perfil == Perfil.admin;
+
+  String get nombrePerfil => Perfil.nombres[perfil] ?? perfil;
 
   bool puede(String permiso) => esAdmin || permisos.contains(permiso);
 

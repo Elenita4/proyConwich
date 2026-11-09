@@ -1,3 +1,5 @@
+import 'package:sqflite/sqflite.dart';
+
 import '../data/database/app_database.dart';
 import 'date_utils.dart';
 import 'menu_repository.dart';
@@ -37,12 +39,8 @@ class CajaResumen {
     required this.fondoInicial,
     required this.ventasEfectivo,
     required this.ventasQr,
-    required this.comprasEfectivo,
-    required this.comprasQr,
-    required this.gastosEfectivo,
-    required this.gastosQr,
-    required this.sueldosEfectivo,
-    required this.sueldosQr,
+    required this.salidasEfectivo,
+    required this.salidasQr,
     required this.esperadoEfectivo,
     required this.esperadoQr,
     this.efectivoContado,
@@ -52,12 +50,8 @@ class CajaResumen {
   final double fondoInicial;
   final double ventasEfectivo;
   final double ventasQr;
-  final double comprasEfectivo;
-  final double comprasQr;
-  final double gastosEfectivo;
-  final double gastosQr;
-  final double sueldosEfectivo;
-  final double sueldosQr;
+  final double salidasEfectivo;
+  final double salidasQr;
   final double esperadoEfectivo;
   final double esperadoQr;
   final double? efectivoContado;
@@ -154,6 +148,45 @@ class CashRepository {
     );
   }
 
+  /// Registra una salida de dinero de la caja (luz, gas, sueldos, etc).
+  Future<void> registrarSalida({
+    required int cajaId,
+    required int usuarioId,
+    required double monto,
+    required String metodoPago,
+    String? descripcion,
+  }) async {
+    if (monto <= 0) throw StateError('El monto debe ser mayor a cero.');
+    final db = await AppDatabase.instance.database;
+    final categoriaId = await _categoriaSalidas(db);
+    await db.insert('gastos', {
+      'categoria_gasto_id': categoriaId,
+      'usuario_id': usuarioId,
+      'fecha': sqlNow(),
+      'monto': monto,
+      'metodo_pago': metodoPago,
+      'caja_id': cajaId,
+      'descripcion': descripcion?.trim().isEmpty == true
+          ? null
+          : descripcion?.trim(),
+      'estado': 'REGISTRADO',
+    });
+  }
+
+  Future<int> _categoriaSalidas(Database db) async {
+    final rows = await db.query(
+      'categorias_gasto',
+      where: 'nombre = ?',
+      whereArgs: ['Salidas'],
+      limit: 1,
+    );
+    if (rows.isNotEmpty) return rows.first['id']! as int;
+    return db.insert('categorias_gasto', {
+      'nombre': 'Salidas',
+      'activo': 1,
+    });
+  }
+
   Future<CajaResumen> getResumen(int cajaId) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
@@ -163,12 +196,8 @@ class CashRepository {
         c.qr_verificado,
         COALESCE((SELECT SUM(monto) FROM pagos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'CONFIRMADO'), 0) AS ventas_efectivo,
         COALESCE((SELECT SUM(monto) FROM pagos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'CONFIRMADO'), 0) AS ventas_qr,
-        COALESCE((SELECT SUM(total) FROM compras WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'REGISTRADA'), 0) AS compras_efectivo,
-        COALESCE((SELECT SUM(total) FROM compras WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'REGISTRADA'), 0) AS compras_qr,
-        COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'REGISTRADO'), 0) AS gastos_efectivo,
-        COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'REGISTRADO'), 0) AS gastos_qr,
-        COALESCE((SELECT SUM(monto) FROM sueldos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'REGISTRADO'), 0) AS sueldos_efectivo,
-        COALESCE((SELECT SUM(monto) FROM sueldos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'REGISTRADO'), 0) AS sueldos_qr
+        COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'REGISTRADO'), 0) AS salidas_efectivo,
+        COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'REGISTRADO'), 0) AS salidas_qr
       FROM cajas c
       WHERE c.id = ?
     ''', [cajaId]);
@@ -178,25 +207,16 @@ class CashRepository {
     final fondo = value('fondo_inicial');
     final ventasEfectivo = value('ventas_efectivo');
     final ventasQr = value('ventas_qr');
-    final comprasEfectivo = value('compras_efectivo');
-    final comprasQr = value('compras_qr');
-    final gastosEfectivo = value('gastos_efectivo');
-    final gastosQr = value('gastos_qr');
-    final sueldosEfectivo = value('sueldos_efectivo');
-    final sueldosQr = value('sueldos_qr');
+    final salidasEfectivo = value('salidas_efectivo');
+    final salidasQr = value('salidas_qr');
     return CajaResumen(
       fondoInicial: fondo,
       ventasEfectivo: ventasEfectivo,
       ventasQr: ventasQr,
-      comprasEfectivo: comprasEfectivo,
-      comprasQr: comprasQr,
-      gastosEfectivo: gastosEfectivo,
-      gastosQr: gastosQr,
-      sueldosEfectivo: sueldosEfectivo,
-      sueldosQr: sueldosQr,
-      esperadoEfectivo:
-          fondo + ventasEfectivo - comprasEfectivo - gastosEfectivo - sueldosEfectivo,
-      esperadoQr: ventasQr - comprasQr - gastosQr - sueldosQr,
+      salidasEfectivo: salidasEfectivo,
+      salidasQr: salidasQr,
+      esperadoEfectivo: fondo + ventasEfectivo - salidasEfectivo,
+      esperadoQr: ventasQr - salidasQr,
       efectivoContado: row['efectivo_contado'] == null
           ? null
           : (row['efectivo_contado'] as num).toDouble(),

@@ -1,6 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/date_utils.dart';
+import '../../core/password_utils.dart';
+import '../../core/session.dart';
 import 'database_factory_web.dart'
     if (dart.library.io) 'database_factory_io.dart';
 
@@ -26,16 +30,23 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 5,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _createSchema,
-      onUpgrade: (db, oldVersion, newVersion) =>
-          _createSchema(db, newVersion),
+      onUpgrade: (db, oldVersion, newVersion) async {
+        await _createSchema(db, newVersion);
+        await _migrarPerfiles(db);
+        await _migrarModosInsumo(db);
+      },
     );
   }
 
   Future<void> _createSchema(Database db, int version) async {
     final batch = db.batch();
+
+    // Las vistas se recrean en cada actualización para reflejar el esquema.
+    batch.execute('DROP VIEW IF EXISTS v_stock_insumos');
+    batch.execute('DROP VIEW IF EXISTS v_stock_productos');
 
     batch.execute('''
       CREATE TABLE IF NOT EXISTS usuarios (
@@ -44,6 +55,7 @@ class AppDatabase {
         usuario TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         rol TEXT NOT NULL CHECK (rol IN ('ADMIN','CAJERO')),
+        perfil TEXT NOT NULL DEFAULT 'CAJERO',
         turno_asignado TEXT CHECK (turno_asignado IN ('MAÑANA','TARDE','AMBOS')),
         sueldo_base REAL NOT NULL DEFAULT 0,
         activo INTEGER NOT NULL DEFAULT 1,
@@ -57,6 +69,15 @@ class AppDatabase {
         usuario_id INTEGER NOT NULL,
         permiso TEXT NOT NULL,
         UNIQUE (usuario_id, permiso),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS sesion_actual (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        usuario_id INTEGER NOT NULL,
+        iniciada_en TEXT NOT NULL,
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
       )
     ''');
@@ -279,6 +300,21 @@ class AppDatabase {
     ''');
 
     batch.execute('''
+      CREATE TABLE IF NOT EXISTS ajustes_stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha TEXT NOT NULL,
+        insumo_id INTEGER,
+        producto_id INTEGER,
+        cantidad REAL NOT NULL DEFAULT 0,
+        motivo TEXT,
+        usuario_id INTEGER NOT NULL,
+        FOREIGN KEY (insumo_id) REFERENCES insumos(id),
+        FOREIGN KEY (producto_id) REFERENCES productos(id),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    batch.execute('''
       CREATE TABLE IF NOT EXISTS conteos_inventario (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL UNIQUE,
@@ -373,6 +409,12 @@ class AppDatabase {
     );
     batch.execute('CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha)');
     batch.execute('CREATE INDEX IF NOT EXISTS idx_sueldos_fecha ON sueldos(fecha)');
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_ajustes_insumo ON ajustes_stock(insumo_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_ajustes_producto ON ajustes_stock(producto_id)',
+    );
 
     batch.execute('''
       CREATE VIEW IF NOT EXISTS v_stock_insumos AS
@@ -394,6 +436,11 @@ class AppDatabase {
           FROM detalle_conteo dt
           INNER JOIN conteos_inventario ct ON ct.id = dt.conteo_id
           WHERE dt.insumo_id = i.id AND ct.estado = 'CERRADO'
+        ), 0)
+        + COALESCE((
+          SELECT SUM(a.cantidad)
+          FROM ajustes_stock a
+          WHERE a.insumo_id = i.id
         ), 0) AS stock
       FROM insumos i
     ''');
@@ -415,6 +462,11 @@ class AppDatabase {
           WHERE dp.producto_id = p.id
             AND pe.estado_pago <> 'ANULADO'
             AND pe.estado_entrega <> 'ANULADO'
+        ), 0)
+        + COALESCE((
+          SELECT SUM(a.cantidad)
+          FROM ajustes_stock a
+          WHERE a.producto_id = p.id
         ), 0) AS stock
       FROM productos p
       WHERE p.tipo = 'DIRECTO'
@@ -423,6 +475,112 @@ class AppDatabase {
     await batch.commit(noResult: true);
 
     await _seedUnits(db);
+    await _seedDefaultAdmin(db);
+  }
+
+  /// Todos los insumos pasan a controlarse por cantidad.
+  Future<void> _migrarModosInsumo(Database db) async {
+    try {
+      final rows = await db.query(
+        'insumos',
+        columns: ['id', 'disponible'],
+        where: "modo_control <> 'UNIDAD'",
+      );
+      if (rows.isEmpty) return;
+      final admin = await db.rawQuery(
+        "SELECT id FROM usuarios ORDER BY id LIMIT 1",
+      );
+      final usuarioId = admin.isEmpty ? null : admin.first['id'] as int?;
+      for (final row in rows) {
+        final id = row['id']! as int;
+        final disponible = (row['disponible'] as num).toInt() == 1;
+        if (!disponible || usuarioId == null) continue;
+        // Antes no se contaban; se les da una cantidad para que se puedan vender.
+        await db.insert('ajustes_stock', {
+          'fecha': sqlNow(),
+          'insumo_id': id,
+          'producto_id': null,
+          'cantidad': 100.0,
+          'motivo': 'Conversión a control por cantidad',
+          'usuario_id': usuarioId,
+        });
+      }
+      await db.execute(
+        "UPDATE insumos SET modo_control = 'UNIDAD', disponible = 1",
+      );
+    } catch (error) {
+      debugPrint('No se pudieron migrar los modos de insumo: $error');
+    }
+  }
+
+  Future<void> _seedDefaultAdmin(Database db) async {
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM usuarios'),
+        ) ??
+        0;
+    if (count > 0) return;
+    final id = await db.insert('usuarios', {
+      'nombre': 'Administrador',
+      'usuario': 'admin',
+      'password_hash': hashPassword('1234'),
+      'rol': 'ADMIN',
+      'perfil': Perfil.admin,
+      'turno_asignado': 'AMBOS',
+      'sueldo_base': 0,
+      'activo': 1,
+      'creado_en': sqlNow(),
+    });
+    for (final permiso in Permiso.todos) {
+      await db.insert('usuario_permisos', {
+        'usuario_id': id,
+        'permiso': permiso,
+      });
+    }
+  }
+
+  /// Agrega la columna `perfil` a usuarios y la deja sincronizada con el rol.
+  Future<void> _migrarPerfiles(Database db) async {
+    try {
+      final columnas = await db.rawQuery('PRAGMA table_info(usuarios)');
+      final tienePerfil = columnas.any((c) => c['name'] == 'perfil');
+      if (!tienePerfil) {
+        await db.execute(
+          "ALTER TABLE usuarios ADD COLUMN perfil TEXT NOT NULL DEFAULT 'CAJERO'",
+        );
+      }
+      await db.execute(
+        "UPDATE usuarios SET perfil = 'ADMIN' WHERE rol = 'ADMIN'",
+      );
+      await db.execute(
+        "UPDATE usuarios SET perfil = 'CAJERO' WHERE rol <> 'ADMIN'",
+      );
+
+      // Los usuarios que no son administrador quedan con las vistas del cajero.
+      final usuarios = await db.query(
+        'usuarios',
+        columns: ['id'],
+        where: 'perfil <> ?',
+        whereArgs: [Perfil.admin],
+      );
+      for (final usuario in usuarios) {
+        final id = usuario['id']! as int;
+        await db.delete(
+          'usuario_permisos',
+          where: 'usuario_id = ?',
+          whereArgs: [id],
+        );
+        for (final permiso in Perfil.vistasPorDefecto[Perfil.cajero]!) {
+          await db.insert('usuario_permisos', {
+            'usuario_id': id,
+            'permiso': permiso,
+          });
+        }
+      }
+    } catch (error) {
+      // Si la migración falla la app sigue funcionando con el rol anterior.
+      debugPrint('No se pudo migrar el perfil de los usuarios: $error');
+    }
   }
 
   Future<void> _seedUnits(Database db) async {

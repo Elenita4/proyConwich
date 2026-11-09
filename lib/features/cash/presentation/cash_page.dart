@@ -18,9 +18,14 @@ class _CashData {
 }
 
 class CashPage extends StatefulWidget {
-  const CashPage({super.key, required this.usuario});
+  const CashPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
 
   final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<CashPage> createState() => _CashPageState();
@@ -43,15 +48,18 @@ class _CashPageState extends State<CashPage> {
     super.initState();
     final now = DateTime.now();
     _fecha = DateTime(now.year, now.month, now.day);
-    final asignado = widget.usuario.turnoAsignado;
-    _turno = asignado == 'MAÑANA' || asignado == 'TARDE'
-        ? asignado!
-        : (now.hour < 12 ? 'MAÑANA' : 'TARDE');
+    _turno = now.hour < 12 ? 'MAÑANA' : 'TARDE';
     _fondo = TextEditingController(text: '0');
     _efectivo = TextEditingController();
     _qr = TextEditingController();
     _observacion = TextEditingController();
     _reload();
+  }
+
+  @override
+  void didUpdateWidget(CashPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
   }
 
   @override
@@ -63,7 +71,11 @@ class _CashPageState extends State<CashPage> {
     super.dispose();
   }
 
-  void _reload() => _future = _load();
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_CashData> _load() async {
     final caja = await _repository.getCajaAbierta();
@@ -137,6 +149,36 @@ class _CashPageState extends State<CashPage> {
       if (!mounted) return;
       setState(() => _saving = false);
       showAppMessage(context, 'No se pudo cerrar la caja: $error', error: true);
+    }
+  }
+
+  Future<void> _salida(_CashData data) async {
+    final caja = data.caja;
+    if (caja == null) return;
+    final salida = await showDialog<_SalidaInput>(
+      context: context,
+      builder: (_) => const _SalidaDialog(),
+    );
+    if (salida == null) return;
+    setState(() => _saving = true);
+    try {
+      await _repository.registrarSalida(
+        cajaId: caja.id,
+        usuarioId: widget.usuario.id,
+        monto: salida.monto,
+        metodoPago: salida.metodo,
+        descripcion: salida.descripcion,
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _reload();
+      });
+      showAppMessage(context, 'Salida registrada.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showAppMessage(context, 'No se pudo registrar: $error', error: true);
     }
   }
 
@@ -347,6 +389,12 @@ class _CashPageState extends State<CashPage> {
                     backgroundColor: scheme.primaryContainer,
                     side: BorderSide.none,
                   ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => _salida(data),
+                    icon: const Icon(Icons.outbox),
+                    label: const Text('Salida de caja'),
+                  ),
                 ],
               ),
               const SizedBox(height: 18),
@@ -368,6 +416,16 @@ class _CashPageState extends State<CashPage> {
                     value: formatMoney(resumen.ventasQr),
                     icon: Icons.qr_code_2,
                     color: scheme.tertiary,
+                  ),
+                  StatCard(
+                    label: 'Salidas de caja',
+                    value: formatMoney(
+                      resumen.salidasEfectivo + resumen.salidasQr,
+                    ),
+                    caption:
+                        'Efectivo ${formatMoney(resumen.salidasEfectivo)} · QR ${formatMoney(resumen.salidasQr)}',
+                    icon: Icons.outbox,
+                    color: scheme.secondary,
                   ),
                   StatCard(
                     label: 'Efectivo esperado',
@@ -431,28 +489,12 @@ class _CashPageState extends State<CashPage> {
             value: formatMoney(resumen.ventasQr),
           ),
           LabelValue(
-            label: 'Compras efectivo',
-            value: '- ${formatMoney(resumen.comprasEfectivo)}',
+            label: 'Salidas efectivo',
+            value: '- ${formatMoney(resumen.salidasEfectivo)}',
           ),
           LabelValue(
-            label: 'Compras QR',
-            value: '- ${formatMoney(resumen.comprasQr)}',
-          ),
-          LabelValue(
-            label: 'Gastos efectivo',
-            value: '- ${formatMoney(resumen.gastosEfectivo)}',
-          ),
-          LabelValue(
-            label: 'Gastos QR',
-            value: '- ${formatMoney(resumen.gastosQr)}',
-          ),
-          LabelValue(
-            label: 'Sueldos efectivo',
-            value: '- ${formatMoney(resumen.sueldosEfectivo)}',
-          ),
-          LabelValue(
-            label: 'Sueldos QR',
-            value: '- ${formatMoney(resumen.sueldosQr)}',
+            label: 'Salidas QR',
+            value: '- ${formatMoney(resumen.salidasQr)}',
           ),
           const Divider(height: 22),
           LabelValue(
@@ -532,6 +574,110 @@ class _CashPageState extends State<CashPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SalidaInput {
+  const _SalidaInput({
+    required this.monto,
+    required this.metodo,
+    this.descripcion,
+  });
+
+  final double monto;
+  final String metodo;
+  final String? descripcion;
+}
+
+class _SalidaDialog extends StatefulWidget {
+  const _SalidaDialog();
+
+  @override
+  State<_SalidaDialog> createState() => _SalidaDialogState();
+}
+
+class _SalidaDialogState extends State<_SalidaDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _monto = TextEditingController();
+  final _descripcion = TextEditingController();
+  String _metodo = 'EFECTIVO';
+
+  @override
+  void dispose() {
+    _monto.dispose();
+    _descripcion.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Salida de caja'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: _metodo,
+                decoration: appInput(label: 'Método de pago'),
+                items: const [
+                  DropdownMenuItem(value: 'EFECTIVO', child: Text('Efectivo')),
+                  DropdownMenuItem(value: 'QR', child: Text('QR')),
+                ],
+                onChanged: (value) =>
+                    setState(() => _metodo = value ?? 'EFECTIVO'),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _monto,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInput(
+                  label: 'Monto (Bs)',
+                  icon: Icons.money_outlined,
+                ),
+                validator: (value) => parseAmount(value ?? '') <= 0
+                    ? 'Ingresa un monto mayor a cero'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _descripcion,
+                decoration: appInput(
+                  label: 'Motivo (opcional)',
+                  hint: 'Ej. luz, gas, sueldo',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) return;
+            Navigator.pop(
+              context,
+              _SalidaInput(
+                monto: parseAmount(_monto.text),
+                metodo: _metodo,
+                descripcion: _descripcion.text,
+              ),
+            );
+          },
+          child: const Text('Registrar'),
+        ),
+      ],
     );
   }
 }
