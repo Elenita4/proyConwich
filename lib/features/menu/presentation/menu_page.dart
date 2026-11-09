@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/cash_repository.dart';
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
@@ -19,9 +20,14 @@ class _MenuData {
 }
 
 class MenuPage extends StatefulWidget {
-  const MenuPage({super.key, required this.usuario});
+  const MenuPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
 
   final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<MenuPage> createState() => _MenuPageState();
@@ -30,6 +36,7 @@ class MenuPage extends StatefulWidget {
 class _MenuPageState extends State<MenuPage> {
   final _repository = MenuRepository();
   final _catalog = CatalogRepository();
+  final _cash = CashRepository();
   late DateTime _fecha;
   late String _tipo;
   late Future<_MenuData> _future;
@@ -44,9 +51,39 @@ class _MenuPageState extends State<MenuPage> {
     _fecha = DateTime(now.year, now.month, now.day);
     _tipo = now.hour < 12 ? 'DESAYUNO' : 'ALMUERZO';
     _reload();
+    _ajustarTurnoCaja();
   }
 
-  void _reload() => _future = _load();
+  @override
+  void didUpdateWidget(MenuPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) {
+      _reload();
+      _ajustarTurnoCaja();
+    }
+  }
+
+  /// El tipo de menú sigue el turno de la caja abierta (no la hora del reloj).
+  Future<void> _ajustarTurnoCaja() async {
+    try {
+      final caja = await _cash.getCajaAbierta();
+      if (!mounted || caja == null) return;
+      final tipo = MenuRepository.tipoDesdeTurno(caja.turno);
+      if (tipo == _tipo) return;
+      setState(() {
+        _tipo = tipo;
+        _reload();
+      });
+    } catch (_) {
+      // Si no se puede leer la caja se mantiene el tipo por hora.
+    }
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_MenuData> _load() async {
     final menu = await _repository.getMenu(_fecha, _tipo);
@@ -61,8 +98,9 @@ class _MenuPageState extends State<MenuPage> {
 
   Future<void> _crear({bool duplicar = false}) async {
     try {
+      MenuDia? menu;
       if (duplicar) {
-        final menu = await _repository.duplicarAnterior(
+        menu = await _repository.duplicarAnterior(
           _fecha,
           _tipo,
           widget.usuario.id,
@@ -77,22 +115,46 @@ class _MenuPageState extends State<MenuPage> {
           return;
         }
       } else {
-        await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
+        menu = await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
       }
+      final agregados = await _agregarActivos(menu.id);
       if (!mounted) return;
       setState(_reload);
-      showAppMessage(context, 'Menú creado. Agrega los platos.');
+      showAppMessage(
+        context,
+        agregados == 0
+            ? 'Menú creado. Agrega los platos.'
+            : 'Menú creado con $agregados producto(s) activo(s). Quita los que no correspondan.',
+      );
     } catch (error) {
       if (!mounted) return;
       showAppMessage(context, 'No se pudo crear el menú: $error', error: true);
     }
   }
 
+  /// Carga en el menú todos los productos activos que aún no estén.
+  /// El administrador quita los que no correspondan para ese día.
+  Future<int> _agregarActivos(int menuDiaId) async {
+    final items = await _repository.getItems(menuDiaId);
+    final existentes = items.map((item) => item.productoId).toSet();
+    final activos = await _catalog.getProductos(soloActivos: true);
+    var agregados = 0;
+    for (final producto in activos) {
+      if (existentes.contains(producto.id)) continue;
+      await _repository.agregarProducto(menuDiaId, producto.id!);
+      agregados++;
+    }
+    return agregados;
+  }
+
   Future<void> _agregarPlatos(_MenuData data) async {
     final menu = data.menu;
     if (menu == null) return;
     final existentes = data.items.map((item) => item.productoId).toSet();
-    final disponibles = data.productos
+    // Se recargan los productos por si se crearon hace un momento.
+    final productos = await _catalog.getProductos(soloActivos: true);
+    if (!mounted) return;
+    final disponibles = productos
         .where((producto) => !existentes.contains(producto.id))
         .toList();
     if (disponibles.isEmpty) {

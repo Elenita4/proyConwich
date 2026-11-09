@@ -1,8 +1,22 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
+import '../../../core/session.dart';
 import '../../../ui/common.dart';
+
+const _paleta = <int>[
+  0xFF0F766E,
+  0xFF2563EB,
+  0xFF7C3AED,
+  0xFFDB2777,
+  0xFFEA580C,
+  0xFFCA8A04,
+  0xFF16A34A,
+  0xFF475569,
+];
 
 class _ProductsData {
   const _ProductsData({
@@ -17,7 +31,14 @@ class _ProductsData {
 }
 
 class ProductsPage extends StatefulWidget {
-  const ProductsPage({super.key});
+  const ProductsPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
+
+  final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<ProductsPage> createState() => _ProductsPageState();
@@ -36,7 +57,17 @@ class _ProductsPageState extends State<ProductsPage> {
     _reload();
   }
 
-  void _reload() => _future = _load();
+  @override
+  void didUpdateWidget(ProductsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   Future<_ProductsData> _load() async {
     final productos = await _repository.getProductos();
@@ -58,6 +89,7 @@ class _ProductsPageState extends State<ProductsPage> {
         repository: _repository,
         producto: producto,
         categorias: data.categorias,
+        usuarioId: widget.usuario.id,
       ),
     );
     if (saved != null && mounted) {
@@ -91,6 +123,31 @@ class _ProductsPageState extends State<ProductsPage> {
     setState(_reload);
   }
 
+  Future<void> _ajustarStock(Producto producto) async {
+    final nuevo = await showDialog<double>(
+      context: context,
+      builder: (_) => _StockDialog(
+        titulo: 'Ajustar stock de ${producto.nombre}',
+        stockActual: producto.stock,
+      ),
+    );
+    if (nuevo == null) return;
+    try {
+      await _repository.ajustarStockProducto(
+        productoId: producto.id!,
+        nuevoStock: nuevo,
+        usuarioId: widget.usuario.id,
+        motivo: 'Ajuste manual',
+      );
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(context, 'Stock actualizado.');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, 'No se pudo ajustar: $error', error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<_ProductsData>(
@@ -117,7 +174,7 @@ class _ProductsPageState extends State<ProductsPage> {
               PageHeader(
                 title: 'Productos',
                 subtitle:
-                    'Platos, bebidas y productos directos. Los precios solo se cambian aquí.',
+                    'Platos y bebidas. Los precios solo se cambian aquí. Las categorías se crean desde esta misma pantalla.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -181,23 +238,16 @@ class _ProductsPageState extends State<ProductsPage> {
                   message: '${snapshot.error}',
                   onRetry: () => setState(_reload),
                 )
-              else if (categorias.isEmpty)
-                EmptyState(
-                  icon: Icons.category_outlined,
-                  title: 'Primero crea una categoría',
-                  message:
-                      'Los productos necesitan una categoría. Ve a Categorías para crear la primera.',
-                  action: FilledButton.icon(
-                    onPressed: () => setState(_reload),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Actualizar'),
-                  ),
-                )
               else if (filtrados.isEmpty)
-                const EmptyState(
+                EmptyState(
                   icon: Icons.lunch_dining_outlined,
                   title: 'No hay productos que coincidan',
                   message: 'Crea un producto o ajusta los filtros.',
+                  action: FilledButton.icon(
+                    onPressed: () => _openForm(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Nuevo producto'),
+                  ),
                 )
               else
                 ...filtrados.map(
@@ -209,6 +259,9 @@ class _ProductsPageState extends State<ProductsPage> {
                       onRecipe: producto.esDirecto
                           ? null
                           : () => _openRecipe(producto),
+                      onAjustarStock: producto.esDirecto
+                          ? () => _ajustarStock(producto)
+                          : null,
                       onToggle: (value) => _toggle(producto, value),
                     ),
                   ),
@@ -226,12 +279,14 @@ class _ProductRow extends StatelessWidget {
     required this.producto,
     required this.onEdit,
     required this.onRecipe,
+    required this.onAjustarStock,
     required this.onToggle,
   });
 
   final Producto producto;
   final VoidCallback onEdit;
   final VoidCallback? onRecipe;
+  final VoidCallback? onAjustarStock;
   final ValueChanged<bool> onToggle;
 
   @override
@@ -247,13 +302,21 @@ class _ProductRow extends StatelessWidget {
             decoration: BoxDecoration(
               color: Color(producto.categoriaColor).withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
+              image: producto.imagen != null
+                  ? DecorationImage(
+                      image: MemoryImage(producto.imagen!),
+                      fit: BoxFit.cover,
+                    )
+                  : null,
             ),
-            child: Icon(
-              producto.esDirecto
-                  ? Icons.inventory_2_outlined
-                  : Icons.restaurant,
-              color: Color(producto.categoriaColor),
-            ),
+            child: producto.imagen == null
+                ? Icon(
+                    producto.esDirecto
+                        ? Icons.inventory_2_outlined
+                        : Icons.restaurant,
+                    color: Color(producto.categoriaColor),
+                  )
+                : null,
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -300,9 +363,10 @@ class _ProductRow extends StatelessWidget {
                 Text(
                   producto.esDirecto
                       ? 'Stock: ${formatQty(producto.stock)}'
-                      : 'Receta: ${producto.esDirecto ? '—' : 'configurable'}',
+                      : 'Con receta',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: producto.esDirecto && producto.stock <= producto.stockMinimo
+                    color: producto.esDirecto &&
+                            producto.stock <= producto.stockMinimo
                         ? scheme.error
                         : scheme.onSurfaceVariant,
                   ),
@@ -315,6 +379,12 @@ class _ProductRow extends StatelessWidget {
               onPressed: onRecipe,
               icon: const Icon(Icons.receipt_long_outlined, size: 18),
               label: const Text('Receta'),
+            ),
+          if (onAjustarStock != null)
+            OutlinedButton.icon(
+              onPressed: onAjustarStock,
+              icon: const Icon(Icons.tune, size: 18),
+              label: const Text('Ajustar stock'),
             ),
           const SizedBox(width: 8),
           Switch(value: producto.activo, onChanged: onToggle),
@@ -333,11 +403,13 @@ class _ProductDialog extends StatefulWidget {
   const _ProductDialog({
     required this.repository,
     required this.categorias,
+    required this.usuarioId,
     this.producto,
   });
 
   final CatalogRepository repository;
   final List<CategoriaProducto> categorias;
+  final int usuarioId;
   final Producto? producto;
 
   @override
@@ -346,16 +418,26 @@ class _ProductDialog extends StatefulWidget {
 
 class _ProductDialogState extends State<_ProductDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _picker = ImagePicker();
   late final TextEditingController _nombre;
   late final TextEditingController _descripcion;
   late final TextEditingController _precio;
   late final TextEditingController _stockMinimo;
+  late final TextEditingController _stockActual;
   late final TextEditingController _costo;
+  late List<CategoriaProducto> _categorias;
   late int? _categoriaId;
   late String _tipo;
   late bool _activo;
+  Uint8List? _imagen;
   bool _saving = false;
   String? _error;
+
+  bool get _hayCamara {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
 
   @override
   void initState() {
@@ -369,16 +451,19 @@ class _ProductDialogState extends State<_ProductDialog> {
     _stockMinimo = TextEditingController(
       text: producto == null ? '0' : formatQty(producto.stockMinimo),
     );
+    _stockActual = TextEditingController(
+      text: producto == null ? '0' : formatQty(producto.stock),
+    );
     _costo = TextEditingController(
       text: producto == null ? '0' : producto.costoUnitario.toStringAsFixed(2),
     );
-    final activas = widget.categorias
-        .where((categoria) => categoria.activo)
-        .toList();
+    _categorias = List.of(widget.categorias);
+    final activas = _categorias.where((categoria) => categoria.activo).toList();
     _categoriaId = producto?.categoriaId ??
         (activas.isEmpty ? null : activas.first.id);
     _tipo = producto?.tipo ?? 'PREPARADO';
     _activo = producto?.activo ?? true;
+    _imagen = producto?.imagen;
   }
 
   @override
@@ -387,14 +472,64 @@ class _ProductDialogState extends State<_ProductDialog> {
     _descripcion.dispose();
     _precio.dispose();
     _stockMinimo.dispose();
+    _stockActual.dispose();
     _costo.dispose();
     super.dispose();
+  }
+
+  Future<void> _crearCategoria() async {
+    final nombre = await showDialog<String>(
+      context: context,
+      builder: (context) => const _NuevaCategoriaDialog(),
+    );
+    if (nombre == null || nombre.trim().isEmpty) return;
+    try {
+      await widget.repository.saveCategoria(
+        CategoriaProducto(
+          nombre: nombre.trim(),
+          color: _paleta[_categorias.length % _paleta.length],
+          siempreDisponible: false,
+          orden: _categorias.length,
+          activo: true,
+        ),
+      );
+      final categorias = await widget.repository.getCategorias();
+      final creada = categorias.firstWhere(
+        (categoria) => categoria.nombre == nombre.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _categorias = categorias;
+        _categoriaId = creada.id;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo crear la categoría: $error');
+    }
+  }
+
+  Future<void> _cargarImagen(ImageSource source) async {
+    try {
+      final archivo = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+      if (archivo == null) return;
+      final bytes = await archivo.readAsBytes();
+      if (!mounted) return;
+      setState(() => _imagen = bytes);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo cargar la imagen: $error');
+    }
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_categoriaId == null) {
-      setState(() => _error = 'Selecciona una categoría.');
+      setState(() => _error = 'Crea o selecciona una categoría.');
       return;
     }
     setState(() {
@@ -402,7 +537,7 @@ class _ProductDialogState extends State<_ProductDialog> {
       _error = null;
     });
     try {
-      final categoria = widget.categorias.firstWhere(
+      final categoria = _categorias.firstWhere(
         (item) => item.id == _categoriaId,
       );
       final id = await widget.repository.saveProducto(
@@ -415,12 +550,21 @@ class _ProductDialogState extends State<_ProductDialog> {
           descripcion: _descripcion.text,
           precio: parseAmount(_precio.text),
           tipo: _tipo,
+          imagen: _imagen,
           stockMinimo: _tipo == 'DIRECTO' ? parseAmount(_stockMinimo.text) : 0,
           costoUnitario: _tipo == 'DIRECTO' ? parseAmount(_costo.text) : 0,
           activo: _activo,
           stock: widget.producto?.stock ?? 0,
         ),
       );
+      if (_tipo == 'DIRECTO') {
+        await widget.repository.ajustarStockProducto(
+          productoId: id,
+          nuevoStock: parseAmount(_stockActual.text),
+          usuarioId: widget.usuarioId,
+          motivo: 'Carga inicial',
+        );
+      }
       if (!mounted) return;
       Navigator.pop(context, id);
     } catch (error) {
@@ -454,24 +598,113 @@ class _ProductDialogState extends State<_ProductDialog> {
                       : null,
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<int>(
-                  initialValue: _categoriaId,
-                  decoration: appInput(label: 'Categoría'),
-                  items: widget.categorias
-                      .map(
-                        (categoria) => DropdownMenuItem(
-                          value: categoria.id,
-                          child: Text(
-                            categoria.activo
-                                ? categoria.nombre
-                                : '${categoria.nombre} (inactiva)',
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 130,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.outlineVariant,
                           ),
                         ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => _categoriaId = value),
-                  validator: (value) =>
-                      value == null ? 'Selecciona una categoría' : null,
+                        clipBehavior: Clip.antiAlias,
+                        child: _imagen == null
+                            ? Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.image_outlined,
+                                    size: 30,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Sin imagen',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ],
+                              )
+                            : Image.memory(
+                                _imagen!,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_hayCamara) ...[
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                _cargarImagen(ImageSource.camera),
+                            icon: const Icon(Icons.photo_camera_outlined),
+                            label: const Text('Tomar foto'),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        OutlinedButton.icon(
+                          onPressed: () => _cargarImagen(ImageSource.gallery),
+                          icon: const Icon(Icons.photo_library_outlined),
+                          label: Text(
+                            _hayCamara ? 'Elegir imagen' : 'Buscar imagen',
+                          ),
+                        ),
+                        if (_imagen != null) ...[
+                          const SizedBox(height: 8),
+                          TextButton.icon(
+                            onPressed: () => setState(() => _imagen = null),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Quitar'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        key: ValueKey(_categorias.length),
+                        initialValue: _categoriaId,
+                        decoration: appInput(label: 'Categoría'),
+                        items: _categorias
+                            .map(
+                              (categoria) => DropdownMenuItem(
+                                value: categoria.id,
+                                child: Text(categoria.nombre),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) =>
+                            setState(() => _categoriaId = value),
+                        validator: (value) =>
+                            value == null ? 'Selecciona una categoría' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _crearCategoria,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Nueva'),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
@@ -539,16 +772,36 @@ class _ProductDialogState extends State<_ProductDialog> {
                 ),
                 if (directo) ...[
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _costo,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: appInput(
-                      label: 'Costo unitario (Bs)',
-                      hint: 'Se actualiza con las compras',
-                      icon: Icons.price_check,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _stockActual,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                          decoration: appInput(
+                            label: 'Stock actual',
+                            icon: Icons.inventory_2_outlined,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _costo,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                          decoration: appInput(
+                            label: 'Costo unitario (Bs)',
+                            icon: Icons.price_check,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
                 const SizedBox(height: 4),
@@ -557,7 +810,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                   title: const Text('Producto activo'),
                   subtitle: Text(
                     directo
-                        ? 'El stock se registra desde Compras.'
+                        ? 'Los productos inactivos no se venden ni aparecen en el menú.'
                         : 'Configura la receta desde la lista de productos.',
                   ),
                   value: _activo,
@@ -583,6 +836,148 @@ class _ProductDialogState extends State<_ProductDialog> {
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(_saving ? 'Guardando…' : 'Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _NuevaCategoriaDialog extends StatefulWidget {
+  const _NuevaCategoriaDialog();
+
+  @override
+  State<_NuevaCategoriaDialog> createState() => _NuevaCategoriaDialogState();
+}
+
+class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
+  final _controller = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Nueva categoría'),
+      content: SizedBox(
+        width: 380,
+        child: Form(
+          key: _formKey,
+          child: TextFormField(
+            controller: _controller,
+            autofocus: true,
+            decoration: appInput(
+              label: 'Nombre',
+              hint: 'Ej. Masitas, Bebidas, Almuerzos',
+            ),
+            validator: (value) =>
+                (value == null || value.trim().isEmpty)
+                ? 'Ingresa un nombre'
+                : null,
+            onFieldSubmitted: (_) {
+              if (_formKey.currentState!.validate()) {
+                Navigator.pop(context, _controller.text.trim());
+              }
+            },
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              Navigator.pop(context, _controller.text.trim());
+            }
+          },
+          child: const Text('Crear'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StockDialog extends StatefulWidget {
+  const _StockDialog({required this.titulo, required this.stockActual});
+
+  final String titulo;
+  final double stockActual;
+
+  @override
+  State<_StockDialog> createState() => _StockDialogState();
+}
+
+class _StockDialogState extends State<_StockDialog> {
+  late final TextEditingController _controller;
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: formatQty(widget.stockActual));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.titulo),
+      content: SizedBox(
+        width: 380,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Stock del sistema: ${formatQty(widget.stockActual)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _controller,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInput(
+                  label: 'Stock real',
+                  icon: Icons.inventory_2_outlined,
+                ),
+                validator: (value) {
+                  if (parseAmount(value ?? '') < 0) return 'Cantidad inválida';
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              Navigator.pop(context, parseAmount(_controller.text));
+            }
+          },
+          child: const Text('Guardar'),
         ),
       ],
     );
@@ -716,14 +1111,14 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                                   children: [
                                     Text(insumo.nombre),
                                     Text(
-                                      '${insumo.modoControl} · stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
+                                      'stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
                                       style: Theme.of(context)
                                           .textTheme
                                           .bodySmall
                                           ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
                                           ),
                                     ),
                                   ],

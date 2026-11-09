@@ -1,16 +1,29 @@
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/database/app_database.dart';
 import 'date_utils.dart';
+import 'password_utils.dart';
 import 'session.dart';
 
-String hashPassword(String password) =>
-    sha256.convert(utf8.encode(password)).toString();
+export 'password_utils.dart' show hashPassword;
 
 class AuthRepository {
+  bool? _tieneColumnaPerfil;
+
+  Future<bool> _soportaPerfil(Database db) async {
+    final cache = _tieneColumnaPerfil;
+    if (cache != null) return cache;
+    var soporta = false;
+    try {
+      final columnas = await db.rawQuery('PRAGMA table_info(usuarios)');
+      soporta = columnas.any((c) => c['name'] == 'perfil');
+    } catch (_) {
+      soporta = false;
+    }
+    _tieneColumnaPerfil = soporta;
+    return soporta;
+  }
+
   Future<bool> hayUsuarios() async {
     final db = await AppDatabase.instance.database;
     final count = Sqflite.firstIntValue(
@@ -19,38 +32,17 @@ class AuthRepository {
     return (count ?? 0) > 0;
   }
 
-  Future<Usuario> crearAdminInicial({
-    required String nombre,
-    required String usuario,
-    required String password,
-  }) async {
+  Future<bool> usaCredencialesPorDefecto() async {
     final db = await AppDatabase.instance.database;
-    final id = await db.insert('usuarios', {
-      'nombre': nombre.trim(),
-      'usuario': usuario.trim(),
-      'password_hash': hashPassword(password),
-      'rol': 'ADMIN',
-      'turno_asignado': 'AMBOS',
-      'sueldo_base': 0,
-      'activo': 1,
-      'creado_en': sqlNow(),
-    });
-    for (final permiso in Permiso.todos) {
-      await db.insert('usuario_permisos', {
-        'usuario_id': id,
-        'permiso': permiso,
-      });
-    }
-    return Usuario(
-      id: id,
-      nombre: nombre.trim(),
-      usuario: usuario.trim(),
-      rol: 'ADMIN',
-      turnoAsignado: 'AMBOS',
-      sueldoBase: 0,
-      activo: true,
-      permisos: Permiso.todos.toSet(),
+    final rows = await db.query(
+      'usuarios',
+      columns: ['password_hash'],
+      where: 'usuario = ?',
+      whereArgs: ['admin'],
+      limit: 1,
     );
+    if (rows.isEmpty) return false;
+    return rows.first['password_hash'] == hashPassword('1234');
   }
 
   Future<Usuario?> login(String usuario, String password) async {
@@ -66,6 +58,55 @@ class AuthRepository {
     if (row['password_hash'] != hashPassword(password)) return null;
     final permisos = await getPermisos(row['id']! as int);
     return _fromRow(row, permisos);
+  }
+
+  Future<Usuario?> restaurarSesion() async {
+    final db = await AppDatabase.instance.database;
+    final sesiones = await db.query('sesion_actual', limit: 1);
+    if (sesiones.isEmpty) return null;
+    final usuarioId = sesiones.first['usuario_id']! as int;
+    final rows = await db.query(
+      'usuarios',
+      where: 'id = ? AND activo = 1',
+      whereArgs: [usuarioId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      await cerrarSesion();
+      return null;
+    }
+    final permisos = await getPermisos(usuarioId);
+    return _fromRow(rows.first, permisos);
+  }
+
+  Future<void> guardarSesion(int usuarioId) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      await txn.delete('sesion_actual');
+      await txn.insert('sesion_actual', {
+        'id': 1,
+        'usuario_id': usuarioId,
+        'iniciada_en': sqlNow(),
+      });
+    });
+  }
+
+  Future<void> cerrarSesion() async {
+    final db = await AppDatabase.instance.database;
+    await db.delete('sesion_actual');
+  }
+
+  Future<bool> verificarPassword(int usuarioId, String password) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'usuarios',
+      columns: ['password_hash'],
+      where: 'id = ?',
+      whereArgs: [usuarioId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    return rows.first['password_hash'] == hashPassword(password);
   }
 
   Future<List<Usuario>> getUsuarios() async {
@@ -102,22 +143,20 @@ class AuthRepository {
     int? id,
     required String nombre,
     required String usuario,
-    required String rol,
-    String? turnoAsignado,
-    required double sueldoBase,
+    required String perfil,
     required bool activo,
     required Set<String> permisos,
     String? password,
   }) async {
     final db = await AppDatabase.instance.database;
+    final esAdmin = perfil == Perfil.admin;
     final values = <String, Object?>{
       'nombre': nombre.trim(),
       'usuario': usuario.trim(),
-      'rol': rol,
-      'turno_asignado': turnoAsignado,
-      'sueldo_base': sueldoBase,
+      'rol': esAdmin ? 'ADMIN' : 'CAJERO',
       'activo': activo ? 1 : 0,
     };
+    if (await _soportaPerfil(db)) values['perfil'] = perfil;
     late int userId;
     if (id == null) {
       if (password == null || password.isEmpty) {
@@ -138,7 +177,8 @@ class AuthRepository {
       where: 'usuario_id = ?',
       whereArgs: [userId],
     );
-    for (final permiso in permisos) {
+    final finales = esAdmin ? Permiso.todos.toSet() : permisos;
+    for (final permiso in finales) {
       await db.insert('usuario_permisos', {
         'usuario_id': userId,
         'permiso': permiso,
@@ -170,9 +210,10 @@ class AuthRepository {
     id: row['id']! as int,
     nombre: row['nombre']! as String,
     usuario: row['usuario']! as String,
-    rol: row['rol']! as String,
-    turnoAsignado: row['turno_asignado'] as String?,
-    sueldoBase: (row['sueldo_base'] as num?)?.toDouble() ?? 0,
+    perfil:
+        ((row['perfil'] as String?)?.isNotEmpty ?? false)
+            ? row['perfil']! as String
+            : (row['rol'] == 'ADMIN' ? Perfil.admin : Perfil.cajero),
     activo: (row['activo'] as num? ?? 1).toInt() == 1,
     permisos: permisos,
   );

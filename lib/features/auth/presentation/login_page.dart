@@ -20,7 +20,24 @@ class _LoginPageState extends State<LoginPage> {
   final _repository = AuthRepository();
   bool _loading = false;
   bool _verPassword = false;
+  bool _credencialesPorDefecto = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkCredencialesPorDefecto();
+  }
+
+  Future<void> _checkCredencialesPorDefecto() async {
+    try {
+      final porDefecto = await _repository.usaCredencialesPorDefecto();
+      if (!mounted) return;
+      setState(() => _credencialesPorDefecto = porDefecto);
+    } catch (_) {
+      // Si falla la consulta, simplemente no se muestra la pista.
+    }
+  }
 
   @override
   void dispose() {
@@ -48,7 +65,6 @@ class _LoginPageState extends State<LoginPage> {
         });
         return;
       }
-      Sesion.instance.iniciar(usuario);
       widget.onLogin(usuario);
     } catch (error) {
       if (!mounted) return;
@@ -152,6 +168,40 @@ class _LoginPageState extends State<LoginPage> {
                               ? 'Ingresa tu contraseña'
                               : null,
                         ),
+                        if (_credencialesPorDefecto) ...[
+                          const SizedBox(height: 14),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primaryContainer.withValues(
+                                alpha: 0.45,
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: 18,
+                                  color: scheme.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Primer acceso: admin / 1234',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(color: scheme.primary),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if (_error != null) ...[
                           const SizedBox(height: 14),
                           Text(

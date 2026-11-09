@@ -8,22 +8,20 @@ class _ReportData {
   const _ReportData({
     required this.resumen,
     required this.productos,
-    required this.compras,
-    required this.gastos,
-    required this.sueldos,
+    required this.salidas,
     required this.inventario,
   });
 
   final ResumenFinanciero resumen;
   final List<ProductoReporte> productos;
-  final List<CompraReporte> compras;
-  final List<GastoReporte> gastos;
-  final List<GastoReporte> sueldos;
+  final List<GastoReporte> salidas;
   final List<InventarioReporte> inventario;
 }
 
 class ReportsPage extends StatefulWidget {
-  const ReportsPage({super.key});
+  const ReportsPage({super.key, required this.refreshToken});
+
+  final int refreshToken;
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
@@ -42,7 +40,17 @@ class _ReportsPageState extends State<ReportsPage> {
     _reload();
   }
 
-  void _reload() => _future = _load();
+  @override
+  void didUpdateWidget(ReportsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _load();
+  }
 
   String _labelPeriodo(String value) => switch (value) {
     'DIA' => 'Día',
@@ -116,15 +124,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final range = _range;
     final resumen = await _repository.getResumen(range.start, range.end);
     final productos = await _repository.getProductos(range.start, range.end);
-    final compras = await _repository.getComprasPorItem(
-      range.start,
-      range.end,
-    );
-    final gastos = await _repository.getGastosPorCategoria(
-      range.start,
-      range.end,
-    );
-    final sueldos = await _repository.getSueldosPorUsuario(
+    final salidas = await _repository.getSalidasPorMotivo(
       range.start,
       range.end,
     );
@@ -132,9 +132,7 @@ class _ReportsPageState extends State<ReportsPage> {
     return _ReportData(
       resumen: resumen,
       productos: productos,
-      compras: compras,
-      gastos: gastos,
-      sueldos: sueldos,
+      salidas: salidas,
       inventario: inventario,
     );
   }
@@ -144,7 +142,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final range = _range;
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
-      length: 5,
+      length: 3,
       child: Column(
         children: [
           Padding(
@@ -155,7 +153,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 PageHeader(
                   title: 'Reportes',
                   subtitle:
-                      'Resultado = ventas − costo de insumos − gastos − sueldos. Flujo de caja = cobros − compras − gastos − sueldos.',
+                      'Resultado = ventas − costo de insumos − salidas. Flujo de caja = cobros − salidas.',
                   actions: [
                     OutlinedButton.icon(
                       onPressed: () => setState(_reload),
@@ -206,8 +204,6 @@ class _ReportsPageState extends State<ReportsPage> {
             tabs: [
               Tab(icon: Icon(Icons.summarize_outlined), text: 'Resumen'),
               Tab(icon: Icon(Icons.lunch_dining_outlined), text: 'Productos'),
-              Tab(icon: Icon(Icons.shopping_cart_outlined), text: 'Compras'),
-              Tab(icon: Icon(Icons.receipt_long_outlined), text: 'Gastos'),
               Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Inventario'),
             ],
           ),
@@ -229,8 +225,6 @@ class _ReportsPageState extends State<ReportsPage> {
                   children: [
                     _resumenTab(context, data),
                     _productosTab(context, data),
-                    _comprasTab(context, data),
-                    _gastosTab(context, data),
                     _inventarioTab(context, data),
                   ],
                 );
@@ -272,35 +266,24 @@ class _ReportsPageState extends State<ReportsPage> {
               color: scheme.secondary,
             ),
             StatCard(
-              label: 'Compras',
-              value: formatMoney(resumen.compras),
+              label: 'Salidas',
+              value: formatMoney(resumen.salidas),
               caption:
-                  'Efectivo ${formatMoney(resumen.comprasEfectivo)} · QR ${formatMoney(resumen.comprasQr)}',
-              icon: Icons.shopping_cart_outlined,
-            ),
-            StatCard(
-              label: 'Gastos',
-              value: formatMoney(resumen.gastos),
-              icon: Icons.receipt_long_outlined,
+                  'Efectivo ${formatMoney(resumen.salidasEfectivo)} · QR ${formatMoney(resumen.salidasQr)}',
+              icon: Icons.outbox,
               color: scheme.tertiary,
-            ),
-            StatCard(
-              label: 'Sueldos',
-              value: formatMoney(resumen.sueldos),
-              icon: Icons.badge_outlined,
-              color: scheme.secondary,
             ),
             StatCard(
               label: 'Resultado',
               value: formatMoney(resumen.resultado),
-              caption: 'Ventas − COGS − gastos − sueldos',
+              caption: 'Ventas − COGS − salidas',
               icon: Icons.insights,
               color: resumen.resultado >= 0 ? scheme.primary : scheme.error,
             ),
             StatCard(
               label: 'Flujo de caja',
               value: formatMoney(resumen.flujoCaja),
-              caption: 'Cobros − compras − gastos − sueldos',
+              caption: 'Cobros − salidas',
               icon: Icons.account_balance_outlined,
               color: resumen.flujoCaja >= 0 ? scheme.primary : scheme.error,
             ),
@@ -334,6 +317,38 @@ class _ReportsPageState extends State<ReportsPage> {
                 label: 'Ventas por QR (cobros)',
                 value: formatMoney(resumen.cobrosQr),
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Salidas registradas',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (data.salidas.isEmpty)
+                const Text('No hay salidas registradas en el período.')
+              else
+                ...data.salidas.map(
+                  (salida) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(salida.nombre)),
+                        Text(
+                          formatMoney(salida.total),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -390,120 +405,6 @@ class _ReportsPageState extends State<ReportsPage> {
             ),
           ),
         ),
-      ],
-    );
-  }
-
-  Widget _comprasTab(BuildContext context, _ReportData data) {
-    if (data.compras.isEmpty) {
-      return const EmptyState(
-        icon: Icons.shopping_cart_outlined,
-        title: 'Sin compras en el período',
-        message: 'No hay compras registradas para mostrar.',
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        AppCard(
-          padding: EdgeInsets.zero,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              columns: const [
-                DataColumn(label: Text('Ítem')),
-                DataColumn(label: Text('Tipo')),
-                DataColumn(label: Text('Cantidad'), numeric: true),
-                DataColumn(label: Text('Total'), numeric: true),
-              ],
-              rows: data.compras
-                  .map(
-                    (compra) => DataRow(
-                      cells: [
-                        DataCell(Text(compra.nombre)),
-                        DataCell(Text(compra.tipo)),
-                        DataCell(Text(formatQty(compra.cantidad))),
-                        DataCell(Text(formatMoney(compra.total))),
-                      ],
-                    ),
-                  )
-                  .toList(),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _gastosTab(BuildContext context, _ReportData data) {
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text(
-          'Gastos por categoría',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
-        if (data.gastos.isEmpty)
-          const Text('No hay gastos registrados en el período.')
-        else
-          AppCard(
-            padding: EdgeInsets.zero,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Categoría')),
-                  DataColumn(label: Text('Total'), numeric: true),
-                ],
-                rows: data.gastos
-                    .map(
-                      (gasto) => DataRow(
-                        cells: [
-                          DataCell(Text(gasto.nombre)),
-                          DataCell(Text(formatMoney(gasto.total))),
-                        ],
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          ),
-        const SizedBox(height: 24),
-        Text(
-          'Sueldos por usuario',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
-        if (data.sueldos.isEmpty)
-          const Text('No hay sueldos registrados en el período.')
-        else
-          AppCard(
-            padding: EdgeInsets.zero,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Usuario')),
-                  DataColumn(label: Text('Total'), numeric: true),
-                ],
-                rows: data.sueldos
-                    .map(
-                      (sueldo) => DataRow(
-                        cells: [
-                          DataCell(Text(sueldo.nombre)),
-                          DataCell(Text(formatMoney(sueldo.total))),
-                        ],
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -568,11 +469,7 @@ class _ReportsPageState extends State<ReportsPage> {
                         cells: [
                           DataCell(Text(item.nombre)),
                           DataCell(
-                            Text(
-                              item.tipo == 'INSUMO'
-                                  ? '${item.tipo} · ${item.modoControl ?? ''}'
-                                  : item.tipo,
-                            ),
+                            Text(item.tipo == 'INSUMO' ? 'Insumo' : 'Producto'),
                           ),
                           DataCell(Text(formatQty(item.stock))),
                           DataCell(Text(formatQty(item.stockMinimo))),

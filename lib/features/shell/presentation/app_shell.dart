@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/auth_repository.dart';
 import '../../../core/session.dart';
+import '../../../ui/common.dart';
 import '../../cash/presentation/cash_page.dart';
-import '../../categories/presentation/categories_page.dart';
 import '../../dashboard/presentation/dashboard_page.dart';
-import '../../expenses/presentation/expenses_page.dart';
-import '../../inventory/presentation/count_page.dart';
 import '../../inventory/presentation/inventory_page.dart';
 import '../../menu/presentation/menu_page.dart';
 import '../../products/presentation/products_page.dart';
-import '../../purchases/presentation/purchases_page.dart';
 import '../../reports/presentation/reports_page.dart';
 import '../../sales/presentation/sales_page.dart';
 import '../../users/presentation/users_page.dart';
@@ -40,24 +38,46 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  int _refreshToken = 0;
+
+  void _seleccionar(int index) {
+    setState(() {
+      _index = index;
+      _refreshToken++;
+    });
+  }
+
+  Future<void> _cambiarPassword() async {
+    final cambiada = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ChangePasswordDialog(usuario: widget.usuario),
+    );
+    if (cambiada == true && mounted) {
+      showAppMessage(context, 'Contraseña actualizada.');
+    }
+  }
 
   List<_Destination> _destinations() {
     final usuario = widget.usuario;
-    final destinations = <_Destination>[
-      _Destination(
-        label: 'Tablero',
-        icon: Icons.space_dashboard_outlined,
-        selectedIcon: Icons.space_dashboard,
-        page: DashboardPage(usuario: usuario),
-      ),
-    ];
+    final token = _refreshToken;
+    final destinations = <_Destination>[];
+    if (usuario.puede(Permiso.tablero)) {
+      destinations.add(
+        _Destination(
+          label: 'Tablero',
+          icon: Icons.space_dashboard_outlined,
+          selectedIcon: Icons.space_dashboard,
+          page: DashboardPage(usuario: usuario, refreshToken: token),
+        ),
+      );
+    }
     if (usuario.puede(Permiso.ventas)) {
       destinations.add(
         _Destination(
           label: 'Ventas',
           icon: Icons.point_of_sale_outlined,
           selectedIcon: Icons.point_of_sale,
-          page: SalesPage(usuario: usuario),
+          page: SalesPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
@@ -67,17 +87,17 @@ class _AppShellState extends State<AppShell> {
           label: 'Caja',
           icon: Icons.account_balance_wallet_outlined,
           selectedIcon: Icons.account_balance_wallet,
-          page: CashPage(usuario: usuario),
+          page: CashPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
-    if (usuario.puede(Permiso.menu) || usuario.puede(Permiso.agotamiento)) {
+    if (usuario.puede(Permiso.menu)) {
       destinations.add(
         _Destination(
           label: 'Menú del día',
           icon: Icons.restaurant_menu_outlined,
           selectedIcon: Icons.restaurant_menu,
-          page: MenuPage(usuario: usuario),
+          page: MenuPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
@@ -87,17 +107,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Productos',
           icon: Icons.lunch_dining_outlined,
           selectedIcon: Icons.lunch_dining,
-          page: const ProductsPage(),
-        ),
-      );
-    }
-    if (usuario.puede(Permiso.categorias)) {
-      destinations.add(
-        _Destination(
-          label: 'Categorías',
-          icon: Icons.category_outlined,
-          selectedIcon: Icons.category,
-          page: const CategoriesPage(),
+          page: ProductsPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
@@ -107,37 +117,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Insumos',
           icon: Icons.inventory_2_outlined,
           selectedIcon: Icons.inventory_2,
-          page: const InventoryPage(),
-        ),
-      );
-    }
-    if (usuario.puede(Permiso.compras)) {
-      destinations.add(
-        _Destination(
-          label: 'Compras',
-          icon: Icons.shopping_cart_outlined,
-          selectedIcon: Icons.shopping_cart,
-          page: PurchasesPage(usuario: usuario),
-        ),
-      );
-    }
-    if (usuario.puede(Permiso.conteo)) {
-      destinations.add(
-        _Destination(
-          label: 'Conteo',
-          icon: Icons.fact_check_outlined,
-          selectedIcon: Icons.fact_check,
-          page: CountPage(usuario: usuario),
-        ),
-      );
-    }
-    if (usuario.puede(Permiso.gastos) || usuario.puede(Permiso.sueldos)) {
-      destinations.add(
-        _Destination(
-          label: 'Gastos',
-          icon: Icons.receipt_long_outlined,
-          selectedIcon: Icons.receipt_long,
-          page: ExpensesPage(usuario: usuario),
+          page: InventoryPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
@@ -147,7 +127,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Usuarios',
           icon: Icons.manage_accounts_outlined,
           selectedIcon: Icons.manage_accounts,
-          page: UsersPage(usuario: usuario),
+          page: UsersPage(usuario: usuario, refreshToken: token),
         ),
       );
     }
@@ -157,7 +137,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Reportes',
           icon: Icons.bar_chart_outlined,
           selectedIcon: Icons.bar_chart,
-          page: const ReportsPage(),
+          page: ReportsPage(refreshToken: token),
         ),
       );
     }
@@ -182,9 +162,14 @@ class _AppShellState extends State<AppShell> {
         final userMenu = PopupMenuButton<String>(
           tooltip: 'Sesión',
           onSelected: (value) {
+            if (value == 'password') _cambiarPassword();
             if (value == 'logout') widget.onLogout();
           },
           itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: 'password',
+              child: Text('Cambiar mi contraseña'),
+            ),
             PopupMenuItem(value: 'logout', child: Text('Cerrar sesión')),
           ],
           child: Padding(
@@ -283,7 +268,7 @@ class _AppShellState extends State<AppShell> {
                             title: Text(destinations[i].label),
                             selected: i == index,
                             onTap: () {
-                              setState(() => _index = i);
+                              _seleccionar(i);
                               Navigator.pop(context);
                             },
                           ),
@@ -299,7 +284,7 @@ class _AppShellState extends State<AppShell> {
                       minExtendedWidth: 210,
                       selectedIndex: index,
                       onDestinationSelected: (value) =>
-                          setState(() => _index = value),
+                          _seleccionar(value),
                       leading: Padding(
                         padding: const EdgeInsets.fromLTRB(8, 12, 8, 20),
                         child: Column(
@@ -344,6 +329,138 @@ class _AppShellState extends State<AppShell> {
               : body,
         );
       },
+    );
+  }
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog({required this.usuario});
+
+  final Usuario usuario;
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _repository = AuthRepository();
+  final _actual = TextEditingController();
+  final _nueva = TextEditingController();
+  final _confirmar = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _actual.dispose();
+    _nueva.dispose();
+    _confirmar.dispose();
+    super.dispose();
+  }
+
+  Future<void> _guardar() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final correcta = await _repository.verificarPassword(
+        widget.usuario.id,
+        _actual.text,
+      );
+      if (!correcta) {
+        if (!mounted) return;
+        setState(() {
+          _error = 'La contraseña actual no es correcta.';
+          _saving = false;
+        });
+        return;
+      }
+      await _repository.cambiarPassword(widget.usuario.id, _nueva.text);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'No se pudo cambiar la contraseña: $error';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar mi contraseña'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _actual,
+                obscureText: true,
+                decoration: appInput(
+                  label: 'Contraseña actual',
+                  icon: Icons.lock_outline,
+                ),
+                validator: (value) => (value == null || value.isEmpty)
+                    ? 'Ingresa tu contraseña actual'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _nueva,
+                obscureText: true,
+                decoration: appInput(
+                  label: 'Nueva contraseña',
+                  icon: Icons.lock_reset_outlined,
+                ),
+                validator: (value) => (value == null || value.length < 4)
+                    ? 'Usa al menos 4 caracteres'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _confirmar,
+                obscureText: true,
+                onFieldSubmitted: (_) => _guardar(),
+                decoration: appInput(
+                  label: 'Confirmar nueva contraseña',
+                  icon: Icons.lock_reset_outlined,
+                ),
+                validator: (value) => value != _nueva.text
+                    ? 'Las contraseñas no coinciden'
+                    : null,
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _guardar,
+          child: Text(_saving ? 'Guardando…' : 'Cambiar'),
+        ),
+      ],
     );
   }
 }

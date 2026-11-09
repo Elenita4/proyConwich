@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/auth_repository.dart';
-import '../../../core/date_utils.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
 
 class UsersPage extends StatefulWidget {
-  const UsersPage({super.key, required this.usuario});
+  const UsersPage({
+    super.key,
+    required this.usuario,
+    required this.refreshToken,
+  });
 
   final Usuario usuario;
+  final int refreshToken;
 
   @override
   State<UsersPage> createState() => _UsersPageState();
@@ -24,7 +28,17 @@ class _UsersPageState extends State<UsersPage> {
     _reload();
   }
 
-  void _reload() => _future = _repository.getUsuarios();
+  @override
+  void didUpdateWidget(UsersPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+  }
+
+  // Debe devolver void: si devolviera el Future, setState lanzaría error y la
+  // pantalla no se refrescaría.
+  void _reload() {
+    _future = _repository.getUsuarios();
+  }
 
   Future<void> _openForm([Usuario? usuario]) async {
     final saved = await showDialog<bool>(
@@ -50,6 +64,14 @@ class _UsersPageState extends State<UsersPage> {
       );
       return;
     }
+    if (usuario.esAdmin && !activo) {
+      showAppMessage(
+        context,
+        'El administrador no se puede desactivar.',
+        error: true,
+      );
+      return;
+    }
     await _repository.setActivo(usuario.id, activo);
     if (!mounted) return;
     setState(_reload);
@@ -67,9 +89,9 @@ class _UsersPageState extends State<UsersPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               PageHeader(
-                title: 'Usuarios y permisos',
+                title: 'Usuarios',
                 subtitle:
-                    'Crea usuarios, asígnales permisos y actívalos o desactívalos. Nunca se eliminan.',
+                    'Crea usuarios, cámbiales la contraseña y decide qué vistas ven. Nunca se eliminan.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -114,14 +136,16 @@ class _UsersPageState extends State<UsersPage> {
                               children: [
                                 Row(
                                   children: [
-                                    Text(
-                                      usuario.nombre,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                    Flexible(
+                                      child: Text(
+                                        usuario.nombre,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
                                     ),
                                     if (usuario.id == widget.usuario.id) ...[
                                       const SizedBox(width: 8),
@@ -133,7 +157,7 @@ class _UsersPageState extends State<UsersPage> {
                                   ],
                                 ),
                                 Text(
-                                  '@${usuario.usuario} · ${usuario.rol}${usuario.turnoAsignado == null ? '' : ' · ${usuario.turnoAsignado}'}',
+                                  '@${usuario.usuario} · ${usuario.nombrePerfil}',
                                   style: Theme.of(context)
                                       .textTheme
                                       .bodySmall
@@ -150,26 +174,15 @@ class _UsersPageState extends State<UsersPage> {
                             flex: 2,
                             child: Text(
                               usuario.esAdmin
-                                  ? 'Todos los permisos'
-                                  : '${usuario.permisos.length} permiso(s)',
+                                  ? 'Administrador · todas las vistas'
+                                  : '${usuario.permisos.length} vista(s)',
                               style: TextStyle(
                                 color: Theme.of(
                                   context,
                                 ).colorScheme.onSurfaceVariant,
                               ),
                             ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              'Sueldo ${formatMoney(usuario.sueldoBase)}',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                          Chip(
+                          ),                          Chip(
                             label: Text(usuario.activo ? 'Activo' : 'Inactivo'),
                             side: BorderSide.none,
                             backgroundColor: usuario.activo
@@ -218,14 +231,14 @@ class _UserDialogState extends State<_UserDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nombre;
   late final TextEditingController _usuario;
-  late final TextEditingController _sueldo;
   final _password = TextEditingController();
-  late String _rol;
-  String? _turno;
   late bool _activo;
+  late String _perfil;
   late Set<String> _permisos;
   bool _saving = false;
   String? _error;
+
+  bool get _esAdmin => _perfil == Perfil.admin;
 
   @override
   void initState() {
@@ -233,23 +246,27 @@ class _UserDialogState extends State<_UserDialog> {
     final usuario = widget.usuario;
     _nombre = TextEditingController(text: usuario?.nombre ?? '');
     _usuario = TextEditingController(text: usuario?.usuario ?? '');
-    _sueldo = TextEditingController(
-      text: usuario == null ? '0' : usuario.sueldoBase.toStringAsFixed(2),
-    );
-    _rol = usuario?.rol ?? 'CAJERO';
-    _turno = usuario?.turnoAsignado ??
-        (usuario?.rol == 'ADMIN' ? 'AMBOS' : 'MAÑANA');
     _activo = usuario?.activo ?? true;
-    _permisos = usuario?.permisos.toSet() ?? {Permiso.ventas};
+    _perfil = usuario?.perfil ?? Perfil.cajero;
+    _permisos = usuario?.permisos.toSet() ??
+        Set<String>.of(Perfil.vistasPorDefecto[_perfil] ?? {});
   }
 
   @override
   void dispose() {
     _nombre.dispose();
     _usuario.dispose();
-    _sueldo.dispose();
     _password.dispose();
     super.dispose();
+  }
+
+  void _cambiarPerfil(String perfil) {
+    setState(() {
+      _perfil = perfil;
+      _permisos = Set<String>.of(
+        Perfil.vistasPorDefecto[perfil] ?? <String>{},
+      );
+    });
   }
 
   Future<void> _save() async {
@@ -267,11 +284,9 @@ class _UserDialogState extends State<_UserDialog> {
         id: widget.usuario?.id,
         nombre: _nombre.text,
         usuario: _usuario.text,
-        rol: _rol,
-        turnoAsignado: _turno,
-        sueldoBase: parseAmount(_sueldo.text),
+        perfil: _perfil,
         activo: _activo,
-        permisos: _rol == 'ADMIN' ? Permiso.todos.toSet() : _permisos,
+        permisos: _permisos,
         password: _password.text.isEmpty ? null : _password.text,
       );
       if (!mounted) return;
@@ -287,14 +302,13 @@ class _UserDialogState extends State<_UserDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final esAdmin = _rol == 'ADMIN';
     return AlertDialog(
       title: Text(
         widget.usuario == null ? 'Nuevo usuario' : 'Editar usuario',
       ),
       content: SizedBox(
-        width: 620,
-        height: 600,
+        width: 600,
+        height: 560,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -321,9 +335,7 @@ class _UserDialogState extends State<_UserDialog> {
                         validator: (value) {
                           final text = value?.trim() ?? '';
                           if (text.isEmpty) return 'Ingresa un usuario';
-                          if (text.contains(' ')) {
-                            return 'Sin espacios';
-                          }
+                          if (text.contains(' ')) return 'Sin espacios';
                           return null;
                         },
                       ),
@@ -331,64 +343,20 @@ class _UserDialogState extends State<_UserDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _rol,
-                        decoration: appInput(label: 'Rol'),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'ADMIN',
-                            child: Text('Administrador'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'CAJERO',
-                            child: Text('Cajero'),
-                          ),
-                        ],
-                        onChanged: (value) => setState(() {
-                          _rol = value ?? 'CAJERO';
-                          if (_rol == 'ADMIN') {
-                            _permisos = Permiso.todos.toSet();
-                          }
-                        }),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _turno,
-                        decoration: appInput(label: 'Turno asignado'),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'MAÑANA',
-                            child: Text('Mañana'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'TARDE',
-                            child: Text('Tarde'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'AMBOS',
-                            child: Text('Ambos'),
-                          ),
-                        ],
-                        onChanged: (value) => setState(() => _turno = value),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _sueldo,
-                        keyboardType:
-                            const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                        decoration: appInput(label: 'Sueldo base (Bs)'),
-                      ),
-                    ),
-                  ],
+                DropdownButtonFormField<String>(
+                  initialValue: _perfil,
+                  decoration: appInput(label: 'Rol'),
+                  items: Perfil.todos
+                      .map(
+                        (perfil) => DropdownMenuItem(
+                          value: perfil,
+                          child: Text(Perfil.nombres[perfil] ?? perfil),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) _cambiarPerfil(value);
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -417,7 +385,7 @@ class _UserDialogState extends State<_UserDialog> {
                     'Los usuarios inactivos no pueden iniciar sesión.',
                   ),
                   value: _activo,
-                  onChanged: widget.esUsuarioActual
+                  onChanged: _esAdmin
                       ? null
                       : (value) => setState(() => _activo = value),
                 ),
@@ -425,33 +393,42 @@ class _UserDialogState extends State<_UserDialog> {
                 Row(
                   children: [
                     Text(
-                      'Permisos',
+                      'Vistas y permisos',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(width: 8),
-                    if (esAdmin)
+                    if (_esAdmin)
                       const Chip(
-                        label: Text('El administrador tiene todos'),
+                        label: Text('El administrador tiene todas'),
                         visualDensity: VisualDensity.compact,
+                      )
+                    else
+                      TextButton.icon(
+                        onPressed: () => setState(() {
+                          _permisos = Set<String>.of(
+                            Perfil.vistasPorDefecto[_perfil] ?? <String>{},
+                          );
+                        }),
+                        icon: const Icon(Icons.restart_alt, size: 18),
+                        label: const Text('Aplicar vistas del rol'),
                       ),
                   ],
-                ),
-                const SizedBox(height: 4),
+                ),                const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
                   runSpacing: 4,
                   children: Permiso.todos
                       .map(
                         (permiso) => SizedBox(
-                          width: 280,
+                          width: 260,
                           child: CheckboxListTile(
                             contentPadding: EdgeInsets.zero,
                             dense: true,
                             title: Text(Permiso.etiquetas[permiso] ?? permiso),
-                            value: esAdmin || _permisos.contains(permiso),
-                            onChanged: esAdmin
+                            value: _esAdmin || _permisos.contains(permiso),
+                            onChanged: _esAdmin
                                 ? null
                                 : (value) {
                                     setState(() {

@@ -508,13 +508,12 @@ class SalesRepository {
     required String fecha,
   }) async {
     final receta = await txn.rawQuery('''
-      SELECT r.insumo_id, r.cantidad, i.costo_promedio, i.modo_control
+      SELECT r.insumo_id, r.cantidad, i.costo_promedio
       FROM receta_insumos r
       INNER JOIN insumos i ON i.id = r.insumo_id
       WHERE r.producto_id = ?
     ''', [productoId]);
     for (final row in receta) {
-      if (row['modo_control'] == 'DISPONIBILIDAD') continue;
       await txn.insert('consumos_insumo', {
         'insumo_id': row['insumo_id'],
         'pedido_id': pedidoId,

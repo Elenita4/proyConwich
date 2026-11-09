@@ -73,12 +73,8 @@ class Insumo {
     required this.nombre,
     required this.unidadId,
     required this.unidadAbreviatura,
-    required this.modoControl,
-    required this.disponible,
     required this.stockMinimo,
     required this.costoPromedio,
-    this.presentacionCompra,
-    required this.factorCompra,
     required this.activo,
     required this.stock,
   });
@@ -87,17 +83,12 @@ class Insumo {
   final String nombre;
   final int unidadId;
   final String unidadAbreviatura;
-  final String modoControl;
-  final bool disponible;
   final double stockMinimo;
   final double costoPromedio;
-  final String? presentacionCompra;
-  final double factorCompra;
   final bool activo;
   final double stock;
 
-  bool get porDisponibilidad => modoControl == 'DISPONIBILIDAD';
-  bool get bajoStock => !porDisponibilidad && stock <= stockMinimo;
+  bool get bajoStock => stock <= stockMinimo;
 }
 
 class RecetaLinea {
@@ -105,19 +96,15 @@ class RecetaLinea {
     required this.insumoId,
     required this.insumoNombre,
     required this.unidadAbreviatura,
-    required this.modoControl,
     required this.cantidad,
     required this.stock,
-    required this.disponible,
   });
 
   final int insumoId;
   final String insumoNombre;
   final String unidadAbreviatura;
-  final String modoControl;
   final double cantidad;
   final double stock;
-  final bool disponible;
 }
 
 class CatalogRepository {
@@ -201,10 +188,22 @@ class CatalogRepository {
       FROM productos p
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
       LEFT JOIN v_stock_productos s ON s.producto_id = p.id
-      ${soloActivos ? 'WHERE p.activo = 1 AND c.activo = 1' : ''}
+      ${soloActivos ? 'WHERE p.activo = 1' : ''}
       ORDER BY p.activo DESC, c.orden, p.nombre COLLATE NOCASE
     ''');
     return rows.map(_productFromRow).toList();
+  }
+
+  /// Productos directos activos: bebidas y snacks que se venden siempre.
+  Future<List<Producto>> getProductosDirectosActivos() async {
+    final productos = await getProductos(soloActivos: true);
+    return productos.where((producto) => producto.esDirecto).toList();
+  }
+
+  /// Productos preparados activos: platos que se Arman con receta.
+  Future<List<Producto>> getProductosPreparadosActivos() async {
+    final productos = await getProductos(soloActivos: true);
+    return productos.where((producto) => !producto.esDirecto).toList();
   }
 
   Future<Producto?> getProducto(int id) async {
@@ -263,8 +262,8 @@ class CatalogRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT r.insumo_id, i.nombre AS insumo_nombre,
-             u.abreviatura AS unidad_abreviatura, i.modo_control,
-             r.cantidad, i.disponible,
+             u.abreviatura AS unidad_abreviatura,
+             r.cantidad,
              COALESCE(s.stock, 0) AS stock
       FROM receta_insumos r
       INNER JOIN insumos i ON i.id = r.insumo_id
@@ -279,10 +278,8 @@ class CatalogRepository {
             insumoId: row['insumo_id']! as int,
             insumoNombre: row['insumo_nombre']! as String,
             unidadAbreviatura: row['unidad_abreviatura']! as String,
-            modoControl: row['modo_control']! as String,
             cantidad: (row['cantidad'] as num).toDouble(),
             stock: (row['stock'] as num).toDouble(),
-            disponible: (row['disponible'] as num).toInt() == 1,
           ),
         )
         .toList();
@@ -346,12 +343,8 @@ class CatalogRepository {
             nombre: row['nombre']! as String,
             unidadId: row['unidad_id']! as int,
             unidadAbreviatura: row['unidad_abreviatura']! as String,
-            modoControl: row['modo_control']! as String,
-            disponible: (row['disponible'] as num).toInt() == 1,
             stockMinimo: (row['stock_minimo'] as num).toDouble(),
             costoPromedio: (row['costo_promedio'] as num).toDouble(),
-            presentacionCompra: row['presentacion_compra'] as String?,
-            factorCompra: (row['factor_compra'] as num?)?.toDouble() ?? 1,
             activo: (row['activo'] as num).toInt() == 1,
             stock: (row['stock'] as num).toDouble(),
           ),
@@ -377,42 +370,34 @@ class CatalogRepository {
       nombre: row['nombre']! as String,
       unidadId: row['unidad_id']! as int,
       unidadAbreviatura: row['unidad_abreviatura']! as String,
-      modoControl: row['modo_control']! as String,
-      disponible: (row['disponible'] as num).toInt() == 1,
       stockMinimo: (row['stock_minimo'] as num).toDouble(),
       costoPromedio: (row['costo_promedio'] as num).toDouble(),
-      presentacionCompra: row['presentacion_compra'] as String?,
-      factorCompra: (row['factor_compra'] as num?)?.toDouble() ?? 1,
       activo: (row['activo'] as num).toInt() == 1,
       stock: (row['stock'] as num).toDouble(),
     );
   }
 
-  Future<void> saveInsumo(Insumo insumo) async {
+  Future<int> saveInsumo(Insumo insumo) async {
     final db = await AppDatabase.instance.database;
     final values = <String, Object?>{
       'nombre': insumo.nombre.trim(),
       'unidad_id': insumo.unidadId,
-      'modo_control': insumo.modoControl,
-      'disponible': insumo.disponible ? 1 : 0,
+      'modo_control': 'UNIDAD',
+      'disponible': 1,
       'stock_minimo': insumo.stockMinimo,
       'costo_promedio': insumo.costoPromedio,
-      'presentacion_compra': insumo.presentacionCompra?.trim().isEmpty == true
-          ? null
-          : insumo.presentacionCompra?.trim(),
-      'factor_compra': insumo.factorCompra,
       'activo': insumo.activo ? 1 : 0,
     };
     if (insumo.id == null) {
-      await db.insert('insumos', values);
-    } else {
-      await db.update(
-        'insumos',
-        values,
-        where: 'id = ?',
-        whereArgs: [insumo.id],
-      );
+      return db.insert('insumos', values);
     }
+    await db.update(
+      'insumos',
+      values,
+      where: 'id = ?',
+      whereArgs: [insumo.id],
+    );
+    return insumo.id!;
   }
 
   Future<void> setInsumoActivo(int id, bool activo) async {
@@ -420,16 +405,6 @@ class CatalogRepository {
     await db.update(
       'insumos',
       {'activo': activo ? 1 : 0},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  Future<void> setInsumoDisponible(int id, bool disponible) async {
-    final db = await AppDatabase.instance.database;
-    await db.update(
-      'insumos',
-      {'disponible': disponible ? 1 : 0},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -471,10 +446,6 @@ class CatalogRepository {
     final receta = await getReceta(productoId);
     if (receta.isEmpty) return 'Sin receta configurada';
     for (final linea in receta) {
-      if (linea.modoControl == 'DISPONIBILIDAD') {
-        if (!linea.disponible) return 'Falta ${linea.insumoNombre}';
-        continue;
-      }
       if (linea.stock < linea.cantidad * cantidad) {
         return 'Falta ${linea.insumoNombre}';
       }
@@ -482,18 +453,46 @@ class CatalogRepository {
     return null;
   }
 
-  Future<List<Producto>> getProductosSiempreDisponibles() async {
+  /// Fija el stock real de un insumo guardando la diferencia como ajuste.
+  Future<void> ajustarStockInsumo({
+    required int insumoId,
+    required double nuevoStock,
+    required int usuarioId,
+    String? motivo,
+  }) async {
+    final actual = await getStockInsumo(insumoId);
+    final diferencia = nuevoStock - actual;
+    if (diferencia.abs() < 0.0001) return;
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
-      SELECT p.*, c.nombre AS categoria_nombre, c.color AS categoria_color,
-             COALESCE(s.stock, 0) AS stock
-      FROM productos p
-      INNER JOIN categorias_producto c ON c.id = p.categoria_id
-      LEFT JOIN v_stock_productos s ON s.producto_id = p.id
-      WHERE p.activo = 1 AND c.activo = 1 AND c.siempre_disponible = 1
-      ORDER BY c.orden, p.nombre COLLATE NOCASE
-    ''');
-    return rows.map(_productFromRow).toList();
+    await db.insert('ajustes_stock', {
+      'fecha': sqlNow(),
+      'insumo_id': insumoId,
+      'producto_id': null,
+      'cantidad': diferencia,
+      'motivo': motivo,
+      'usuario_id': usuarioId,
+    });
+  }
+
+  /// Fija el stock real de un producto directo guardando la diferencia.
+  Future<void> ajustarStockProducto({
+    required int productoId,
+    required double nuevoStock,
+    required int usuarioId,
+    String? motivo,
+  }) async {
+    final actual = await getStockProducto(productoId);
+    final diferencia = nuevoStock - actual;
+    if (diferencia.abs() < 0.0001) return;
+    final db = await AppDatabase.instance.database;
+    await db.insert('ajustes_stock', {
+      'fecha': sqlNow(),
+      'insumo_id': null,
+      'producto_id': productoId,
+      'cantidad': diferencia,
+      'motivo': motivo,
+      'usuario_id': usuarioId,
+    });
   }
 
   Producto _productFromRow(Map<String, Object?> row) => Producto(
@@ -504,11 +503,17 @@ class CatalogRepository {
     categoriaColor: row['categoria_color']! as int,
     descripcion: row['descripcion'] as String?,
     precio: (row['precio'] as num).toDouble(),
-    imagen: row['imagen'] as Uint8List?,
+    imagen: _asBytes(row['imagen']),
     tipo: row['tipo']! as String,
     stockMinimo: (row['stock_minimo'] as num).toDouble(),
     costoUnitario: (row['costo_unitario'] as num).toDouble(),
     activo: (row['activo'] as num).toInt() == 1,
     stock: (row['stock'] as num?)?.toDouble() ?? 0,
   );
+
+  static Uint8List? _asBytes(Object? value) {
+    if (value is Uint8List) return value;
+    if (value is List<int>) return Uint8List.fromList(value);
+    return null;
+  }
 }

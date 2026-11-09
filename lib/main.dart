@@ -1,8 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'core/auth_repository.dart';
 import 'core/session.dart';
-import 'features/auth/presentation/first_run_page.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/shell/presentation/app_shell.dart';
 
@@ -81,7 +82,6 @@ class StartupGate extends StatefulWidget {
 class _StartupGateState extends State<StartupGate> {
   final _repository = AuthRepository();
   bool _loading = true;
-  bool _hayUsuarios = false;
   String? _error;
   Usuario? _usuario;
 
@@ -97,10 +97,20 @@ class _StartupGateState extends State<StartupGate> {
       _error = null;
     });
     try {
-      final hay = await _repository.hayUsuarios();
+      final usuario = await _repository
+          .restaurarSesion()
+          .timeout(const Duration(seconds: 30));
       if (!mounted) return;
       setState(() {
-        _hayUsuarios = hay;
+        _usuario = usuario;
+        if (usuario != null) Sesion.instance.iniciar(usuario);
+        _loading = false;
+      });
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _error =
+            'La base de datos tardó demasiado en abrir. Cierra la app y vuelve a intentar.';
         _loading = false;
       });
     } catch (error) {
@@ -112,12 +122,17 @@ class _StartupGateState extends State<StartupGate> {
     }
   }
 
-  void _login(Usuario usuario) {
+  Future<void> _login(Usuario usuario) async {
+    Sesion.instance.iniciar(usuario);
+    await _repository.guardarSesion(usuario.id);
+    if (!mounted) return;
     setState(() => _usuario = usuario);
   }
 
-  void _logout() {
+  Future<void> _logout() async {
+    await _repository.cerrarSesion();
     Sesion.instance.cerrar();
+    if (!mounted) return;
     setState(() => _usuario = null);
   }
 
@@ -153,9 +168,6 @@ class _StartupGateState extends State<StartupGate> {
     }
     if (_usuario != null) {
       return AppShell(usuario: _usuario!, onLogout: _logout);
-    }
-    if (!_hayUsuarios) {
-      return FirstRunPage(onCreated: _login);
     }
     return LoginPage(onLogin: _login);
   }
