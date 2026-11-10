@@ -45,11 +45,50 @@ class AuthRepository {
     return rows.first['password_hash'] == hashPassword('1234');
   }
 
+  /// Comprueba si el nombre de usuario está libre, sin distinguir mayúsculas.
+  Future<bool> usuarioDisponible(String usuario, {int? exceptoId}) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'usuarios',
+      columns: ['id'],
+      where: exceptoId == null
+          ? 'LOWER(usuario) = LOWER(?)'
+          : 'LOWER(usuario) = LOWER(?) AND id <> ?',
+      whereArgs: exceptoId == null
+          ? [usuario.trim()]
+          : [usuario.trim(), exceptoId],
+      limit: 1,
+    );
+    return rows.isEmpty;
+  }
+
+  /// Guarda el usuario y la contraseña definitivos del primer acceso y
+  /// desactiva la obligación de cambiarlos.
+  Future<void> actualizarCredenciales({
+    required int usuarioId,
+    required String usuario,
+    required String password,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      await txn.update(
+        'usuarios',
+        {
+          'usuario': usuario.trim(),
+          'password_hash': hashPassword(password),
+          'debe_cambiar_password': 0,
+        },
+        where: 'id = ?',
+        whereArgs: [usuarioId],
+      );
+    });
+  }
+
   Future<Usuario?> login(String usuario, String password) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
       'usuarios',
-      where: 'usuario = ? AND activo = 1',
+      where: 'LOWER(usuario) = LOWER(?) AND activo = 1',
       whereArgs: [usuario.trim()],
       limit: 1,
     );
@@ -200,7 +239,10 @@ class AuthRepository {
     final db = await AppDatabase.instance.database;
     await db.update(
       'usuarios',
-      {'password_hash': hashPassword(password)},
+      {
+        'password_hash': hashPassword(password),
+        'debe_cambiar_password': 0,
+      },
       where: 'id = ?',
       whereArgs: [usuarioId],
     );
@@ -215,6 +257,8 @@ class AuthRepository {
             ? row['perfil']! as String
             : (row['rol'] == 'ADMIN' ? Perfil.admin : Perfil.cajero),
     activo: (row['activo'] as num? ?? 1).toInt() == 1,
+    debeCambiarPassword:
+        (row['debe_cambiar_password'] as num? ?? 0).toInt() == 1,
     permisos: permisos,
   );
 }

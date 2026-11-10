@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/auth_repository.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
+import '../../backup/presentation/backup_page.dart';
 import '../../cash/presentation/cash_page.dart';
 import '../../dashboard/presentation/dashboard_page.dart';
 import '../../inventory/presentation/inventory_page.dart';
@@ -54,6 +55,17 @@ class _AppShellState extends State<AppShell> {
     );
     if (cambiada == true && mounted) {
       showAppMessage(context, 'Contraseña actualizada.');
+    }
+  }
+
+  Future<void> _abrirRespaldo() async {
+    final restaurado = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const BackupPage()),
+    );
+    if (restaurado == true && mounted) {
+      // La base cambió por completo: se cierra la sesión para que el usuario
+      // entre con las credenciales del archivo restaurado.
+      widget.onLogout();
     }
   }
 
@@ -163,14 +175,20 @@ class _AppShellState extends State<AppShell> {
           tooltip: 'Sesión',
           onSelected: (value) {
             if (value == 'password') _cambiarPassword();
+            if (value == 'backup') _abrirRespaldo();
             if (value == 'logout') widget.onLogout();
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
+          itemBuilder: (context) => [
+            const PopupMenuItem(
               value: 'password',
               child: Text('Cambiar mi contraseña'),
             ),
-            PopupMenuItem(value: 'logout', child: Text('Cerrar sesión')),
+            if (widget.usuario.esAdmin)
+              const PopupMenuItem(
+                value: 'backup',
+                child: Text('Respaldo y restauración'),
+              ),
+            const PopupMenuItem(value: 'logout', child: Text('Cerrar sesión')),
           ],
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -420,8 +438,8 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   label: 'Nueva contraseña',
                   icon: Icons.lock_reset_outlined,
                 ),
-                validator: (value) => (value == null || value.length < 4)
-                    ? 'Usa al menos 4 caracteres'
+                validator: (value) => (value == null || value.length < 8)
+                    ? 'Usa al menos 8 caracteres'
                     : null,
               ),
               const SizedBox(height: 12),

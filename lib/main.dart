@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'core/auth_repository.dart';
 import 'core/session.dart';
 import 'features/auth/presentation/login_page.dart';
+import 'features/auth/presentation/onboarding_admin_page.dart';
 import 'features/shell/presentation/app_shell.dart';
 
 void main() {
@@ -136,6 +137,13 @@ class _StartupGateState extends State<StartupGate> {
     setState(() => _usuario = null);
   }
 
+  /// El primer acceso obligatorio terminó: se continúa sin volver a pedir
+  /// credenciales.
+  void _completarPrimerAcceso(Usuario usuario) {
+    Sesion.instance.iniciar(usuario);
+    setState(() => _usuario = usuario);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -167,7 +175,15 @@ class _StartupGateState extends State<StartupGate> {
       );
     }
     if (_usuario != null) {
-      return AppShell(usuario: _usuario!, onLogout: _logout);
+      final usuario = _usuario!;
+      if (usuario.debeCambiarPassword) {
+        return OnboardingAdminPage(
+          usuario: usuario,
+          onCompletado: _completarPrimerAcceso,
+          onLogout: _logout,
+        );
+      }
+      return AppShell(usuario: usuario, onLogout: _logout);
     }
     return LoginPage(onLogin: _login);
   }

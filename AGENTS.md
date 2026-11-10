@@ -26,11 +26,21 @@ Flutter app (POS de restaurante "Sazón"). Paquete Dart: `test_code_02` — los 
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 5`; DB file `sazon_restaurante_v2.db`. `PRAGMA foreign_keys = ON`.
+- `version: 6` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. `PRAGMA foreign_keys = ON`.
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
+- `app_meta` (fila única): `instalacion_id` (UUID estable de la instalación) y fecha del último
+  respaldo. Se escribe **antes** de copiar el archivo, así la fecha viaja dentro del respaldo.
 - Import condicional de factory: `database_factory_web.dart if (dart.library.io) database_factory_io.dart`
   (sqflite vs sqflite_common_ffi_web). No romper este patrón.
+
+## Respaldo
+- `lib/core/backup/backup_service.dart` exporta condicionalmente `backup_service_io.dart` o
+  `backup_service_web.dart` (en web solo funciona la exportación a Excel).
+- Flujo: `AppDatabase.instance.close()` → copiar el `.db` → validar cabecera `SQLite format 3\0`.
+  Restaurar reemplaza todo, guarda antes una copia en `<documentos>/respaldos_seguridad/` (máx. 5)
+  y revierte si `PRAGMA integrity_check` falla.
+- `excel_exporter.dart` genera una hoja por tabla; excluye `password_hash` y el BLOB `imagen`.
 
 ## Convenciones / gotchas
 - Login por defecto sembrado: usuario `admin` / contraseña `1234` (hash SHA-256, `lib/core/password_utils.dart`).

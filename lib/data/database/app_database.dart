@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
@@ -12,6 +14,12 @@ class AppDatabase {
   AppDatabase._();
 
   static final AppDatabase instance = AppDatabase._();
+
+  /// Versión de esquema actual. Subir junto con `onUpgrade`.
+  static const int schemaVersion = 6;
+
+  static const String nombreArchivo = 'sazon_restaurante_v2.db';
+
   Database? _database;
 
   Future<Database> get database async {
@@ -20,25 +28,72 @@ class AppDatabase {
     return _database!;
   }
 
+  /// Ruta absoluta del archivo SQLite (solo tiene sentido en plataformas
+  /// nativas; en web la base vive en IndexedDB).
+  Future<String> get rutaArchivo async =>
+      join(await getDatabasesPath(), nombreArchivo);
+
   Future<void> close() async {
     await _database?.close();
     _database = null;
   }
 
+  /// Metadatos de la instalación (identificador y último respaldo).
+  Future<Map<String, Object?>?> leerAppMeta() async {
+    final db = await database;
+    final rows = await db.query('app_meta', limit: 1);
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  Future<String> get instalacionId async {
+    final meta = await leerAppMeta();
+    return (meta?['instalacion_id'] as String?) ?? '';
+  }
+
+  /// Registra la fecha del respaldo dentro del propio archivo. Se llama justo
+  /// antes de cerrar la base y copiarla.
+  Future<void> marcarRespaldo({
+    required String motivo,
+    required String appVersion,
+  }) async {
+    final db = await database;
+    await db.update(
+      'app_meta',
+      {
+        'ultimo_respaldo_en': sqlNow(),
+        'ultimo_respaldo_app': appVersion,
+        'ultimo_respaldo_motivo': motivo,
+      },
+      where: 'id = 1',
+    );
+  }
+
   Future<Database> _openDatabase() async {
     configureDatabaseFactory();
-    final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
+    final path = await rutaArchivo;
     return openDatabase(
       path,
-      version: 5,
+      version: schemaVersion,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
-      onCreate: _createSchema,
+      onCreate: (db, version) async {
+        await _createSchema(db, version);
+        await _afterOpen(db);
+      },
       onUpgrade: (db, oldVersion, newVersion) async {
         await _createSchema(db, newVersion);
         await _migrarPerfiles(db);
         await _migrarModosInsumo(db);
+        await _migrarPrimerAcceso(db);
+        await _afterOpen(db);
       },
     );
+  }
+
+  /// Datos base que deben existir después de crear o actualizar el esquema.
+  Future<void> _afterOpen(Database db) async {
+    await _seedUnits(db);
+    await _seedDefaultAdmin(db);
+    await _seedAppMeta(db);
   }
 
   Future<void> _createSchema(Database db, int version) async {
@@ -59,7 +114,22 @@ class AppDatabase {
         turno_asignado TEXT CHECK (turno_asignado IN ('MAÑANA','TARDE','AMBOS')),
         sueldo_base REAL NOT NULL DEFAULT 0,
         activo INTEGER NOT NULL DEFAULT 1,
+        debe_cambiar_password INTEGER NOT NULL DEFAULT 0,
         creado_en TEXT NOT NULL
+      )
+    ''');
+
+    // Metadatos de la instalación y de la última copia de seguridad. Se
+    // escriben dentro del propio archivo para que la fecha del respaldo
+    // sobreviva a renombrados, reenvíos y descargas.
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS app_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        instalacion_id TEXT NOT NULL,
+        nombre_negocio TEXT NOT NULL DEFAULT 'Sazón',
+        ultimo_respaldo_en TEXT,
+        ultimo_respaldo_app TEXT,
+        ultimo_respaldo_motivo TEXT
       )
     ''');
 
@@ -473,9 +543,6 @@ class AppDatabase {
     ''');
 
     await batch.commit(noResult: true);
-
-    await _seedUnits(db);
-    await _seedDefaultAdmin(db);
   }
 
   /// Todos los insumos pasan a controlarse por cantidad.
@@ -520,7 +587,7 @@ class AppDatabase {
         ) ??
         0;
     if (count > 0) return;
-    final id = await db.insert('usuarios', {
+    final values = <String, Object?>{
       'nombre': 'Administrador',
       'usuario': 'admin',
       'password_hash': hashPassword('1234'),
@@ -530,13 +597,79 @@ class AppDatabase {
       'sueldo_base': 0,
       'activo': 1,
       'creado_en': sqlNow(),
-    });
+    };
+    // En bases antiguas la columna se agrega en `_migrarPrimerAcceso`, por eso
+    // se comprueba antes de escribirla.
+    if (await _tieneColumna(db, 'usuarios', 'debe_cambiar_password')) {
+      values['debe_cambiar_password'] = 1;
+    }
+    final id = await db.insert('usuarios', values);
     for (final permiso in Permiso.todos) {
       await db.insert('usuario_permisos', {
         'usuario_id': id,
         'permiso': permiso,
       });
     }
+  }
+
+  Future<bool> _tieneColumna(
+    Database db,
+    String tabla,
+    String columna,
+  ) async {
+    final columnas = await db.rawQuery('PRAGMA table_info($tabla)');
+    return columnas.any((c) => c['name'] == columna);
+  }
+
+  /// Crea la fila única de metadatos con un identificador estable de la
+  /// instalación. Ese identificador viaja dentro de cada respaldo.
+  Future<void> _seedAppMeta(Database db) async {
+    final count =
+        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM app_meta')) ??
+        0;
+    if (count > 0) return;
+    await db.insert('app_meta', {
+      'id': 1,
+      'instalacion_id': _nuevoInstalacionId(),
+      'nombre_negocio': 'Sazón',
+    });
+  }
+
+  /// Agrega `debe_cambiar_password` y marca al administrador que todavía usa
+  /// la contraseña por defecto. Quien ya la cambió no vuelve a ver el aviso.
+  Future<void> _migrarPrimerAcceso(Database db) async {
+    try {
+      final tieneColumna = await _tieneColumna(
+        db,
+        'usuarios',
+        'debe_cambiar_password',
+      );
+      if (!tieneColumna) {
+        await db.execute(
+          'ALTER TABLE usuarios ADD COLUMN debe_cambiar_password INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      await db.rawUpdate(
+        "UPDATE usuarios SET debe_cambiar_password = 1 "
+        "WHERE perfil = 'ADMIN' AND password_hash = ?",
+        [hashPassword('1234')],
+      );
+    } catch (error) {
+      debugPrint('No se pudo migrar el primer acceso: $error');
+    }
+  }
+
+  static String _nuevoInstalacionId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    // UUID v4 según RFC 4122.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int from, int to) => bytes
+        .sublist(from, to)
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
   }
 
   /// Agrega la columna `perfil` a usuarios y la deja sincronizada con el rol.

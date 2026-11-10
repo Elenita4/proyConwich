@@ -38,10 +38,11 @@ dependencies:
   path: ^1.9.1
   sqflite_common_ffi_web: ^1.2.0
   image_picker: ^1.2.0
-  pdf: ^3.13.1
-  printing: ^5.15.1
   share_plus: ^13.3.1
   crypto: ^3.0.6
+  path_provider: ^2.1.6
+  file_picker: ^13.3.3
+  excel: ^4.0.6
 
 dev_dependencies:
   flutter_test:

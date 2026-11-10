@@ -370,8 +370,8 @@ class _UserDialogState extends State<_UserDialog> {
                   ),
                   validator: (value) {
                     if (widget.usuario == null) {
-                      if (value == null || value.length < 4) {
-                        return 'Usa al menos 4 caracteres';
+                      if (value == null || value.length < 8) {
+                        return 'Usa al menos 8 caracteres';
                       }
                     }
                     return null;

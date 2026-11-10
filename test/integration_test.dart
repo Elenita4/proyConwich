@@ -41,6 +41,7 @@ void main() {
     final admin = (await auth.login('admin', '1234'))!;
     expect(admin.esAdmin, isTrue);
     expect(admin.usuario, 'admin');
+    expect(admin.debeCambiarPassword, isTrue);
 
     await auth.guardarSesion(admin.id);
     expect((await auth.restaurarSesion())?.id, admin.id);
@@ -440,19 +441,30 @@ void main() {
 
     final db = await AppDatabase.instance.database;
     final version = await db.rawQuery('PRAGMA user_version');
-    expect((version.first['user_version'] as num).toInt(), 5);
+    expect(
+      (version.first['user_version'] as num).toInt(),
+      AppDatabase.schemaVersion,
+    );
     final tablas = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ajustes_stock'",
     );
     expect(tablas.length, 1);
     final columnas = await db.rawQuery('PRAGMA table_info(usuarios)');
     expect(columnas.any((c) => c['name'] == 'perfil'), isTrue);
+    expect(
+      columnas.any((c) => c['name'] == 'debe_cambiar_password'),
+      isTrue,
+    );
+    final meta = await AppDatabase.instance.leerAppMeta();
+    expect(meta, isNotNull);
+    expect((meta!['instalacion_id'] as String).length, 36);
 
     final auth = AuthRepository();
     final admin = await auth.login('admin', '1234');
     expect(admin, isNotNull);
     expect(admin!.esAdmin, isTrue);
     expect(admin.perfil, Perfil.admin);
+    expect(admin.debeCambiarPassword, isTrue);
     expect((await auth.getUsuarios()).length, 1);
 
     final catalog = CatalogRepository();

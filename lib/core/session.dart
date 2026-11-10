@@ -62,6 +62,7 @@ class Usuario {
     required this.usuario,
     required this.perfil,
     required this.activo,
+    this.debeCambiarPassword = false,
     Set<String>? permisos,
   }) : permisos = permisos ?? <String>{};
 
@@ -70,9 +71,34 @@ class Usuario {
   final String usuario;
   final String perfil;
   final bool activo;
+
+  /// `true` cuando la cuenta todavía usa credenciales por defecto
+  /// (`admin` / `1234`) y debe pasar por el primer acceso obligatorio.
+  final bool debeCambiarPassword;
+
   final Set<String> permisos;
 
   bool get esAdmin => perfil == Perfil.admin;
+
+  Usuario copyWith({
+    String? nombre,
+    String? usuario,
+    String? perfil,
+    bool? activo,
+    bool? debeCambiarPassword,
+    Set<String>? permisos,
+  }) {
+    return Usuario(
+      id: id,
+      nombre: nombre ?? this.nombre,
+      usuario: usuario ?? this.usuario,
+      perfil: perfil ?? this.perfil,
+      activo: activo ?? this.activo,
+      debeCambiarPassword:
+          debeCambiarPassword ?? this.debeCambiarPassword,
+      permisos: permisos ?? this.permisos,
+    );
+  }
 
   String get nombrePerfil => Perfil.nombres[perfil] ?? perfil;
 
