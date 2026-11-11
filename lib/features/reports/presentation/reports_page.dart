@@ -143,95 +143,109 @@ class _ReportsPageState extends State<ReportsPage> {
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
       length: 3,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                PageHeader(
-                  title: 'Reportes',
-                  subtitle:
-                      'Resultado = ventas − costo de insumos − salidas. Flujo de caja = cobros − salidas.',
-                  actions: [
-                    OutlinedButton.icon(
-                      onPressed: () => setState(_reload),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Actualizar'),
-                    ),
-                  ],
-                ),
-                AppCard(
-                  padding: const EdgeInsets.all(12),
-                  child: Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      ChoiceChipRow<String>(
-                        values: _periodos,
-                        labelBuilder: _labelPeriodo,
-                        selected: _periodo,
-                        onSelected: (value) => setState(() {
-                          _periodo = value;
-                          _anchor = DateTime.now();
-                          _reload();
-                        }),
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton(
-                        tooltip: 'Período anterior',
-                        onPressed: () => _mover(-1),
-                        icon: const Icon(Icons.chevron_left),
-                      ),
-                      Text(
-                        '${formatDateShort(range.start)} — ${formatDateShort(finMostrar)}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      IconButton(
-                        tooltip: 'Período siguiente',
-                        onPressed: () => _mover(1),
-                        icon: const Icon(Icons.chevron_right),
+      child: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+                12,
+                esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+                0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PageHeader(
+                    title: 'Reportes',
+                    subtitle:
+                        'Resultado = ventas − costo de insumos − salidas. Flujo de caja = cobros − salidas.',
+                    actions: [
+                      OutlinedButton.icon(
+                        onPressed: () => setState(_reload),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Actualizar'),
                       ),
                     ],
                   ),
-                ),
-              ],
+                  AppCard(
+                    padding: const EdgeInsets.all(12),
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        ChoiceChipRow<String>(
+                          values: _periodos,
+                          labelBuilder: _labelPeriodo,
+                          selected: _periodo,
+                          onSelected: (value) => setState(() {
+                            _periodo = value;
+                            _anchor = DateTime.now();
+                            _reload();
+                          }),
+                        ),
+                        const SizedBox(width: 10),
+                        IconButton(
+                          tooltip: 'Período anterior',
+                          onPressed: () => _mover(-1),
+                          icon: const Icon(Icons.chevron_left),
+                        ),
+                        Text(
+                          '${formatDateShort(range.start)} — ${formatDateShort(finMostrar)}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        IconButton(
+                          tooltip: 'Período siguiente',
+                          onPressed: () => _mover(1),
+                          icon: const Icon(Icons.chevron_right),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          const TabBar(
-            tabs: [
-              Tab(icon: Icon(Icons.summarize_outlined), text: 'Resumen'),
-              Tab(icon: Icon(Icons.lunch_dining_outlined), text: 'Productos'),
-              Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Inventario'),
-            ],
-          ),
-          Expanded(
-            child: FutureBuilder<_ReportData>(
-              future: _future,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const LoadingView();
-                }
-                if (snapshot.hasError) {
-                  return ErrorView(
-                    message: '${snapshot.error}',
-                    onRetry: () => setState(_reload),
-                  );
-                }
-                final data = snapshot.data!;
-                return TabBarView(
-                  children: [
-                    _resumenTab(context, data),
-                    _productosTab(context, data),
-                    _inventarioTab(context, data),
-                  ],
-                );
-              },
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _TabBarHeader(
+              tabBar: const TabBar(
+                tabs: [
+                  Tab(icon: Icon(Icons.summarize_outlined), text: 'Resumen'),
+                  Tab(icon: Icon(Icons.lunch_dining_outlined), text: 'Productos'),
+                  Tab(
+                    icon: Icon(Icons.inventory_2_outlined),
+                    text: 'Inventario',
+                  ),
+                ],
+              ),
+              color: Theme.of(context).scaffoldBackgroundColor,
             ),
           ),
         ],
+        body: FutureBuilder<_ReportData>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const LoadingView();
+            }
+            if (snapshot.hasError) {
+              return ErrorView(
+                message: '${snapshot.error}',
+                onRetry: () => setState(_reload),
+              );
+            }
+            final data = snapshot.data!;
+            return TabBarView(
+              children: [
+                _resumenTab(context, data),
+                _productosTab(context, data),
+                _inventarioTab(context, data),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -240,7 +254,9 @@ class _ReportsPageState extends State<ReportsPage> {
     final resumen = data.resumen;
     final scheme = Theme.of(context).colorScheme;
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
       children: [
         StatGrid(
           children: [
@@ -365,7 +381,9 @@ class _ReportsPageState extends State<ReportsPage> {
       );
     }
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
       children: [
         AppCard(
           padding: EdgeInsets.zero,
@@ -416,7 +434,9 @@ class _ReportsPageState extends State<ReportsPage> {
     );
     final alertas = data.inventario.where((item) => item.alerta).length;
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
       children: [
         StatGrid(
           children: [
@@ -497,4 +517,30 @@ class _ReportsPageState extends State<ReportsPage> {
       ],
     );
   }
+}
+
+class _TabBarHeader extends SliverPersistentHeaderDelegate {
+  const _TabBarHeader({required this.tabBar, required this.color});
+
+  final TabBar tabBar;
+  final Color color;
+
+  @override
+  double get minExtent => tabBar.preferredSize.height;
+
+  @override
+  double get maxExtent => tabBar.preferredSize.height;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return ColoredBox(color: color, child: tabBar);
+  }
+
+  @override
+  bool shouldRebuild(covariant _TabBarHeader oldDelegate) =>
+      oldDelegate.tabBar != tabBar || oldDelegate.color != color;
 }

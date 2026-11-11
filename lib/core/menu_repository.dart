@@ -178,6 +178,60 @@ class MenuRepository {
     );
   }
 
+  /// Deja el menú exactamente con los productos indicados, en ese orden.
+  Future<void> reemplazarItems(
+    int menuDiaId,
+    List<int> productoIds,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'menu_dia_items',
+        where: 'menu_dia_id = ?',
+        whereArgs: [menuDiaId],
+      );
+      var orden = 0;
+      for (final productoId in productoIds.toSet()) {
+        orden++;
+        await txn.insert(
+          'menu_dia_items',
+          {
+            'menu_dia_id': menuDiaId,
+            'producto_id': productoId,
+            'disponible': 1,
+            'orden': orden,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+    });
+  }
+
+  /// Productos del último menú del mismo tipo anterior a [fecha].
+  Future<List<int>> getProductosMenuAnterior(
+    DateTime fecha,
+    String tipo,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final anteriores = await db.query(
+      'menus_dia',
+      columns: ['id'],
+      where: 'tipo = ? AND fecha < ?',
+      whereArgs: [tipo, sqlDate(fecha)],
+      orderBy: 'fecha DESC',
+      limit: 1,
+    );
+    if (anteriores.isEmpty) return <int>[];
+    final items = await db.query(
+      'menu_dia_items',
+      columns: ['producto_id'],
+      where: 'menu_dia_id = ?',
+      whereArgs: [anteriores.first['id']],
+      orderBy: 'orden',
+    );
+    return items.map((item) => item['producto_id']! as int).toList();
+  }
+
   Future<void> quitarItem(int itemId) async {
     final db = await AppDatabase.instance.database;
     await db.delete('menu_dia_items', where: 'id = ?', whereArgs: [itemId]);

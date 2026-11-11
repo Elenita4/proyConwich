@@ -104,7 +104,9 @@ class _DashboardPageState extends State<DashboardPage> {
       future: _future,
       builder: (context, snapshot) {
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -363,13 +365,16 @@ class _DashboardPageState extends State<DashboardPage> {
                 color: alertas.isEmpty ? scheme.primary : scheme.error,
               ),
               const SizedBox(width: 8),
-              Text(
-                'Alertas de stock',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Text(
+                  'Alertas de stock',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
-              const Spacer(),
               Text(
                 '${alertas.length}',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(

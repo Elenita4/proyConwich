@@ -84,7 +84,9 @@ class _UsersPageState extends State<UsersPage> {
       builder: (context, snapshot) {
         final usuarios = snapshot.data ?? [];
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -122,84 +124,121 @@ class _UsersPageState extends State<UsersPage> {
                         horizontal: 16,
                         vertical: 12,
                       ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            child: Text(usuario.inicial),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            flex: 3,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final angosto = esAngosto(
+                            constraints.maxWidth,
+                            limite: 680,
+                          );
+                          final info = Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 22,
+                                child: Text(usuario.inicial),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
                                   children: [
-                                    Flexible(
-                                      child: Text(
-                                        usuario.nombre,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleSmall
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                      ),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 4,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      children: [
+                                        Text(
+                                          usuario.nombre,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                        if (usuario.id ==
+                                            widget.usuario.id)
+                                          const Chip(
+                                            label: Text('Tú'),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                          ),
+                                      ],
                                     ),
-                                    if (usuario.id == widget.usuario.id) ...[
-                                      const SizedBox(width: 8),
-                                      const Chip(
-                                        label: Text('Tú'),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    ],
+                                    Text(
+                                      '@${usuario.usuario} · ${usuario.nombrePerfil}',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
                                   ],
                                 ),
-                                Text(
-                                  '@${usuario.usuario} · ${usuario.nombrePerfil}',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Text(
-                              usuario.esAdmin
-                                  ? 'Administrador · todas las vistas'
-                                  : '${usuario.permisos.length} vista(s)',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
                               ),
+                            ],
+                          );
+                          final permisos = Text(
+                            usuario.esAdmin
+                                ? 'Administrador · todas las vistas'
+                                : '${usuario.permisos.length} vista(s)',
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
-                          ),                          Chip(
-                            label: Text(usuario.activo ? 'Activo' : 'Inactivo'),
+                          );
+                          final estado = Chip(
+                            label: Text(
+                              usuario.activo ? 'Activo' : 'Inactivo',
+                            ),
                             side: BorderSide.none,
                             backgroundColor: usuario.activo
                                 ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(context).colorScheme.surfaceContainerHighest,
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHighest,
                             visualDensity: VisualDensity.compact,
-                          ),
-                          Switch(
-                            value: usuario.activo,
-                            onChanged: (value) => _toggle(usuario, value),
-                          ),
-                          IconButton(
-                            tooltip: 'Editar',
-                            onPressed: () => _openForm(usuario),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                        ],
+                          );
+                          final acciones = Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              estado,
+                              Switch(
+                                value: usuario.activo,
+                                onChanged: (value) =>
+                                    _toggle(usuario, value),
+                              ),
+                              IconButton(
+                                tooltip: 'Editar',
+                                onPressed: () => _openForm(usuario),
+                                icon: const Icon(Icons.edit_outlined),
+                              ),
+                            ],
+                          );
+                          if (angosto) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                info,
+                                const SizedBox(height: 6),
+                                permisos,
+                                acciones,
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(flex: 3, child: info),
+                              Expanded(flex: 2, child: permisos),
+                              acciones,
+                            ],
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -303,12 +342,13 @@ class _UserDialogState extends State<_UserDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text(
         widget.usuario == null ? 'Nuevo usuario' : 'Editar usuario',
       ),
-      content: SizedBox(
-        width: 600,
-        height: 560,
+      content: DialogSurface(
+        maxWidth: 600,
+        maxHeightFactor: 0.85,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -390,7 +430,10 @@ class _UserDialogState extends State<_UserDialog> {
                       : (value) => setState(() => _activo = value),
                 ),
                 const Divider(height: 20),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
                       'Vistas y permisos',
@@ -398,7 +441,6 @@ class _UserDialogState extends State<_UserDialog> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(width: 8),
                     if (_esAdmin)
                       const Chip(
                         label: Text('El administrador tiene todas'),
@@ -415,7 +457,8 @@ class _UserDialogState extends State<_UserDialog> {
                         label: const Text('Aplicar vistas del rol'),
                       ),
                   ],
-                ),                const SizedBox(height: 4),
+                ),
+                const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
                   runSpacing: 4,

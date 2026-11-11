@@ -211,9 +211,13 @@ class _BackupPageState extends State<BackupPage> {
         final scheme = Theme.of(context).colorScheme;
         final bloqueado = !compatible || !inspeccion.integridadOk;
         return AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 20,
+          ),
           title: const Text('Verificar copia'),
-          content: SizedBox(
-            width: 470,
+          content: DialogSurface(
+            maxWidth: 470,
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -335,7 +339,9 @@ class _BackupPageState extends State<BackupPage> {
       body: _cargando
           ? const LoadingView()
           : ListView(
-              padding: const EdgeInsets.all(24),
+              padding: EdgeInsets.all(
+                esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+              ),
               children: [
                 PageHeader(
                   title: 'Tus datos, bajo tu control',
@@ -603,7 +609,7 @@ class _Dato extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 150,
+            width: 120,
             child: Text(
               etiqueta,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(

@@ -189,7 +189,9 @@ class _CashPageState extends State<CashPage> {
       builder: (context, snapshot) {
         final data = snapshot.data;
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -353,49 +355,80 @@ class _CashPageState extends State<CashPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(
-                      Icons.account_balance_wallet,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final angosto = esAngosto(
+                    constraints.maxWidth,
+                    limite: 700,
+                  );
+                  final informacion = Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: scheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(
+                          Icons.account_balance_wallet,
+                          color: scheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Caja abierta · Turno ${caja.turno}',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            Text(
+                              '${formatDateShort(parseSqlDate(caja.fecha))} · apertura ${formatDateTimeText(caja.fechaApertura)} · ${caja.usuarioApertura}',
+                              style: TextStyle(color: scheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                  final acciones = Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Chip(
+                        label: const Text('ABIERTA'),
+                        backgroundColor: scheme.primaryContainer,
+                        side: BorderSide.none,
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : () => _salida(data),
+                        icon: const Icon(Icons.outbox),
+                        label: const Text('Salida de caja'),
+                      ),
+                    ],
+                  );
+                  if (angosto) {
+                    return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Caja abierta · Turno ${caja.turno}',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          '${formatDateShort(parseSqlDate(caja.fecha))} · apertura ${formatDateTimeText(caja.fechaApertura)} · ${caja.usuarioApertura}',
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
+                        informacion,
+                        const SizedBox(height: 10),
+                        acciones,
                       ],
-                    ),
-                  ),
-                  Chip(
-                    label: const Text('ABIERTA'),
-                    backgroundColor: scheme.primaryContainer,
-                    side: BorderSide.none,
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : () => _salida(data),
-                    icon: const Icon(Icons.outbox),
-                    label: const Text('Salida de caja'),
-                  ),
-                ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: informacion),
+                      const SizedBox(width: 8),
+                      acciones,
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 18),
               StatGrid(
@@ -613,9 +646,10 @@ class _SalidaDialogState extends State<_SalidaDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: const Text('Salida de caja'),
-      content: SizedBox(
-        width: 420,
+      content: DialogSurface(
+        maxWidth: 420,
         child: Form(
           key: _formKey,
           child: Column(
@@ -723,52 +757,71 @@ class _CajaHistorialRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final icono = Icon(
+      caja.abierta ? Icons.lock_open : Icons.check_circle_outline,
+      color: caja.abierta ? scheme.tertiary : scheme.primary,
+    );
+    final fecha = Text(
+      '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turno}',
+      style: const TextStyle(fontWeight: FontWeight.w600),
+    );
+    final fondo = Text(
+      'Fondo ${formatMoney(caja.fondoInicial)}',
+      style: TextStyle(color: scheme.onSurfaceVariant),
+    );
+    final cierre = Text(
+      caja.fechaCierre == null
+          ? 'Sin cerrar'
+          : 'Cierre ${formatDateTimeText(caja.fechaCierre!)}',
+      style: TextStyle(color: scheme.onSurfaceVariant),
+    );
+    final contado = caja.efectivoContado == null
+        ? null
+        : Text(
+            'Efectivo contado ${formatMoney(caja.efectivoContado!)}',
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          );
+    final estado = Chip(
+      label: Text(caja.estado),
+      side: BorderSide.none,
+      visualDensity: VisualDensity.compact,
+    );
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Icon(
-            caja.abierta
-                ? Icons.lock_open
-                : Icons.check_circle_outline,
-            color: caja.abierta ? scheme.tertiary : scheme.primary,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 2,
-            child: Text(
-              '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turno}',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              'Fondo ${formatMoney(caja.fondoInicial)}',
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              caja.fechaCierre == null
-                  ? 'Sin cerrar'
-                  : 'Cierre ${formatDateTimeText(caja.fechaCierre!)}',
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
-          ),
-          if (caja.efectivoContado != null)
-            Text(
-              'Efectivo contado ${formatMoney(caja.efectivoContado!)}',
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
-          const SizedBox(width: 10),
-          Chip(
-            label: Text(caja.estado),
-            side: BorderSide.none,
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (!esAngosto(constraints.maxWidth, limite: 760)) {
+            return Row(
+              children: [
+                icono,
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: fecha),
+                Expanded(flex: 2, child: fondo),
+                Expanded(flex: 2, child: cierre),
+                ?contado,
+                const SizedBox(width: 10),
+                estado,
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  icono,
+                  const SizedBox(width: 10),
+                  Expanded(child: fecha),
+                  estado,
+                ],
+              ),
+              const SizedBox(height: 4),
+              fondo,
+              cierre,
+              ?contado,
+            ],
+          );
+        },
       ),
     );
   }

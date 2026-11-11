@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart';
@@ -470,5 +471,303 @@ void main() {
     final catalog = CatalogRepository();
     final unidades = await catalog.getUnidades();
     expect(unidades.isNotEmpty, isTrue);
+  });
+
+  test('venta directa desde insumos crea producto con receta de 1 unidad', () async {
+    final auth = AuthRepository();
+    final admin = (await auth.login('admin', '1234'))!;
+    final catalog = CatalogRepository();
+    await catalog.saveCategoria(
+      const CategoriaProducto(
+        nombre: 'Bebidas',
+        color: 0xFF2563EB,
+        siempreDisponible: false,
+        orden: 1,
+        activo: true,
+      ),
+    );
+    final unidades = await catalog.getUnidades();
+    final bebidas = (await catalog.getCategorias()).firstWhere(
+      (categoria) => categoria.nombre == 'Bebidas',
+    );
+    final litro = unidades.firstWhere((u) => u.abreviatura == 'L');
+    final mililitro = unidades.firstWhere((u) => u.abreviatura == 'ml');
+    expect(litro.familia, 'VOLUMEN');
+    expect(litro.factorBase, 1000);
+    expect(mililitro.factorBase, 1);
+
+    final insumoId = await catalog.saveInsumo(
+      Insumo(
+        nombre: 'Leche',
+        unidadId: litro.id,
+        unidadAbreviatura: litro.abreviatura,
+        unidadNombre: litro.nombre,
+        unidadFamilia: litro.familia,
+        unidadFactorBase: litro.factorBase,
+        stockMinimo: 0,
+        costoPromedio: 2,
+        activo: true,
+        stock: 0,
+        ventaDirecta: true,
+        precioVenta: 5,
+        categoriaVentaDirectaId: bebidas.id,
+        imagen: Uint8List.fromList([1, 2, 3, 4]),
+      ),
+    );
+    var insumo = (await catalog.getInsumo(insumoId))!;
+    expect(insumo.productoId, isNotNull);
+    final producto = (await catalog.getProducto(insumo.productoId!))!;
+    expect(producto.precio, 5);
+    expect(producto.esVentaDirecta, isTrue);
+    expect(producto.categoriaId, bebidas.id);
+    expect(producto.imagen, isNotNull);
+
+    final receta = await catalog.getReceta(producto.id!);
+    expect(receta.length, 1);
+    expect(receta.first.insumoId, insumoId);
+    expect(receta.first.cantidad, 1);
+
+    await catalog.ajustarStockInsumo(
+      insumoId: insumoId,
+      nuevoStock: 30,
+      usuarioId: admin.id,
+      motivo: 'Carga inicial',
+    );
+    final cash = CashRepository();
+    final caja = await cash.abrirCaja(
+      fecha: DateTime.now(),
+      turno: 'MAÑANA',
+      fondoInicial: 0,
+      usuarioId: admin.id,
+    );
+    final sales = SalesRepository();
+    await sales.crearPedido(
+      usuarioId: admin.id,
+      cajaId: caja.id,
+      lineas: [
+        CartLine(
+          productoId: producto.id!,
+          nombre: producto.nombre,
+          precio: 5,
+          cantidad: 2,
+          tipo: 'PREPARADO',
+        ),
+      ],
+      pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 10)],
+    );
+    expect(await catalog.getStockInsumo(insumoId), 28);
+
+    // Al apagar la venta directa el producto se desactiva, no se borra.
+    insumo = (await catalog.getInsumo(insumoId))!;
+    await catalog.saveInsumo(
+      Insumo(
+        id: insumo.id,
+        nombre: insumo.nombre,
+        unidadId: insumo.unidadId,
+        unidadAbreviatura: insumo.unidadAbreviatura,
+        unidadNombre: insumo.unidadNombre,
+        unidadFamilia: insumo.unidadFamilia,
+        unidadFactorBase: insumo.unidadFactorBase,
+        stockMinimo: insumo.stockMinimo,
+        costoPromedio: insumo.costoPromedio,
+        activo: insumo.activo,
+        stock: insumo.stock,
+        ventaDirecta: false,
+        productoId: insumo.productoId,
+        categoriaVentaDirectaId: insumo.categoriaVentaDirectaId,
+      ),
+    );
+    expect((await catalog.getProducto(producto.id!))!.activo, isFalse);
+  });
+
+  test('el menú reemplaza sus platos y conserva el orden elegido', () async {
+    final auth = AuthRepository();
+    final admin = (await auth.login('admin', '1234'))!;
+    final catalog = CatalogRepository();
+    await catalog.saveCategoria(
+      const CategoriaProducto(
+        nombre: 'Almuerzos',
+        color: 0xFF0F766E,
+        siempreDisponible: false,
+        orden: 1,
+        activo: true,
+      ),
+    );
+    final categoria = (await catalog.getCategorias()).first;
+    final primero = await catalog.saveProducto(
+      Producto(
+        nombre: 'Sopa',
+        categoriaId: categoria.id!,
+        categoriaNombre: categoria.nombre,
+        categoriaColor: categoria.color,
+        precio: 8,
+        tipo: 'PREPARADO',
+        stockMinimo: 0,
+        costoUnitario: 0,
+        activo: true,
+        stock: 0,
+      ),
+    );
+    final segundo = await catalog.saveProducto(
+      Producto(
+        nombre: 'Segundo',
+        categoriaId: categoria.id!,
+        categoriaNombre: categoria.nombre,
+        categoriaColor: categoria.color,
+        precio: 12,
+        tipo: 'PREPARADO',
+        stockMinimo: 0,
+        costoUnitario: 0,
+        activo: true,
+        stock: 0,
+      ),
+    );
+    final menuRepo = MenuRepository();
+    final menu = await menuRepo.crearMenu(
+      DateTime.now(),
+      'ALMUERZO',
+      admin.id,
+    );
+    await menuRepo.reemplazarItems(menu.id, [segundo, primero]);
+    final items = await menuRepo.getItems(menu.id);
+    expect(items.length, 2);
+    expect(items.first.productoId, segundo);
+    expect(items.last.productoId, primero);
+
+    await menuRepo.reemplazarItems(menu.id, [primero]);
+    final recortado = await menuRepo.getItems(menu.id);
+    expect(recortado.length, 1);
+    expect(recortado.first.productoId, primero);
+  });
+
+  test('migración de productos directos a insumos con receta', () async {
+    final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
+    final legacy = await databaseFactory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 6,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE usuarios (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre TEXT NOT NULL,
+              usuario TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              rol TEXT NOT NULL CHECK (rol IN ('ADMIN','CAJERO')),
+              turno_asignado TEXT CHECK (turno_asignado IN ('MAÑANA','TARDE','AMBOS')),
+              sueldo_base REAL NOT NULL DEFAULT 0,
+              activo INTEGER NOT NULL DEFAULT 1,
+              creado_en TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE categorias_producto (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre TEXT NOT NULL UNIQUE,
+              color INTEGER NOT NULL DEFAULT 4280391418,
+              siempre_disponible INTEGER NOT NULL DEFAULT 0,
+              orden INTEGER NOT NULL DEFAULT 0,
+              activo INTEGER NOT NULL DEFAULT 1
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE productos (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre TEXT NOT NULL UNIQUE,
+              categoria_id INTEGER NOT NULL,
+              descripcion TEXT,
+              precio REAL NOT NULL DEFAULT 0,
+              imagen BLOB,
+              tipo TEXT NOT NULL CHECK (tipo IN ('DIRECTO','PREPARADO')),
+              stock_minimo REAL NOT NULL DEFAULT 0,
+              costo_unitario REAL NOT NULL DEFAULT 0,
+              activo INTEGER NOT NULL DEFAULT 1,
+              creado_en TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE ajustes_stock (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              fecha TEXT NOT NULL,
+              insumo_id INTEGER,
+              producto_id INTEGER,
+              cantidad REAL NOT NULL DEFAULT 0,
+              motivo TEXT,
+              usuario_id INTEGER NOT NULL
+            )
+          ''');
+          await db.insert('usuarios', {
+            'nombre': 'Administrador',
+            'usuario': 'admin',
+            'password_hash': hashPassword('1234'),
+            'rol': 'ADMIN',
+            'turno_asignado': 'AMBOS',
+            'sueldo_base': 0,
+            'activo': 1,
+            'creado_en': '2026-01-01 08:00:00',
+          });
+          await db.insert('categorias_producto', {
+            'nombre': 'Bebidas',
+            'color': 0xFF2563EB,
+            'siempre_disponible': 0,
+            'orden': 1,
+            'activo': 1,
+          });
+          await db.insert('productos', {
+            'nombre': 'Coca Cola',
+            'categoria_id': 1,
+            'precio': 5,
+            'tipo': 'DIRECTO',
+            'stock_minimo': 2,
+            'costo_unitario': 3,
+            'activo': 1,
+            'creado_en': '2026-01-01 08:00:00',
+          });
+          await db.insert('ajustes_stock', {
+            'fecha': '2026-01-01 08:00:00',
+            'insumo_id': null,
+            'producto_id': 1,
+            'cantidad': 5,
+            'motivo': 'Carga inicial',
+            'usuario_id': 1,
+          });
+        },
+      ),
+    );
+    await legacy.close();
+
+    final db = await AppDatabase.instance.database;
+    final version = await db.rawQuery('PRAGMA user_version');
+    expect(
+      (version.first['user_version'] as num).toInt(),
+      AppDatabase.schemaVersion,
+    );
+
+    final catalog = CatalogRepository();
+    final producto = (await catalog.getProducto(1))!;
+    expect(producto.tipo, 'PREPARADO');
+    expect(producto.esVentaDirecta, isTrue);
+    final insumo = (await catalog.getInsumos())
+        .firstWhere((item) => item.productoId == 1);
+    expect(insumo.ventaDirecta, isTrue);
+    expect(insumo.stock, 5);
+    expect(insumo.precioVenta, 5);
+    final receta = await catalog.getReceta(1);
+    expect(receta.length, 1);
+    expect(receta.first.cantidad, 1);
+  });
+
+  test('las categorías Desayuno y Almuerzo existen por defecto', () async {
+    await AuthRepository().login('admin', '1234');
+    final catalog = CatalogRepository();
+    final categorias = await catalog.getCategorias();
+    expect(
+      categorias.any((categoria) => categoria.nombre == 'Desayuno'),
+      isTrue,
+    );
+    expect(
+      categorias.any((categoria) => categoria.nombre == 'Almuerzo'),
+      isTrue,
+    );
   });
 }

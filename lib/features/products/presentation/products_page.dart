@@ -23,11 +23,13 @@ class _ProductsData {
     required this.productos,
     required this.categorias,
     required this.insumos,
+    required this.unidades,
   });
 
   final List<Producto> productos;
   final List<CategoriaProducto> categorias;
   final List<Insumo> insumos;
+  final List<UnidadMedida> unidades;
 }
 
 class ProductsPage extends StatefulWidget {
@@ -73,10 +75,12 @@ class _ProductsPageState extends State<ProductsPage> {
     final productos = await _repository.getProductos();
     final categorias = await _repository.getCategorias();
     final insumos = await _repository.getInsumos(soloActivos: true);
+    final unidades = await _repository.getUnidades();
     return _ProductsData(
       productos: productos,
       categorias: categorias,
       insumos: insumos,
+      unidades: unidades,
     );
   }
 
@@ -108,6 +112,7 @@ class _ProductsPageState extends State<ProductsPage> {
         repository: _repository,
         producto: producto,
         insumos: data.insumos,
+        unidades: data.unidades,
         receta: receta,
       ),
     );
@@ -167,14 +172,16 @@ class _ProductsPageState extends State<ProductsPage> {
         }).toList();
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               PageHeader(
                 title: 'Productos',
                 subtitle:
-                    'Platos y bebidas. Los precios solo se cambian aquí. Las categorías se crean desde esta misma pantalla.',
+                    'Platos y bebidas que usan receta. Los precios solo se cambian aquí y las categorías se crean desde esta misma pantalla.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -204,6 +211,7 @@ class _ProductsPageState extends State<ProductsPage> {
                       width: 230,
                       child: DropdownButtonFormField<int?>(
                         initialValue: _categoriaId,
+                        isExpanded: true,
                         decoration: appInput(label: 'Categoría'),
                         items: [
                           const DropdownMenuItem<int?>(
@@ -213,7 +221,10 @@ class _ProductsPageState extends State<ProductsPage> {
                           ...categorias.map(
                             (categoria) => DropdownMenuItem<int?>(
                               value: categoria.id,
-                              child: Text(categoria.nombre),
+                              child: Text(
+                                categoria.nombre,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ),
                         ],
@@ -256,7 +267,7 @@ class _ProductsPageState extends State<ProductsPage> {
                     child: _ProductRow(
                       producto: producto,
                       onEdit: () => _openForm(producto),
-                      onRecipe: producto.esDirecto
+                      onRecipe: producto.esVentaDirecta
                           ? null
                           : () => _openRecipe(producto),
                       onAjustarStock: producto.esDirecto
@@ -292,108 +303,164 @@ class _ProductRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final icono = Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: Color(producto.categoriaColor).withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(12),
+        image: producto.imagen != null
+            ? DecorationImage(
+                image: MemoryImage(producto.imagen!),
+                fit: BoxFit.cover,
+              )
+            : null,
+      ),
+      child: producto.imagen == null
+          ? Icon(
+              producto.esDirecto
+                  ? Icons.inventory_2_outlined
+                  : Icons.restaurant,
+              color: Color(producto.categoriaColor),
+            )
+          : null,
+    );
+    final etiqueta = producto.esVentaDirecta
+        ? 'Venta directa'
+        : producto.esDirecto
+        ? 'Directo (legado)'
+        : 'Preparado con receta';
+    final info = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              producto.nombre,
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            if (producto.esVentaDirecta)
+              Chip(
+                label: const Text('Venta directa'),
+                side: BorderSide.none,
+                visualDensity: VisualDensity.compact,
+                backgroundColor: scheme.primaryContainer,
+                labelStyle: Theme.of(context).textTheme.labelSmall,
+              ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '${producto.categoriaNombre} · $etiqueta',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+        if (producto.descripcion != null)
+          Text(
+            producto.descripcion!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+      ],
+    );
+    final precio = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          formatMoney(producto.precio),
+          style: Theme.of(
+            context,
+          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        Text(
+          producto.esDirecto
+              ? 'Stock: ${formatQty(producto.stock)}'
+              : producto.esVentaDirecta
+              ? 'Receta fija: 1 unidad'
+              : 'Con receta',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: producto.esDirecto &&
+                    producto.stock <= producto.stockMinimo
+                ? scheme.error
+                : scheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+    final acciones = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (onRecipe != null)
+          OutlinedButton.icon(
+            onPressed: onRecipe,
+            icon: const Icon(Icons.receipt_long_outlined, size: 18),
+            label: const Text('Receta'),
+          ),
+        if (onAjustarStock != null)
+          OutlinedButton.icon(
+            onPressed: onAjustarStock,
+            icon: const Icon(Icons.tune, size: 18),
+            label: const Text('Ajustar stock'),
+          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Switch(value: producto.activo, onChanged: onToggle),
+            IconButton(
+              tooltip: 'Editar',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          ],
+        ),
+      ],
+    );
+
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: Color(producto.categoriaColor).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-              image: producto.imagen != null
-                  ? DecorationImage(
-                      image: MemoryImage(producto.imagen!),
-                      fit: BoxFit.cover,
-                    )
-                  : null,
-            ),
-            child: producto.imagen == null
-                ? Icon(
-                    producto.esDirecto
-                        ? Icons.inventory_2_outlined
-                        : Icons.restaurant,
-                    color: Color(producto.categoriaColor),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (!esAngosto(constraints.maxWidth, limite: 720)) {
+            return Row(
               children: [
-                Text(
-                  producto.nombre,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${producto.categoriaNombre} · ${producto.esDirecto ? 'Directo' : 'Preparado'}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                if (producto.descripcion != null)
-                  Text(
-                    producto.descripcion!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
+                icono,
+                const SizedBox(width: 14),
+                Expanded(flex: 3, child: info),
+                Expanded(flex: 2, child: precio),
+                const SizedBox(width: 8),
+                acciones,
               ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  formatMoney(producto.precio),
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  producto.esDirecto
-                      ? 'Stock: ${formatQty(producto.stock)}'
-                      : 'Con receta',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: producto.esDirecto &&
-                            producto.stock <= producto.stockMinimo
-                        ? scheme.error
-                        : scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (onRecipe != null)
-            OutlinedButton.icon(
-              onPressed: onRecipe,
-              icon: const Icon(Icons.receipt_long_outlined, size: 18),
-              label: const Text('Receta'),
-            ),
-          if (onAjustarStock != null)
-            OutlinedButton.icon(
-              onPressed: onAjustarStock,
-              icon: const Icon(Icons.tune, size: 18),
-              label: const Text('Ajustar stock'),
-            ),
-          const SizedBox(width: 8),
-          Switch(value: producto.activo, onChanged: onToggle),
-          IconButton(
-            tooltip: 'Editar',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined),
-          ),
-        ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  icono,
+                  const SizedBox(width: 12),
+                  Expanded(child: info),
+                ],
+              ),
+              const SizedBox(height: 8),
+              precio,
+              const SizedBox(height: 6),
+              acciones,
+            ],
+          );
+        },
       ),
     );
   }
@@ -459,7 +526,18 @@ class _ProductDialogState extends State<_ProductDialog> {
     );
     _categorias = List.of(widget.categorias);
     final activas = _categorias.where((categoria) => categoria.activo).toList();
+    int? categoriaPorDefecto;
+    for (final nombre in const ['Almuerzo', 'Desayuno']) {
+      for (final categoria in activas) {
+        if (categoria.nombre.toLowerCase() == nombre.toLowerCase()) {
+          categoriaPorDefecto = categoria.id;
+          break;
+        }
+      }
+      if (categoriaPorDefecto != null) break;
+    }
     _categoriaId = producto?.categoriaId ??
+        categoriaPorDefecto ??
         (activas.isEmpty ? null : activas.first.id);
     _tipo = producto?.tipo ?? 'PREPARADO';
     _activo = producto?.activo ?? true;
@@ -579,10 +657,72 @@ class _ProductDialogState extends State<_ProductDialog> {
   @override
   Widget build(BuildContext context) {
     final directo = _tipo == 'DIRECTO';
+    final angosto = esAngosto(
+      MediaQuery.sizeOf(context).width,
+      limite: 430,
+    );
+    final vistaPrevia = Container(
+      height: 130,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _imagen == null
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.image_outlined,
+                  size: 30,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Sin imagen',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            )
+          : Image.memory(
+              _imagen!,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+            ),
+    );
+    final botonesImagen = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (_hayCamara)
+          OutlinedButton.icon(
+            onPressed: () => _cargarImagen(ImageSource.camera),
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: const Text('Tomar foto'),
+          ),
+        OutlinedButton.icon(
+          onPressed: () => _cargarImagen(ImageSource.gallery),
+          icon: const Icon(Icons.photo_library_outlined),
+          label: Text(_hayCamara ? 'Elegir imagen' : 'Buscar imagen'),
+        ),
+        if (_imagen != null)
+          TextButton.icon(
+            onPressed: () => setState(() => _imagen = null),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Quitar'),
+          ),
+      ],
+    );
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text(widget.producto == null ? 'Nuevo producto' : 'Editar producto'),
-      content: SizedBox(
-        width: 520,
+      content: DialogSurface(
+        maxWidth: 520,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -598,84 +738,24 @@ class _ProductDialogState extends State<_ProductDialog> {
                       : null,
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Container(
-                        height: 130,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.outlineVariant,
-                          ),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: _imagen == null
-                            ? Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.image_outlined,
-                                    size: 30,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Sin imagen',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
-                                        ),
-                                  ),
-                                ],
-                              )
-                            : Image.memory(
-                                _imagen!,
-                                fit: BoxFit.cover,
-                                gaplessPlayback: true,
-                              ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_hayCamara) ...[
-                          OutlinedButton.icon(
-                            onPressed: () =>
-                                _cargarImagen(ImageSource.camera),
-                            icon: const Icon(Icons.photo_camera_outlined),
-                            label: const Text('Tomar foto'),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        OutlinedButton.icon(
-                          onPressed: () => _cargarImagen(ImageSource.gallery),
-                          icon: const Icon(Icons.photo_library_outlined),
-                          label: Text(
-                            _hayCamara ? 'Elegir imagen' : 'Buscar imagen',
-                          ),
-                        ),
-                        if (_imagen != null) ...[
-                          const SizedBox(height: 8),
-                          TextButton.icon(
-                            onPressed: () => setState(() => _imagen = null),
-                            icon: const Icon(Icons.delete_outline),
-                            label: const Text('Quitar'),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
+                if (angosto)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      vistaPrevia,
+                      const SizedBox(height: 8),
+                      botonesImagen,
+                    ],
+                  )
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: vistaPrevia),
+                      const SizedBox(width: 12),
+                      botonesImagen,
+                    ],
+                  ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -683,12 +763,16 @@ class _ProductDialogState extends State<_ProductDialog> {
                       child: DropdownButtonFormField<int>(
                         key: ValueKey(_categorias.length),
                         initialValue: _categoriaId,
+                        isExpanded: true,
                         decoration: appInput(label: 'Categoría'),
                         items: _categorias
                             .map(
                               (categoria) => DropdownMenuItem(
                                 value: categoria.id,
-                                child: Text(categoria.nombre),
+                                child: Text(
+                                  categoria.nombre,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             )
                             .toList(),
@@ -707,23 +791,21 @@ class _ProductDialogState extends State<_ProductDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: _tipo,
-                  decoration: appInput(label: 'Tipo de producto'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'PREPARADO',
-                      child: Text('Preparado (usa receta de insumos)'),
+                if (directo)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.tertiaryContainer.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    DropdownMenuItem(
-                      value: 'DIRECTO',
-                      child: Text('Directo (stock propio en unidades)'),
+                    child: const Text(
+                      'Producto directo heredado. Se mantiene con stock propio; '
+                      'los productos nuevos usan receta de insumos.',
                     ),
-                  ],
-                  onChanged: (value) =>
-                      setState(() => _tipo = value ?? 'PREPARADO'),
-                ),
-                const SizedBox(height: 12),
+                  ),
+                if (directo) const SizedBox(height: 12),
                 TextFormField(
                   controller: _descripcion,
                   maxLines: 2,
@@ -862,9 +944,10 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: const Text('Nueva categoría'),
-      content: SizedBox(
-        width: 380,
+      content: DialogSurface(
+        maxWidth: 380,
         child: Form(
           key: _formKey,
           child: TextFormField(
@@ -933,9 +1016,10 @@ class _StockDialogState extends State<_StockDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text(widget.titulo),
-      content: SizedBox(
-        width: 380,
+      content: DialogSurface(
+        maxWidth: 380,
         child: Form(
           key: _formKey,
           child: Column(
@@ -989,12 +1073,14 @@ class _RecipeDialog extends StatefulWidget {
     required this.repository,
     required this.producto,
     required this.insumos,
+    required this.unidades,
     required this.receta,
   });
 
   final CatalogRepository repository;
   final Producto producto;
   final List<Insumo> insumos;
+  final List<UnidadMedida> unidades;
   final List<RecetaLinea> receta;
 
   @override
@@ -1004,7 +1090,9 @@ class _RecipeDialog extends StatefulWidget {
 class _RecipeDialogState extends State<_RecipeDialog> {
   final _formKey = GlobalKey<FormState>();
   final _cantidades = <int, TextEditingController>{};
+  final _unidadesElegidas = <int, int>{};
   final _seleccionados = <int>{};
+  String _search = '';
   bool _saving = false;
   String? _error;
 
@@ -1013,6 +1101,7 @@ class _RecipeDialogState extends State<_RecipeDialog> {
     super.initState();
     for (final insumo in widget.insumos) {
       _cantidades[insumo.id!] = TextEditingController();
+      _unidadesElegidas[insumo.id!] = insumo.unidadId;
     }
     for (final linea in widget.receta) {
       if (!_cantidades.containsKey(linea.insumoId)) continue;
@@ -1027,6 +1116,74 @@ class _RecipeDialogState extends State<_RecipeDialog> {
       controller.dispose();
     }
     super.dispose();
+  }
+
+  UnidadMedida _unidadBase(Insumo insumo) {
+    for (final unidad in widget.unidades) {
+      if (unidad.id == insumo.unidadId) return unidad;
+    }
+    return UnidadMedida(
+      id: insumo.unidadId,
+      nombre: insumo.unidadNombre,
+      abreviatura: insumo.unidadAbreviatura,
+      familia: insumo.unidadFamilia,
+      factorBase: insumo.unidadFactorBase,
+    );
+  }
+
+  UnidadMedida _unidadElegida(Insumo insumo) {
+    final id = _unidadesElegidas[insumo.id] ?? insumo.unidadId;
+    for (final unidad in widget.unidades) {
+      if (unidad.id == id) return unidad;
+    }
+    return _unidadBase(insumo);
+  }
+
+  List<UnidadMedida> _unidadesCompatibles(Insumo insumo) {
+    final base = _unidadBase(insumo);
+    if (!base.esConvertible) return [base];
+    final lista = widget.unidades
+        .where((unidad) => unidad.familia == base.familia)
+        .toList()
+      ..sort((a, b) => b.factorBase.compareTo(a.factorBase));
+    return lista.isEmpty ? [base] : lista;
+  }
+
+  double _cantidadEnBase(Insumo insumo) {
+    final elegida = _unidadElegida(insumo);
+    final base = _unidadBase(insumo);
+    final ingresada = parseAmount(_cantidades[insumo.id]?.text ?? '');
+    return ingresada * elegida.factorBase / base.factorBase;
+  }
+
+  /// Texto de equivalencia en la unidad base del insumo.
+  String _equivalencia(Insumo insumo) {
+    final elegida = _unidadElegida(insumo);
+    final base = _unidadBase(insumo);
+    final enBase = _cantidadEnBase(insumo);
+    if (enBase <= 0) return '';
+    if (elegida.id != base.id) {
+      return '= ${formatQty(enBase)} ${base.abreviatura}';
+    }
+    if (!base.esConvertible) return '';
+    final compatible = _unidadesCompatibles(insumo)
+        .where((unidad) => unidad.id != base.id)
+        .toList();
+    if (compatible.isEmpty) return '';
+    final chica = compatible.last;
+    final enChica = enBase * base.factorBase / chica.factorBase;
+    return '= ${formatQty(enChica)} ${chica.abreviatura}';
+  }
+
+  void _aplicarRapido(Insumo insumo, String texto) {
+    final elegida = _unidadElegida(insumo);
+    final base = _unidadBase(insumo);
+    final cantidadBase = parseAmount(texto);
+    final enElegida = cantidadBase * base.factorBase / elegida.factorBase;
+    setState(() {
+      _seleccionados.add(insumo.id!);
+      _cantidades[insumo.id]!.text = formatQty(enElegida);
+    });
   }
 
   Future<void> _save() async {
@@ -1044,7 +1201,9 @@ class _RecipeDialogState extends State<_RecipeDialog> {
         widget.producto.id!,
         {
           for (final id in _seleccionados)
-            id: parseAmount(_cantidades[id]!.text),
+            id: _cantidadEnBase(
+              widget.insumos.firstWhere((insumo) => insumo.id == id),
+            ),
         },
       );
       if (!mounted) return;
@@ -1058,24 +1217,227 @@ class _RecipeDialogState extends State<_RecipeDialog> {
     }
   }
 
+  Widget _filaInsumo(Insumo insumo) {
+    final id = insumo.id!;
+    final seleccionado = _seleccionados.contains(id);
+    final elegida = _unidadElegida(insumo);
+    final compatibles = _unidadesCompatibles(insumo);
+    final equivalencia = _equivalencia(insumo);
+    final enBase = _cantidadEnBase(insumo);
+    final alcanza = enBase > 0 ? (insumo.stock / enBase).floor() : null;
+    final costo = enBase * insumo.costoPromedio;
+    final scheme = Theme.of(context).colorScheme;
+    final angosto = esAngosto(
+      MediaQuery.sizeOf(context).width,
+      limite: 430,
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: seleccionado
+              ? scheme.primary.withValues(alpha: 0.5)
+              : scheme.outlineVariant.withValues(alpha: 0.6),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: seleccionado,
+                onChanged: (value) {
+                  setState(() {
+                    if (value == true) {
+                      _seleccionados.add(id);
+                    } else {
+                      _seleccionados.remove(id);
+                    }
+                  });
+                },
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      insumo.nombre,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      'stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (seleccionado && equivalencia.isNotEmpty)
+                      Text(
+                        equivalencia,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (seleccionado) ...[
+            const SizedBox(height: 6),
+            Builder(
+              builder: (context) {
+                final campo = TextFormField(
+                  controller: _cantidades[id],
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: appInput(
+                    label: 'Cantidad por 1 vendido',
+                    hint: '0',
+                    suffixText: elegida.abreviatura,
+                  ),
+                  validator: (value) {
+                    if (!_seleccionados.contains(id)) return null;
+                    return parseAmount(value ?? '') <= 0
+                        ? 'Mayor a 0'
+                        : null;
+                  },
+                );
+                final selector = compatibles.length <= 1
+                    ? null
+                    : DropdownButtonFormField<int>(
+                        initialValue: elegida.id,
+                        isExpanded: true,
+                        decoration: appInput(label: 'Unidad'),
+                        items: compatibles
+                            .map(
+                              (unidad) => DropdownMenuItem(
+                                value: unidad.id,
+                                child: Text(
+                                  '${unidad.nombre} (${unidad.abreviatura})',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (nuevoId) {
+                          if (nuevoId == null) return;
+                          final anterior = _unidadElegida(insumo);
+                          final nueva = compatibles.firstWhere(
+                            (unidad) => unidad.id == nuevoId,
+                          );
+                          final actual = parseAmount(
+                            _cantidades[id]!.text,
+                          );
+                          if (actual > 0) {
+                            _cantidades[id]!.text = formatQty(
+                              actual * anterior.factorBase / nueva.factorBase,
+                            );
+                          }
+                          setState(() => _unidadesElegidas[id] = nuevoId);
+                        },
+                      );
+                if (angosto) {
+                  return Column(
+                    children: [
+                      campo,
+                      if (selector != null) ...[
+                        const SizedBox(height: 8),
+                        selector,
+                      ],
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(flex: 2, child: campo),
+                    if (selector != null) ...[
+                      const SizedBox(width: 8),
+                      Expanded(flex: 2, child: selector),
+                    ],
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                for (final rapido in const ['1/4', '1/2', '1', '2'])
+                  ActionChip(
+                    label: Text(rapido),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _aplicarRapido(insumo, rapido),
+                  ),
+                if (alcanza != null)
+                  Text(
+                    'Alcanza para $alcanza porción(es)',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: alcanza > 0 ? scheme.onSurfaceVariant : scheme.error,
+                    ),
+                  ),
+                if (costo > 0)
+                  Text(
+                    'Costo ${formatMoney(costo)}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final term = _search.trim().toLowerCase();
+    final filtrados = widget.insumos
+        .where(
+          (insumo) =>
+              term.isEmpty || insumo.nombre.toLowerCase().contains(term),
+        )
+        .toList();
+    final costoTotal = _seleccionados.fold<double>(0, (suma, id) {
+      final insumo = widget.insumos.firstWhere((item) => item.id == id);
+      return suma + _cantidadEnBase(insumo) * insumo.costoPromedio;
+    });
+
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text('Receta · ${widget.producto.nombre}'),
-      content: SizedBox(
-        width: 560,
-        height: 460,
+      content: DialogSurface(
+        maxWidth: 620,
+        maxHeightFactor: 0.85,
         child: Form(
           key: _formKey,
           child: Column(
             children: [
               Text(
-                'Indica cuánto de cada insumo consume una porción vendida.',
+                'Indica cuánto de cada insumo consume una porción vendida. '
+                'Puedes usar la unidad del insumo o una equivalente (por ejemplo 250 ml de leche).',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
+              TextField(
+                decoration: appInput(
+                  label: 'Buscar insumo',
+                  icon: Icons.search,
+                ),
+                onChanged: (value) => setState(() => _search = value),
+              ),
+              const SizedBox(height: 8),
               Expanded(
                 child: widget.insumos.isEmpty
                     ? const EmptyState(
@@ -1084,74 +1446,31 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                         message:
                             'Crea insumos en la sección Insumos para poder armar la receta.',
                       )
+                    : filtrados.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.search_off,
+                        title: 'Sin resultados',
+                        message: 'No hay insumos que coincidan con la búsqueda.',
+                      )
                     : ListView.separated(
-                        itemCount: widget.insumos.length,
-                        separatorBuilder: (_, _) => const Divider(),
-                        itemBuilder: (context, index) {
-                          final insumo = widget.insumos[index];
-                          final id = insumo.id!;
-                          final seleccionado = _seleccionados.contains(id);
-                          return Row(
-                            children: [
-                              Checkbox(
-                                value: seleccionado,
-                                onChanged: (value) {
-                                  setState(() {
-                                    if (value == true) {
-                                      _seleccionados.add(id);
-                                    } else {
-                                      _seleccionados.remove(id);
-                                    }
-                                  });
-                                },
-                              ),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(insumo.nombre),
-                                    Text(
-                                      'stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.onSurfaceVariant,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                width: 130,
-                                child: TextFormField(
-                                  controller: _cantidades[id],
-                                  enabled: seleccionado,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                        decimal: true,
-                                      ),
-                                  decoration: appInput(
-                                    label: 'Cantidad',
-                                    hint: insumo.unidadAbreviatura,
-                                  ),
-                                  validator: (value) {
-                                    if (!seleccionado) return null;
-                                    final cantidad = parseAmount(value ?? '');
-                                    if (cantidad <= 0) {
-                                      return 'Mayor a 0';
-                                    }
-                                    return null;
-                                  },
-                                ),
-                              ),
-                            ],
-                          );
-                        },
+                        itemCount: filtrados.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) =>
+                            _filaInsumo(filtrados[index]),
                       ),
               ),
+              if (costoTotal > 0) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    'Costo estimado de la receta: ${formatMoney(costoTotal)}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(

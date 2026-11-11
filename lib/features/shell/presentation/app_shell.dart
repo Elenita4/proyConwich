@@ -167,6 +167,7 @@ class _AppShellState extends State<AppShell> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 860;
         final extended = constraints.maxWidth >= 1200;
+        final muyAngosto = constraints.maxWidth < 560;
         final body = IndexedStack(
           index: index,
           children: destinations.map((item) => item.page).toList(),
@@ -207,24 +208,30 @@ class _AppShellState extends State<AppShell> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      widget.usuario.nombre,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                if (!muyAngosto)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 130),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          widget.usuario.nombre,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          widget.usuario.esAdmin ? 'Administrador' : 'Cajero',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
                     ),
-                    Text(
-                      widget.usuario.esAdmin ? 'Administrador' : 'Cajero',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
                 const SizedBox(width: 4),
                 const Icon(Icons.arrow_drop_down),
               ],
@@ -411,9 +418,10 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: const Text('Cambiar mi contraseña'),
-      content: SizedBox(
-        width: 420,
+      content: DialogSurface(
+        maxWidth: 420,
         child: Form(
           key: _formKey,
           child: Column(

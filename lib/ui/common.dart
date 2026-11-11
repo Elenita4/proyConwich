@@ -54,14 +54,141 @@ Future<bool> confirmAction(
   return result ?? false;
 }
 
+/// Acepta decimales con coma o punto y fracciones como `1/4` o `3/2`.
 double parseAmount(String value) {
   final normalized = value.replaceAll(',', '.').replaceAll(' ', '');
+  if (normalized.contains('/')) {
+    final partes = normalized.split('/');
+    if (partes.length == 2) {
+      final numerador = double.tryParse(partes[0]);
+      final denominador = double.tryParse(partes[1]);
+      if (numerador != null && denominador != null && denominador != 0) {
+        return numerador / denominador;
+      }
+    }
+    return 0;
+  }
   return double.tryParse(normalized) ?? 0;
 }
 
 String formatQty(double value) {
   if (value == value.roundToDouble()) return value.toStringAsFixed(0);
-  return value.toStringAsFixed(2);
+  final dos = value.toStringAsFixed(2);
+  if ((double.parse(dos) - value).abs() < 0.0000001) return dos;
+  return value
+      .toStringAsFixed(3)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
+}
+
+/// `true` cuando el ancho disponible corresponde a un teléfono.
+bool esAngosto(double ancho, {double limite = 700}) => ancho < limite;
+
+/// Diálogo que se adapta al tamaño de la pantalla sin desbordarse.
+class DialogSurface extends StatelessWidget {
+  const DialogSurface({
+    super.key,
+    required this.child,
+    this.maxWidth = 520,
+    this.maxHeightFactor = 0.8,
+  });
+
+  final Widget child;
+  final double maxWidth;
+  final double maxHeightFactor;
+
+  @override
+  Widget build(BuildContext context) {
+    final alto = MediaQuery.sizeOf(context).height * maxHeightFactor;
+    // El ancho debe ser "tight": AlertDialog usa IntrinsicWidth y un ancho
+    // máximo (ConstrainedBox) lo obliga a pedir intrínsecos a ListView, que no
+    // los soporta. El diálogo recorta este ancho al espacio disponible.
+    return SizedBox(
+      width: maxWidth,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: alto),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Fila que se convierte en columna cuando el ancho es reducido.
+class AdaptiveRow extends StatelessWidget {
+  const AdaptiveRow({
+    super.key,
+    required this.children,
+    this.spacing = 12,
+    this.runSpacing = 10,
+    this.limite = 700,
+    this.crossAxisAlignment = CrossAxisAlignment.start,
+    this.mainAxisAlignment = MainAxisAlignment.start,
+  });
+
+  final List<Widget> children;
+  final double spacing;
+  final double runSpacing;
+  final double limite;
+  final CrossAxisAlignment crossAxisAlignment;
+  final MainAxisAlignment mainAxisAlignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (!esAngosto(constraints.maxWidth, limite: limite)) {
+          return Row(
+            crossAxisAlignment: crossAxisAlignment,
+            mainAxisAlignment: mainAxisAlignment,
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                if (i > 0) SizedBox(width: spacing),
+                children[i],
+              ],
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < children.length; i++) ...[
+              if (i > 0) SizedBox(height: runSpacing),
+              children[i],
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Tabla o contenido ancho que se puede recorrer con el dedo o el mouse.
+class HorizontalScrollArea extends StatelessWidget {
+  const HorizontalScrollArea({
+    super.key,
+    required this.child,
+    this.minWidth,
+  });
+
+  final Widget child;
+  final double? minWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      thumbVisibility: false,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: minWidth == null
+            ? child
+            : ConstrainedBox(
+                constraints: BoxConstraints(minWidth: minWidth!),
+                child: child,
+              ),
+      ),
+    );
+  }
 }
 
 String formatPercent(double value) =>
@@ -86,39 +213,57 @@ class PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle!,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final angosto = esAngosto(constraints.maxWidth);
+        final titulo = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          if (actions.isNotEmpty) ...[
-            const SizedBox(width: 12),
-            Wrap(spacing: 8, runSpacing: 8, children: actions),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle!,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ],
-        ],
-      ),
+        );
+        final botones = actions.isEmpty
+            ? null
+            : Wrap(spacing: 8, runSpacing: 8, children: actions);
+        return Padding(
+          padding: EdgeInsets.only(bottom: angosto ? 14 : 20),
+          child: angosto
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titulo,
+                    if (botones != null) ...[
+                      const SizedBox(height: 12),
+                      Align(alignment: Alignment.centerLeft, child: botones),
+                    ],
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: titulo),
+                    if (botones != null) ...[
+                      const SizedBox(width: 12),
+                      botones,
+                    ],
+                  ],
+                ),
+        );
+      },
     );
   }
 }
@@ -420,12 +565,14 @@ InputDecoration appInput({
   String? hint,
   IconData? icon,
   Widget? suffix,
+  String? suffixText,
 }) {
   return InputDecoration(
     labelText: label,
     hintText: hint,
     prefixIcon: icon == null ? null : Icon(icon),
     suffixIcon: suffix,
+    suffixText: suffixText,
     filled: true,
     fillColor: Colors.white,
     border: OutlineInputBorder(

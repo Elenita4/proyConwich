@@ -17,12 +17,14 @@ void main() {
   test('money and date helpers use local formats', () {
     expect(parseAmount('12,50'), 12.5);
     expect(parseAmount(' 8 '), 8);
+    expect(parseAmount('1/4'), 0.25);
     expect(formatMoney(12.5), 'Bs 12.50');
     expect(sqlDate(DateTime(2026, 11, 8)), '2026-11-08');
     expect(sqlDateTime(DateTime(2026, 11, 8, 9, 5, 3)), '2026-11-08 09:05:03');
     expect(parseSqlDate('2026-11-08'), DateTime(2026, 11, 8));
     expect(formatQty(2), '2');
     expect(formatQty(2.5), '2.50');
+    expect(formatQty(0.125), '0.125');
   });
 
   testWidgets('login validates empty fields without touching the database', (

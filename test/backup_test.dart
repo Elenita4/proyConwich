@@ -75,6 +75,7 @@ void main() {
 
     final db = await AppDatabase.instance.database;
     await db.insert('categorias_producto', {'nombre': 'Bebidas'});
+    final categoriasAntes = await db.query('categorias_producto');
 
     final copia = await service.crearCopia(motivo: 'manual');
     expect(await File(copia.ruta).exists(), isTrue);
@@ -101,15 +102,22 @@ void main() {
     final total = await db2.rawQuery(
       'SELECT COUNT(*) AS total FROM categorias_producto',
     );
-    expect((total.first['total'] as num).toInt(), 2);
+    expect((total.first['total'] as num).toInt(), categoriasAntes.length + 1);
 
     final seguridad = await service.restaurar(inspeccion);
     expect(seguridad.tamanoBytes, greaterThan(0));
 
     final db3 = await AppDatabase.instance.database;
     final categorias = await db3.query('categorias_producto');
-    expect(categorias.length, 1);
-    expect(categorias.first['nombre'], 'Bebidas');
+    expect(categorias.length, categoriasAntes.length);
+    expect(
+      categorias.any((categoria) => categoria['nombre'] == 'Bebidas'),
+      isTrue,
+    );
+    expect(
+      categorias.any((categoria) => categoria['nombre'] == 'Postres'),
+      isFalse,
+    );
 
     final copias = await service.listarCopiasSeguridad();
     expect(copias.length, 1);

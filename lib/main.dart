@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'core/auth_repository.dart';
@@ -12,6 +13,21 @@ void main() {
   runApp(const RestaurantApp());
 }
 
+/// Permite arrastrar el contenido con el dedo, el lápiz o el mouse.
+/// Sin esto, en web/escritorio solo se puede usar la rueda del mouse.
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => const {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.invertedStylus,
+    PointerDeviceKind.trackpad,
+  };
+}
+
 class RestaurantApp extends StatelessWidget {
   const RestaurantApp({super.key});
 
@@ -21,6 +37,7 @@ class RestaurantApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sazón',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const AppScrollBehavior(),
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

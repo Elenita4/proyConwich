@@ -157,9 +157,19 @@ class _SalesPageState extends State<SalesPage> {
       );
     }
     // Productos activos que no están en el menú: se muestran al final, en gris.
+    // Los de categorías "siempre disponibles" (venta directa) se pueden vender
+    // aunque no estén en el menú del día.
     final activos = await _catalogRepository.getProductos(soloActivos: true);
     for (final producto in activos) {
       if (productos.containsKey(producto.id)) continue;
+      final siempre =
+          producto.categoriaSiempreDisponible || producto.esVentaDirecta;
+      String? motivo;
+      var disponible = false;
+      if (siempre) {
+        motivo = await _catalogRepository.motivoNoDisponible(producto.id!, 1);
+        disponible = motivo == null;
+      }
       productos[producto.id!] = _SaleProduct(
         productoId: producto.id!,
         nombre: producto.nombre,
@@ -167,9 +177,10 @@ class _SalesPageState extends State<SalesPage> {
         categoriaNombre: producto.categoriaNombre,
         categoriaColor: producto.categoriaColor,
         tipo: producto.tipo,
-        disponible: false,
+        disponible: disponible,
+        motivo: motivo,
         stock: producto.stock,
-        enMenu: false,
+        enMenu: siempre,
         imagen: producto.imagen,
       );
     }
@@ -445,7 +456,9 @@ class _SalesPageState extends State<SalesPage> {
       builder: (context, snapshot) {
         final data = snapshot.data;
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -699,53 +712,82 @@ class _SalesPageState extends State<SalesPage> {
             ..._cart.values.map(
               (line) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            line.nombre,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            '${formatMoney(line.precio)} c/u',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: scheme.onSurfaceVariant),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _changeQty(line.productoId, -1),
-                      icon: const Icon(Icons.remove_circle_outline),
-                    ),
-                    Text(
-                      formatQty(line.cantidad),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final angosto = esAngosto(constraints.maxWidth, limite: 460);
+                    final info = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          line.nombre,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          '${formatMoney(line.precio)} c/u',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    );
+                    final controles = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _changeQty(line.productoId, -1),
+                          icon: const Icon(Icons.remove_circle_outline),
+                        ),
+                        Text(
+                          formatQty(line.cantidad),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _changeQty(line.productoId, 1),
+                          icon: const Icon(Icons.add_circle_outline),
+                        ),
+                      ],
+                    );
+                    final subtotal = Text(
+                      formatMoney(line.subtotal),
+                      textAlign: TextAlign.right,
                       style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _changeQty(line.productoId, 1),
-                      icon: const Icon(Icons.add_circle_outline),
-                    ),
-                    SizedBox(
-                      width: 70,
-                      child: Text(
-                        formatMoney(line.subtotal),
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    IconButton(
+                    );
+                    final quitar = IconButton(
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Quitar',
                       onPressed: () => _remove(line.productoId),
                       icon: const Icon(Icons.close, size: 18),
-                    ),
-                  ],
+                    );
+                    if (angosto) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(child: info),
+                              quitar,
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              controles,
+                              const Spacer(),
+                              subtotal,
+                            ],
+                          ),
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: info),
+                        controles,
+                        SizedBox(width: 70, child: subtotal),
+                        quitar,
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -838,80 +880,121 @@ class _SalesPageState extends State<SalesPage> {
                 horizontal: 16,
                 vertical: 10,
               ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 18,
-                    child: Text('${pedido.id}'),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          pedido.referencia == null
-                              ? 'Pedido #${pedido.id}'
-                              : '${pedido.referencia} · #${pedido.id}',
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final angosto = esAngosto(constraints.maxWidth, limite: 820);
+                  final cabecera = Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        child: Text('${pedido.id}'),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              pedido.referencia == null
+                                  ? 'Pedido #${pedido.id}'
+                                  : '${pedido.referencia} · #${pedido.id}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              '${formatDateTimeText(pedido.fecha)} · ${pedido.usuarioNombre}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                  final montos = Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Total ${formatMoney(pedido.total)}',
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
-                        Text(
-                          '${formatDateTimeText(pedido.fecha)} · ${pedido.usuarioNombre}',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      'Total ${formatMoney(pedido.total)}',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      'Saldo ${formatMoney(pedido.saldo)}',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                        fontWeight: FontWeight.w700,
                       ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Ver detalle',
-                    onPressed: () => _verPedido(pedido),
-                    icon: const Icon(Icons.visibility_outlined),
-                  ),
-                  TextButton(
-                    onPressed: hayCaja ? () => _cobrarPedido(pedido, data) : null,
-                    child: const Text('Cobrar'),
-                  ),
-                  TextButton(
-                    onPressed: hayCaja
-                        ? () {
-                            setState(() => _pedidoEditandoId = pedido.id);
-                            showAppMessage(
-                              context,
-                              'Agrega productos y usa “Agregar al pedido”.',
-                            );
-                          }
-                        : null,
-                    child: const Text('Agregar'),
-                  ),
-                  TextButton(
-                    onPressed: () => _anular(pedido),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                    ),
-                    child: const Text('Anular'),
-                  ),
-                ],
+                      Expanded(
+                        child: Text(
+                          'Saldo ${formatMoney(pedido.saldo)}',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                  final acciones = Wrap(
+                    spacing: 2,
+                    runSpacing: 0,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      IconButton(
+                        tooltip: 'Ver detalle',
+                        onPressed: () => _verPedido(pedido),
+                        icon: const Icon(Icons.visibility_outlined),
+                      ),
+                      TextButton(
+                        onPressed: hayCaja
+                            ? () => _cobrarPedido(pedido, data)
+                            : null,
+                        child: const Text('Cobrar'),
+                      ),
+                      TextButton(
+                        onPressed: hayCaja
+                            ? () {
+                                setState(
+                                  () => _pedidoEditandoId = pedido.id,
+                                );
+                                showAppMessage(
+                                  context,
+                                  'Agrega productos y usa “Agregar al pedido”.',
+                                );
+                              }
+                            : null,
+                        child: const Text('Agregar'),
+                      ),
+                      TextButton(
+                        onPressed: () => _anular(pedido),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.error,
+                        ),
+                        child: const Text('Anular'),
+                      ),
+                    ],
+                  );
+                  if (angosto) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        cabecera,
+                        const SizedBox(height: 8),
+                        montos,
+                        acciones,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(flex: 2, child: cabecera),
+                      Expanded(child: montos),
+                      acciones,
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -1151,9 +1234,10 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: const Text('Cobrar pedido'),
-      content: SizedBox(
-        width: 480,
+      content: DialogSurface(
+        maxWidth: 480,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1178,7 +1262,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 child: Row(
                   children: [
                     SizedBox(
-                      width: 150,
+                      width: 120,
                       child: DropdownButtonFormField<String>(
                         initialValue: row.metodo,
                         decoration: appInput(label: 'Método'),
@@ -1302,9 +1386,10 @@ class _PedidoDetalleDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final pedido = detalle.pedido;
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text('Pedido #${pedido.id}'),
-      content: SizedBox(
-        width: 520,
+      content: DialogSurface(
+        maxWidth: 520,
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

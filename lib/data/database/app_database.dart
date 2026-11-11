@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 6;
+  static const int schemaVersion = 7;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -81,9 +81,11 @@ class AppDatabase {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         await _createSchema(db, newVersion);
+        await _migrarUnidades(db);
         await _migrarPerfiles(db);
         await _migrarModosInsumo(db);
         await _migrarPrimerAcceso(db);
+        await _migrarVentaDirecta(db);
         await _afterOpen(db);
       },
     );
@@ -92,8 +94,37 @@ class AppDatabase {
   /// Datos base que deben existir después de crear o actualizar el esquema.
   Future<void> _afterOpen(Database db) async {
     await _seedUnits(db);
+    await _seedCategorias(db);
     await _seedDefaultAdmin(db);
     await _seedAppMeta(db);
+  }
+
+  /// Categorías base para que el menú y los productos nuevos tengan una
+  /// opción por defecto coherente.
+  Future<void> _seedCategorias(Database db) async {
+    const categorias = [
+      {
+        'nombre': 'Desayuno',
+        'color': 0xFFEA580C,
+        'siempre_disponible': 0,
+        'orden': 1,
+        'activo': 1,
+      },
+      {
+        'nombre': 'Almuerzo',
+        'color': 0xFF0F766E,
+        'siempre_disponible': 0,
+        'orden': 2,
+        'activo': 1,
+      },
+    ];
+    for (final categoria in categorias) {
+      await db.insert(
+        'categorias_producto',
+        categoria,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
   }
 
   Future<void> _createSchema(Database db, int version) async {
@@ -168,6 +199,8 @@ class AppDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
         abreviatura TEXT NOT NULL,
+        familia TEXT NOT NULL DEFAULT 'OTRO',
+        factor_base REAL NOT NULL DEFAULT 1,
         activo INTEGER NOT NULL DEFAULT 1
       )
     ''');
@@ -200,6 +233,9 @@ class AppDatabase {
         costo_promedio REAL NOT NULL DEFAULT 0,
         presentacion_compra TEXT,
         factor_compra REAL NOT NULL DEFAULT 1,
+        venta_directa INTEGER NOT NULL DEFAULT 0,
+        precio_venta REAL NOT NULL DEFAULT 0,
+        producto_id INTEGER,
         activo INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (unidad_id) REFERENCES unidades_medida(id)
       )
@@ -580,6 +616,165 @@ class AppDatabase {
     }
   }
 
+  /// Completa la familia y el factor de conversión de las unidades base.
+  Future<void> _migrarUnidades(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'unidades_medida', 'familia')) {
+        await db.execute(
+          "ALTER TABLE unidades_medida ADD COLUMN familia TEXT NOT NULL DEFAULT 'OTRO'",
+        );
+      }
+      if (!await _tieneColumna(db, 'unidades_medida', 'factor_base')) {
+        await db.execute(
+          'ALTER TABLE unidades_medida ADD COLUMN factor_base REAL NOT NULL DEFAULT 1',
+        );
+      }
+      const valores = <String, Map<String, Object>>{
+        'kg': {'familia': 'MASA', 'factor_base': 1000.0},
+        'g': {'familia': 'MASA', 'factor_base': 1.0},
+        'L': {'familia': 'VOLUMEN', 'factor_base': 1000.0},
+        'ml': {'familia': 'VOLUMEN', 'factor_base': 1.0},
+        'und': {'familia': 'UNIDAD', 'factor_base': 1.0},
+        'porc': {'familia': 'PORCION', 'factor_base': 1.0},
+      };
+      for (final entry in valores.entries) {
+        await db.update(
+          'unidades_medida',
+          entry.value,
+          where: 'abreviatura = ?',
+          whereArgs: [entry.key],
+        );
+      }
+    } catch (error) {
+      debugPrint('No se pudieron migrar las unidades: $error');
+    }
+  }
+
+  /// Convierte los productos de venta directa (stock propio) al modelo de
+  /// receta: crea un insumo por producto, traslada el stock y deja una receta
+  /// de una unidad. Así todo se controla desde Insumos.
+  Future<void> _migrarVentaDirecta(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'insumos', 'venta_directa')) {
+        await db.execute(
+          'ALTER TABLE insumos ADD COLUMN venta_directa INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tieneColumna(db, 'insumos', 'precio_venta')) {
+        await db.execute(
+          'ALTER TABLE insumos ADD COLUMN precio_venta REAL NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tieneColumna(db, 'insumos', 'producto_id')) {
+        await db.execute('ALTER TABLE insumos ADD COLUMN producto_id INTEGER');
+      }
+
+      final directos = await db.query(
+        'productos',
+        where: "tipo = 'DIRECTO'",
+      );
+      if (directos.isEmpty) return;
+
+      final admin = await db.rawQuery(
+        'SELECT id FROM usuarios ORDER BY id LIMIT 1',
+      );
+      final usuarioId = admin.isEmpty ? null : admin.first['id'] as int?;
+
+      var unidadRows = await db.rawQuery(
+        "SELECT id FROM unidades_medida WHERE abreviatura = 'und' LIMIT 1",
+      );
+      final int unidadId;
+      if (unidadRows.isEmpty) {
+        unidadId = await db.insert('unidades_medida', {
+          'nombre': 'Unidad',
+          'abreviatura': 'und',
+          'familia': 'UNIDAD',
+          'factor_base': 1,
+          'activo': 1,
+        });
+      } else {
+        unidadId = unidadRows.first['id'] as int;
+      }
+
+      final stockRows = await db.rawQuery(
+        'SELECT producto_id, stock FROM v_stock_productos',
+      );
+      final stockPorProducto = {
+        for (final row in stockRows)
+          row['producto_id'] as int: (row['stock'] as num).toDouble(),
+      };
+
+      for (final producto in directos) {
+        final productoId = producto['id'] as int;
+        final vinculado = await db.query(
+          'insumos',
+          columns: ['id'],
+          where: 'producto_id = ?',
+          whereArgs: [productoId],
+          limit: 1,
+        );
+        if (vinculado.isNotEmpty) continue;
+
+        var nombre = producto['nombre'] as String;
+        final mismoNombre = await db.query(
+          'insumos',
+          columns: ['id'],
+          where: 'nombre = ?',
+          whereArgs: [nombre],
+          limit: 1,
+        );
+        if (mismoNombre.isNotEmpty) nombre = '$nombre (venta directa)';
+
+        final insumoId = await db.insert('insumos', {
+          'nombre': nombre,
+          'unidad_id': unidadId,
+          'modo_control': 'UNIDAD',
+          'disponible': 1,
+          'stock_minimo': (producto['stock_minimo'] as num?)?.toDouble() ?? 0,
+          'costo_promedio':
+              (producto['costo_unitario'] as num?)?.toDouble() ?? 0,
+          'presentacion_compra': null,
+          'factor_compra': 1,
+          'venta_directa': 1,
+          'precio_venta': (producto['precio'] as num?)?.toDouble() ?? 0,
+          'producto_id': productoId,
+          'activo': (producto['activo'] as num?)?.toInt() ?? 1,
+        });
+
+        final stock = stockPorProducto[productoId] ?? 0;
+        if (usuarioId != null && stock.abs() > 0.0001) {
+          await db.insert('ajustes_stock', {
+            'fecha': sqlNow(),
+            'insumo_id': insumoId,
+            'producto_id': null,
+            'cantidad': stock,
+            'motivo': 'Migración a venta directa',
+            'usuario_id': usuarioId,
+          });
+        }
+
+        await db.update(
+          'productos',
+          {'tipo': 'PREPARADO', 'stock_minimo': 0, 'costo_unitario': 0},
+          where: 'id = ?',
+          whereArgs: [productoId],
+        );
+        await db.delete(
+          'receta_insumos',
+          where: 'producto_id = ?',
+          whereArgs: [productoId],
+        );
+        await db.insert('receta_insumos', {
+          'producto_id': productoId,
+          'insumo_id': insumoId,
+          'cantidad': 1,
+        });
+      }
+    } catch (error) {
+      debugPrint('No se pudo migrar la venta directa: $error');
+    }
+  }
+
   Future<void> _seedDefaultAdmin(Database db) async {
     final count =
         Sqflite.firstIntValue(
@@ -718,12 +913,12 @@ class AppDatabase {
 
   Future<void> _seedUnits(Database db) async {
     const units = [
-      {'nombre': 'Unidad', 'abreviatura': 'und'},
-      {'nombre': 'Porción', 'abreviatura': 'porc'},
-      {'nombre': 'Kilogramo', 'abreviatura': 'kg'},
-      {'nombre': 'Gramo', 'abreviatura': 'g'},
-      {'nombre': 'Litro', 'abreviatura': 'L'},
-      {'nombre': 'Mililitro', 'abreviatura': 'ml'},
+      {'nombre': 'Unidad', 'abreviatura': 'und', 'familia': 'UNIDAD', 'factor_base': 1.0},
+      {'nombre': 'Porción', 'abreviatura': 'porc', 'familia': 'PORCION', 'factor_base': 1.0},
+      {'nombre': 'Kilogramo', 'abreviatura': 'kg', 'familia': 'MASA', 'factor_base': 1000.0},
+      {'nombre': 'Gramo', 'abreviatura': 'g', 'familia': 'MASA', 'factor_base': 1.0},
+      {'nombre': 'Litro', 'abreviatura': 'L', 'familia': 'VOLUMEN', 'factor_base': 1000.0},
+      {'nombre': 'Mililitro', 'abreviatura': 'ml', 'familia': 'VOLUMEN', 'factor_base': 1.0},
     ];
     for (final unit in units) {
       await db.insert(

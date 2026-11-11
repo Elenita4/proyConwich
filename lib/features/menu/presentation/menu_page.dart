@@ -12,11 +12,13 @@ class _MenuData {
     required this.menu,
     required this.items,
     required this.productos,
+    required this.categorias,
   });
 
   final MenuDia? menu;
   final List<MenuItem> items;
   final List<Producto> productos;
+  final List<CategoriaProducto> categorias;
 }
 
 class MenuPage extends StatefulWidget {
@@ -93,93 +95,108 @@ class _MenuPageState extends State<MenuPage> {
     final productos = _esAdmin
         ? await _catalog.getProductos(soloActivos: true)
         : <Producto>[];
-    return _MenuData(menu: menu, items: items, productos: productos);
+    final categorias = _esAdmin
+        ? await _catalog.getCategorias()
+        : <CategoriaProducto>[];
+    return _MenuData(
+      menu: menu,
+      items: items,
+      productos: productos,
+      categorias: categorias,
+    );
   }
 
-  Future<void> _crear({bool duplicar = false}) async {
-    try {
-      MenuDia? menu;
-      if (duplicar) {
-        menu = await _repository.duplicarAnterior(
-          _fecha,
-          _tipo,
-          widget.usuario.id,
-        );
-        if (menu == null) {
-          if (!mounted) return;
-          showAppMessage(
-            context,
-            'No hay un menú anterior para duplicar.',
-            error: true,
-          );
-          return;
-        }
-      } else {
-        menu = await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
-      }
-      final agregados = await _agregarActivos(menu.id);
-      if (!mounted) return;
-      setState(_reload);
-      showAppMessage(
-        context,
-        agregados == 0
-            ? 'Menú creado. Agrega los platos.'
-            : 'Menú creado con $agregados producto(s) activo(s). Quita los que no correspondan.',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, 'No se pudo crear el menú: $error', error: true);
-    }
+  bool _esCategoriaDelTipo(CategoriaProducto categoria) {
+    final nombre = categoria.nombre
+        .toLowerCase()
+        .replaceAll('á', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('í', 'i')
+        .replaceAll('ó', 'o')
+        .replaceAll('ú', 'u');
+    return _tipo == 'DESAYUNO'
+        ? nombre.contains('desayuno')
+        : nombre.contains('almuerzo');
   }
 
-  /// Carga en el menú todos los productos activos que aún no estén.
-  /// El administrador quita los que no correspondan para ese día.
-  Future<int> _agregarActivos(int menuDiaId) async {
-    final items = await _repository.getItems(menuDiaId);
-    final existentes = items.map((item) => item.productoId).toSet();
-    final activos = await _catalog.getProductos(soloActivos: true);
-    var agregados = 0;
-    for (final producto in activos) {
-      if (existentes.contains(producto.id)) continue;
-      await _repository.agregarProducto(menuDiaId, producto.id!);
-      agregados++;
-    }
-    return agregados;
-  }
-
-  Future<void> _agregarPlatos(_MenuData data) async {
-    final menu = data.menu;
-    if (menu == null) return;
-    final existentes = data.items.map((item) => item.productoId).toSet();
-    // Se recargan los productos por si se crearon hace un momento.
-    final productos = await _catalog.getProductos(soloActivos: true);
-    if (!mounted) return;
-    final disponibles = productos
-        .where((producto) => !existentes.contains(producto.id))
+  /// Productos que corresponden al tipo de menú actual. Se descartan los de
+  /// venta directa porque se venden siempre.
+  List<Producto> _sugeridos(_MenuData data) {
+    final base = data.productos
+        .where(
+          (producto) =>
+              !producto.categoriaSiempreDisponible &&
+              !producto.esVentaDirecta,
+        )
         .toList();
-    if (disponibles.isEmpty) {
+    final categoriasTipo = data.categorias
+        .where(_esCategoriaDelTipo)
+        .map((categoria) => categoria.id)
+        .toSet();
+    if (categoriasTipo.isEmpty) return base;
+    final filtrados = base
+        .where((producto) => categoriasTipo.contains(producto.categoriaId))
+        .toList();
+    return filtrados.isEmpty ? base : filtrados;
+  }
+
+  Future<void> _armarMenu(_MenuData data) async {
+    final sugeridos = _sugeridos(data);
+    // Conserva los platos que ya están en el borrador aunque su categoría no
+    // coincida con el filtro, para no perderlos al volver a guardar.
+    final idsSugeridos = sugeridos.map((producto) => producto.id).toSet();
+    for (final item in data.items) {
+      if (idsSugeridos.contains(item.productoId)) continue;
+      for (final producto in data.productos) {
+        if (producto.id == item.productoId) {
+          sugeridos.add(producto);
+          idsSugeridos.add(producto.id);
+          break;
+        }
+      }
+    }
+    if (sugeridos.isEmpty) {
+      if (!mounted) return;
       showAppMessage(
         context,
-        'No hay productos activos disponibles para agregar.',
+        'No hay productos activos para este menú. Crea productos en Productos.',
         error: true,
       );
       return;
     }
+    final anteriores = await _repository.getProductosMenuAnterior(
+      _fecha,
+      _tipo,
+    );
+    if (!mounted) return;
+    final seleccionInicial = data.items.isNotEmpty
+        ? data.items.map((item) => item.productoId).toList()
+        : anteriores;
     final seleccionados = await showDialog<List<int>>(
       context: context,
-      builder: (_) => _AddProductsDialog(productos: disponibles),
+      builder: (_) => _MenuBuilderDialog(
+        productos: sugeridos,
+        seleccionInicial: seleccionInicial,
+        anteriores: anteriores,
+        tipo: _tipo,
+      ),
     );
-    if (seleccionados == null || seleccionados.isEmpty) return;
+    if (seleccionados == null) return;
     try {
-      for (final id in seleccionados) {
-        await _repository.agregarProducto(menu.id, id);
-      }
+      final menu = data.menu ??
+          await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
+      await _repository.reemplazarItems(menu.id, seleccionados);
       if (!mounted) return;
       setState(_reload);
-      showAppMessage(context, '${seleccionados.length} plato(s) agregado(s).');
+      showAppMessage(
+        context,
+        seleccionados.isEmpty
+            ? 'El menú quedó vacío.'
+            : 'Menú guardado con ${seleccionados.length} producto(s).',
+      );
     } catch (error) {
       if (!mounted) return;
-      showAppMessage(context, 'No se pudo agregar: $error', error: true);
+      showAppMessage(context, 'No se pudo guardar el menú: $error', error: true);
     }
   }
 
@@ -267,7 +284,9 @@ class _MenuPageState extends State<MenuPage> {
       builder: (context, snapshot) {
         final data = snapshot.data;
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -343,23 +362,13 @@ class _MenuPageState extends State<MenuPage> {
                       ? 'No hay menú para ${_tipo.toLowerCase()}'
                       : 'El menú de hoy aún no está publicado',
                   message: _esAdmin
-                      ? 'Crea un menú nuevo o duplica el del día anterior.'
+                      ? 'Elige los productos de desayuno o almuerzo en un solo paso.'
                       : 'El administrador debe publicar el menú para poder vender.',
-                  action: _esAdmin
-                      ? Wrap(
-                          spacing: 10,
-                          children: [
-                            FilledButton.icon(
-                              onPressed: () => _crear(),
-                              icon: const Icon(Icons.add),
-                              label: const Text('Crear menú'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: () => _crear(duplicar: true),
-                              icon: const Icon(Icons.copy_all_outlined),
-                              label: const Text('Duplicar anterior'),
-                            ),
-                          ],
+                  action: _esAdmin && data != null
+                      ? FilledButton.icon(
+                          onPressed: () => _armarMenu(data),
+                          icon: const Icon(Icons.playlist_add_check),
+                          label: const Text('Armar menú'),
                         )
                       : null,
                 )
@@ -395,61 +404,89 @@ class _MenuPageState extends State<MenuPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AppCard(
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(Icons.restaurant_menu, color: scheme.primary),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final angosto = esAngosto(constraints.maxWidth, limite: 760);
+              final titulo = Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.restaurant_menu, color: scheme.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Menú de ${_tipo.toLowerCase()} · ${formatDateShort(parseSqlDate(menu.fecha))}',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          cerrado
+                              ? 'Cerrado. Solo consulta.'
+                              : publicado
+                              ? 'Publicado. Los platos se pueden vender.'
+                              : 'Borrador. Elige los platos y publica cuando esté listo.',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+              final botones = Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (puedeEditar)
+                    OutlinedButton.icon(
+                      onPressed: () => _armarMenu(data),
+                      icon: const Icon(Icons.playlist_add_check),
+                      label: const Text('Editar platos'),
+                    ),
+                  if (puedeEditar)
+                    FilledButton.icon(
+                      onPressed: () => _publicar(data),
+                      icon: const Icon(Icons.publish),
+                      label: const Text('Publicar'),
+                    ),
+                  if (_esAdmin && publicado)
+                    OutlinedButton.icon(
+                      onPressed: () => _cerrar(data),
+                      icon: const Icon(Icons.lock_outline),
+                      label: const Text('Cerrar menú'),
+                    ),
+                ],
+              );
+              if (angosto) {
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Menú de ${_tipo.toLowerCase()} · ${formatDateShort(parseSqlDate(menu.fecha))}',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      cerrado
-                          ? 'Cerrado. Solo consulta.'
-                          : publicado
-                          ? 'Publicado. Los platos se pueden vender.'
-                          : 'Borrador. Agrega los platos y publica cuando esté listo.',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
+                    titulo,
+                    if (botones.children.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      botones,
+                    ],
                   ],
-                ),
-              ),
-              if (puedeEditar)
-                OutlinedButton.icon(
-                  onPressed: () => _agregarPlatos(data),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Agregar platos'),
-                ),
-              if (puedeEditar) const SizedBox(width: 8),
-              if (puedeEditar)
-                FilledButton.icon(
-                  onPressed: () => _publicar(data),
-                  icon: const Icon(Icons.publish),
-                  label: const Text('Publicar'),
-                ),
-              if (_esAdmin && publicado) ...[
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: () => _cerrar(data),
-                  icon: const Icon(Icons.lock_outline),
-                  label: const Text('Cerrar menú'),
-                ),
-              ],
-            ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: titulo),
+                  if (botones.children.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    botones,
+                  ],
+                ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 16),
@@ -462,9 +499,9 @@ class _MenuPageState extends State<MenuPage> {
                 : 'El administrador aún no agregó platos.',
             action: puedeEditar
                 ? FilledButton.icon(
-                    onPressed: () => _agregarPlatos(data),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Agregar platos'),
+                    onPressed: () => _armarMenu(data),
+                    icon: const Icon(Icons.playlist_add_check),
+                    label: const Text('Elegir platos'),
                   )
                 : null,
           )
@@ -585,30 +622,62 @@ class _MenuPageState extends State<MenuPage> {
   }
 }
 
-class _AddProductsDialog extends StatefulWidget {
-  const _AddProductsDialog({required this.productos});
+class _MenuBuilderDialog extends StatefulWidget {
+  const _MenuBuilderDialog({
+    required this.productos,
+    required this.seleccionInicial,
+    required this.anteriores,
+    required this.tipo,
+  });
 
   final List<Producto> productos;
+  final List<int> seleccionInicial;
+  final List<int> anteriores;
+  final String tipo;
 
   @override
-  State<_AddProductsDialog> createState() => _AddProductsDialogState();
+  State<_MenuBuilderDialog> createState() => _MenuBuilderDialogState();
 }
 
-class _AddProductsDialogState extends State<_AddProductsDialog> {
-  final _seleccionados = <int>{};
+class _MenuBuilderDialogState extends State<_MenuBuilderDialog> {
+  late final Set<int> _seleccionados;
   String _search = '';
 
   @override
+  void initState() {
+    super.initState();
+    final disponibles = widget.productos
+        .map((producto) => producto.id!)
+        .toSet();
+    _seleccionados = widget.seleccionInicial
+        .where(disponibles.contains)
+        .toSet();
+  }
+
+  List<Producto> get _filtrados {
+    final term = _search.trim().toLowerCase();
+    return widget.productos
+        .where(
+          (producto) =>
+              term.isEmpty || producto.nombre.toLowerCase().contains(term),
+        )
+        .toList();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final filtrados = widget.productos.where((producto) {
-      final term = _search.trim().toLowerCase();
-      return term.isEmpty || producto.nombre.toLowerCase().contains(term);
-    }).toList();
+    final filtrados = _filtrados;
+    final grupos = <String, List<Producto>>{};
+    for (final producto in filtrados) {
+      grupos.putIfAbsent(producto.categoriaNombre, () => []).add(producto);
+    }
+    final scheme = Theme.of(context).colorScheme;
     return AlertDialog(
-      title: const Text('Agregar platos al menú'),
-      content: SizedBox(
-        width: 520,
-        height: 480,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Menú de ${widget.tipo.toLowerCase()}'),
+      content: DialogSurface(
+        maxWidth: 560,
+        maxHeightFactor: 0.85,
         child: Column(
           children: [
             TextField(
@@ -618,7 +687,48 @@ class _AddProductsDialogState extends State<_AddProductsDialog> {
               ),
               onChanged: (value) => setState(() => _search = value),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                TextButton.icon(
+                  onPressed: filtrados.isEmpty
+                      ? null
+                      : () => setState(
+                          () => _seleccionados.addAll(
+                            filtrados.map((producto) => producto.id!),
+                          ),
+                        ),
+                  icon: const Icon(Icons.done_all, size: 18),
+                  label: const Text('Seleccionar todos'),
+                ),
+                TextButton.icon(
+                  onPressed: _seleccionados.isEmpty
+                      ? null
+                      : () => setState(_seleccionados.clear),
+                  icon: const Icon(Icons.clear_all, size: 18),
+                  label: const Text('Limpiar'),
+                ),
+                if (widget.anteriores.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => setState(() {
+                      _seleccionados
+                        ..clear()
+                        ..addAll(
+                          widget.anteriores.where(
+                            (id) => widget.productos.any(
+                              (producto) => producto.id == id,
+                            ),
+                          ),
+                        );
+                    }),
+                    icon: const Icon(Icons.history, size: 18),
+                    label: const Text('Copiar día anterior'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
             Expanded(
               child: filtrados.isEmpty
                   ? const EmptyState(
@@ -626,28 +736,42 @@ class _AddProductsDialogState extends State<_AddProductsDialog> {
                       title: 'Sin resultados',
                       message: 'No hay productos activos que coincidan.',
                     )
-                  : ListView.separated(
-                      itemCount: filtrados.length,
-                      separatorBuilder: (_, _) => const Divider(),
-                      itemBuilder: (context, index) {
-                        final producto = filtrados[index];
-                        return CheckboxListTile(
-                          value: _seleccionados.contains(producto.id),
-                          onChanged: (value) {
-                            setState(() {
-                              if (value == true) {
-                                _seleccionados.add(producto.id!);
-                              } else {
-                                _seleccionados.remove(producto.id);
-                              }
-                            });
-                          },
-                          title: Text(producto.nombre),
-                          subtitle: Text(
-                            '${producto.categoriaNombre} · ${formatMoney(producto.precio)} · ${producto.tipo == 'DIRECTO' ? 'Directo' : 'Preparado'}',
+                  : ListView(
+                      children: [
+                        for (final grupo in grupos.entries) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+                            child: Text(
+                              grupo.key,
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: scheme.primary,
+                                  ),
+                            ),
                           ),
-                        );
-                      },
+                          for (final producto in grupo.value)
+                            CheckboxListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              value: _seleccionados.contains(producto.id),
+                              onChanged: (value) {
+                                setState(() {
+                                  if (value == true) {
+                                    _seleccionados.add(producto.id!);
+                                  } else {
+                                    _seleccionados.remove(producto.id);
+                                  }
+                                });
+                              },
+                              title: Text(producto.nombre),
+                              subtitle: Text(
+                                '${formatMoney(producto.precio)} · '
+                                '${producto.esVentaDirecta ? 'Venta directa' : 'Con receta'}',
+                              ),
+                            ),
+                        ],
+                      ],
                     ),
             ),
           ],
@@ -659,10 +783,8 @@ class _AddProductsDialogState extends State<_AddProductsDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
-          onPressed: _seleccionados.isEmpty
-              ? null
-              : () => Navigator.pop(context, _seleccionados.toList()),
-          child: Text('Agregar (${_seleccionados.length})'),
+          onPressed: () => Navigator.pop(context, _seleccionados.toList()),
+          child: Text('Guardar (${_seleccionados.length})'),
         ),
       ],
     );

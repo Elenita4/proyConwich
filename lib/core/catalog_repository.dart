@@ -26,11 +26,21 @@ class UnidadMedida {
     required this.id,
     required this.nombre,
     required this.abreviatura,
+    this.familia = 'OTRO',
+    this.factorBase = 1,
   });
 
   final int id;
   final String nombre;
   final String abreviatura;
+
+  /// `MASA`, `VOLUMEN`, `UNIDAD`, `PORCION` u `OTRO`.
+  final String familia;
+
+  /// Cuántas unidades base (g, ml o 1) contiene una unidad de este tipo.
+  final double factorBase;
+
+  bool get esConvertible => familia == 'MASA' || familia == 'VOLUMEN';
 }
 
 class Producto {
@@ -48,6 +58,8 @@ class Producto {
     required this.costoUnitario,
     required this.activo,
     required this.stock,
+    this.categoriaSiempreDisponible = false,
+    this.insumoVinculadoId,
   });
 
   final int? id;
@@ -64,7 +76,14 @@ class Producto {
   final bool activo;
   final double stock;
 
+  /// Si la categoría se vende siempre (sin depender del menú del día).
+  final bool categoriaSiempreDisponible;
+
+  /// Insumo del que se generó este producto de venta directa.
+  final int? insumoVinculadoId;
+
   bool get esDirecto => tipo == 'DIRECTO';
+  bool get esVentaDirecta => insumoVinculadoId != null;
 }
 
 class Insumo {
@@ -77,18 +96,40 @@ class Insumo {
     required this.costoPromedio,
     required this.activo,
     required this.stock,
+    this.unidadNombre = '',
+    this.unidadFamilia = 'OTRO',
+    this.unidadFactorBase = 1,
+    this.ventaDirecta = false,
+    this.precioVenta = 0,
+    this.productoId,
+    this.categoriaVentaDirectaId,
+    this.imagen,
   });
 
   final int? id;
   final String nombre;
   final int unidadId;
   final String unidadAbreviatura;
+  final String unidadNombre;
+  final String unidadFamilia;
+  final double unidadFactorBase;
   final double stockMinimo;
   final double costoPromedio;
   final bool activo;
   final double stock;
 
+  /// Se vende tal cual desde Productos con una receta de una unidad.
+  final bool ventaDirecta;
+  final double precioVenta;
+  final int? productoId;
+  final int? categoriaVentaDirectaId;
+
+  /// Imagen del producto generado (solo para venta directa).
+  final Uint8List? imagen;
+
   bool get bajoStock => stock <= stockMinimo;
+  bool get unidadConvertible =>
+      unidadFamilia == 'MASA' || unidadFamilia == 'VOLUMEN';
 }
 
 class RecetaLinea {
@@ -175,6 +216,8 @@ class CatalogRepository {
             id: row['id']! as int,
             nombre: row['nombre']! as String,
             abreviatura: row['abreviatura']! as String,
+            familia: (row['familia'] as String?) ?? 'OTRO',
+            factorBase: (row['factor_base'] as num?)?.toDouble() ?? 1,
           ),
         )
         .toList();
@@ -184,9 +227,12 @@ class CatalogRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT p.*, c.nombre AS categoria_nombre, c.color AS categoria_color,
+             c.siempre_disponible AS categoria_siempre_disponible,
+             iv.id AS insumo_vinculado_id,
              COALESCE(s.stock, 0) AS stock
       FROM productos p
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
+      LEFT JOIN insumos iv ON iv.producto_id = p.id AND iv.venta_directa = 1
       LEFT JOIN v_stock_productos s ON s.producto_id = p.id
       ${soloActivos ? 'WHERE p.activo = 1' : ''}
       ORDER BY p.activo DESC, c.orden, p.nombre COLLATE NOCASE
@@ -210,9 +256,12 @@ class CatalogRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT p.*, c.nombre AS categoria_nombre, c.color AS categoria_color,
+             c.siempre_disponible AS categoria_siempre_disponible,
+             iv.id AS insumo_vinculado_id,
              COALESCE(s.stock, 0) AS stock
       FROM productos p
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
+      LEFT JOIN insumos iv ON iv.producto_id = p.id AND iv.venta_directa = 1
       LEFT JOIN v_stock_productos s ON s.producto_id = p.id
       WHERE p.id = ?
       LIMIT 1
@@ -243,6 +292,14 @@ class CatalogRepository {
       'productos',
       values,
       where: 'id = ?',
+      whereArgs: [producto.id],
+    );
+    // Si el producto nace de un insumo de venta directa, el precio se mantiene
+    // sincronizado para que el insumo muestre el valor correcto.
+    await db.update(
+      'insumos',
+      {'precio_venta': producto.precio},
+      where: 'producto_id = ?',
       whereArgs: [producto.id],
     );
     return producto.id!;
@@ -329,52 +386,38 @@ class CatalogRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT i.*, u.abreviatura AS unidad_abreviatura,
+             u.nombre AS unidad_nombre, u.familia AS unidad_familia,
+             u.factor_base AS unidad_factor,
+             p.categoria_id AS categoria_venta_id,
+             p.imagen AS producto_imagen,
              COALESCE(s.stock, 0) AS stock
       FROM insumos i
       INNER JOIN unidades_medida u ON u.id = i.unidad_id
+      LEFT JOIN productos p ON p.id = i.producto_id
       LEFT JOIN v_stock_insumos s ON s.insumo_id = i.id
       ${soloActivos ? 'WHERE i.activo = 1' : ''}
       ORDER BY i.activo DESC, i.nombre COLLATE NOCASE
     ''');
-    return rows
-        .map(
-          (row) => Insumo(
-            id: row['id']! as int,
-            nombre: row['nombre']! as String,
-            unidadId: row['unidad_id']! as int,
-            unidadAbreviatura: row['unidad_abreviatura']! as String,
-            stockMinimo: (row['stock_minimo'] as num).toDouble(),
-            costoPromedio: (row['costo_promedio'] as num).toDouble(),
-            activo: (row['activo'] as num).toInt() == 1,
-            stock: (row['stock'] as num).toDouble(),
-          ),
-        )
-        .toList();
+    return rows.map(_insumoFromRow).toList();
   }
 
   Future<Insumo?> getInsumo(int id) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT i.*, u.abreviatura AS unidad_abreviatura,
+             u.nombre AS unidad_nombre, u.familia AS unidad_familia,
+             u.factor_base AS unidad_factor,
+             p.categoria_id AS categoria_venta_id,
+             p.imagen AS producto_imagen,
              COALESCE(s.stock, 0) AS stock
       FROM insumos i
       INNER JOIN unidades_medida u ON u.id = i.unidad_id
+      LEFT JOIN productos p ON p.id = i.producto_id
       LEFT JOIN v_stock_insumos s ON s.insumo_id = i.id
       WHERE i.id = ?
       LIMIT 1
     ''', [id]);
-    if (rows.isEmpty) return null;
-    final row = rows.first;
-    return Insumo(
-      id: row['id']! as int,
-      nombre: row['nombre']! as String,
-      unidadId: row['unidad_id']! as int,
-      unidadAbreviatura: row['unidad_abreviatura']! as String,
-      stockMinimo: (row['stock_minimo'] as num).toDouble(),
-      costoPromedio: (row['costo_promedio'] as num).toDouble(),
-      activo: (row['activo'] as num).toInt() == 1,
-      stock: (row['stock'] as num).toDouble(),
-    );
+    return rows.isEmpty ? null : _insumoFromRow(rows.first);
   }
 
   Future<int> saveInsumo(Insumo insumo) async {
@@ -386,18 +429,153 @@ class CatalogRepository {
       'disponible': 1,
       'stock_minimo': insumo.stockMinimo,
       'costo_promedio': insumo.costoPromedio,
+      'venta_directa': insumo.ventaDirecta ? 1 : 0,
+      'precio_venta': insumo.precioVenta,
       'activo': insumo.activo ? 1 : 0,
     };
+    final int id;
     if (insumo.id == null) {
-      return db.insert('insumos', values);
+      id = await db.insert('insumos', values);
+    } else {
+      id = insumo.id!;
+      await db.update(
+        'insumos',
+        values,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
     }
-    await db.update(
-      'insumos',
-      values,
-      where: 'id = ?',
-      whereArgs: [insumo.id],
+    if (insumo.ventaDirecta) {
+      await _sincronizarProductoVentaDirecta(
+        insumoId: id,
+        insumo: insumo,
+      );
+    } else if (insumo.productoId != null) {
+      // Se desactiva, no se borra: conserva el historial de ventas.
+      await db.update(
+        'productos',
+        {'activo': 0},
+        where: 'id = ?',
+        whereArgs: [insumo.productoId],
+      );
+    }
+    return id;
+  }
+
+  /// Crea o actualiza el producto que representa un insumo de venta directa.
+  /// La receta siempre es una unidad del insumo.
+  Future<void> _sincronizarProductoVentaDirecta({
+    required int insumoId,
+    required Insumo insumo,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    final categoriaId =
+        insumo.categoriaVentaDirectaId ?? await _categoriaVentaDirectaId();
+    final nombreInsumo = insumo.nombre.trim();
+    int? productoId = insumo.productoId;
+    if (productoId != null) {
+      final existe = await db.query(
+        'productos',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [productoId],
+        limit: 1,
+      );
+      if (existe.isEmpty) productoId = null;
+    }
+
+    var nombre = nombreInsumo;
+    if (productoId == null) {
+      final ocupado = await db.query(
+        'productos',
+        columns: ['id'],
+        where: 'nombre = ?',
+        whereArgs: [nombre],
+        limit: 1,
+      );
+      if (ocupado.isNotEmpty) nombre = '$nombreInsumo (venta directa)';
+      productoId = await db.insert('productos', {
+        'nombre': nombre,
+        'categoria_id': categoriaId,
+        'descripcion': 'Venta directa del insumo $nombreInsumo',
+        'precio': insumo.precioVenta,
+        'imagen': insumo.imagen,
+        'tipo': 'PREPARADO',
+        'stock_minimo': 0,
+        'costo_unitario': 0,
+        'activo': insumo.activo ? 1 : 0,
+        'creado_en': sqlNow(),
+      });
+      await db.update(
+        'insumos',
+        {'producto_id': productoId},
+        where: 'id = ?',
+        whereArgs: [insumoId],
+      );
+    } else {
+      final ocupado = await db.query(
+        'productos',
+        columns: ['id'],
+        where: 'nombre = ? AND id <> ?',
+        whereArgs: [nombre, productoId],
+        limit: 1,
+      );
+      if (ocupado.isNotEmpty) nombre = '$nombreInsumo (venta directa)';
+      final repetido = await db.query(
+        'productos',
+        columns: ['id'],
+        where: 'nombre = ? AND id <> ?',
+        whereArgs: [nombre, productoId],
+        limit: 1,
+      );
+      if (repetido.isNotEmpty) nombre = '$nombreInsumo ($productoId)';
+      await db.update(
+        'productos',
+        {
+          'nombre': nombre,
+          'categoria_id': categoriaId,
+          'precio': insumo.precioVenta,
+          'imagen': insumo.imagen,
+          'tipo': 'PREPARADO',
+          'stock_minimo': 0,
+          'costo_unitario': 0,
+          'activo': insumo.activo ? 1 : 0,
+        },
+        where: 'id = ?',
+        whereArgs: [productoId],
+      );
+    }
+    await saveRecetaCantidades(productoId, {insumoId: 1});
+  }
+
+  /// Categoría (con `siempre_disponible = 1`) para los productos que se
+  /// generan desde un insumo de venta directa.
+  Future<int> _categoriaVentaDirectaId() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'categorias_producto',
+      columns: ['id'],
+      where: 'nombre = ?',
+      whereArgs: ['Venta directa'],
+      limit: 1,
     );
-    return insumo.id!;
+    if (rows.isNotEmpty) {
+      final id = rows.first['id'] as int;
+      await db.update(
+        'categorias_producto',
+        {'siempre_disponible': 1, 'activo': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return id;
+    }
+    return db.insert('categorias_producto', {
+      'nombre': 'Venta directa',
+      'color': 0xFF0F766E,
+      'siempre_disponible': 1,
+      'orden': 90,
+      'activo': 1,
+    });
   }
 
   Future<void> setInsumoActivo(int id, bool activo) async {
@@ -509,6 +687,28 @@ class CatalogRepository {
     costoUnitario: (row['costo_unitario'] as num).toDouble(),
     activo: (row['activo'] as num).toInt() == 1,
     stock: (row['stock'] as num?)?.toDouble() ?? 0,
+    categoriaSiempreDisponible:
+        (row['categoria_siempre_disponible'] as num?)?.toInt() == 1,
+    insumoVinculadoId: row['insumo_vinculado_id'] as int?,
+  );
+
+  Insumo _insumoFromRow(Map<String, Object?> row) => Insumo(
+    id: row['id']! as int,
+    nombre: row['nombre']! as String,
+    unidadId: row['unidad_id']! as int,
+    unidadAbreviatura: row['unidad_abreviatura']! as String,
+    unidadNombre: (row['unidad_nombre'] as String?) ?? '',
+    unidadFamilia: (row['unidad_familia'] as String?) ?? 'OTRO',
+    unidadFactorBase: (row['unidad_factor'] as num?)?.toDouble() ?? 1,
+    stockMinimo: (row['stock_minimo'] as num).toDouble(),
+    costoPromedio: (row['costo_promedio'] as num).toDouble(),
+    activo: (row['activo'] as num).toInt() == 1,
+    stock: (row['stock'] as num).toDouble(),
+    ventaDirecta: (row['venta_directa'] as num?)?.toInt() == 1,
+    precioVenta: (row['precio_venta'] as num?)?.toDouble() ?? 0,
+    productoId: row['producto_id'] as int?,
+    categoriaVentaDirectaId: row['categoria_venta_id'] as int?,
+    imagen: _asBytes(row['producto_imagen']),
   );
 
   static Uint8List? _asBytes(Object? value) {
