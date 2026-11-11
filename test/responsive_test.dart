@@ -115,6 +115,95 @@ void main() {
     );
   }
 
+  testWidgets(
+    'el filtro de categoría padre incluye sus productos y subcategorías',
+    (tester) async {
+      final catalog = CatalogRepository();
+      await catalog.saveCategoria(
+        const CategoriaProducto(
+          nombre: 'PADRE PRUEBA',
+          color: 0xFF2563EB,
+          siempreDisponible: false,
+          orden: 10,
+          activo: true,
+        ),
+      );
+      final categorias = await catalog.getCategorias();
+      final padre = categorias.firstWhere(
+        (categoria) => categoria.nombre == 'PADRE PRUEBA',
+      );
+      for (final nombre in ['HIJA UNO', 'HIJA DOS']) {
+        await catalog.saveCategoria(
+          CategoriaProducto(
+            nombre: nombre,
+            color: 0xFF2563EB,
+            siempreDisponible: false,
+            orden: 11,
+            activo: true,
+            parentId: padre.id,
+          ),
+        );
+      }
+      final categoriasConHijas = await catalog.getCategorias();
+      final hijaUno = categoriasConHijas.firstWhere(
+        (categoria) => categoria.nombre == 'HIJA UNO',
+      );
+      final hijaDos = categoriasConHijas.firstWhere(
+        (categoria) => categoria.nombre == 'HIJA DOS',
+      );
+
+      Future<void> crearProducto(String nombre, CategoriaProducto categoria) =>
+          catalog.saveProducto(
+            Producto(
+              nombre: nombre,
+              categoriaId: categoria.id!,
+              categoriaNombre: categoria.nombre,
+              categoriaColor: categoria.color,
+              precio: 10,
+              tipo: 'PREPARADO',
+              stockMinimo: 0,
+              costoUnitario: 0,
+              activo: true,
+              stock: 0,
+            ),
+          );
+      await crearProducto('Plato padre', padre);
+      await crearProducto('Plato hija uno', hijaUno);
+      await crearProducto('Plato hija dos', hijaDos);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ProductsPage(usuario: admin, refreshToken: 0)),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+
+      final filtro = tester.widget<DropdownButtonFormField<int?>>(
+        find.byType(DropdownButtonFormField<int?>),
+      );
+      filtro.onChanged!(padre.id);
+      await tester.pump();
+      expect(find.text('Plato padre'), findsOneWidget);
+      expect(find.text('Plato hija uno'), findsOneWidget);
+      expect(find.text('Plato hija dos'), findsOneWidget);
+      expect(find.text('Almuerzo del día'), findsNothing);
+
+      final filtroSubcategoria = tester.widget<DropdownButtonFormField<int?>>(
+        find.byType(DropdownButtonFormField<int?>),
+      );
+      filtroSubcategoria.onChanged!(hijaUno.id);
+      await tester.pump();
+      expect(find.text('Plato hija uno'), findsOneWidget);
+      expect(find.text('Plato padre'), findsNothing);
+      expect(find.text('Plato hija dos'), findsNothing);
+    },
+  );
+
   testWidgets('pantallas operativas no desbordan en 360x640', (tester) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;

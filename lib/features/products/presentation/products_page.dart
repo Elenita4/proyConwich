@@ -128,6 +128,23 @@ class _ProductsPageState extends State<ProductsPage> {
     setState(_reload);
   }
 
+  Set<int> _categoriaIdsIncluidos(List<CategoriaProducto> categorias) {
+    final categoriaId = _categoriaId!;
+    final seleccionada = categorias.where(
+      (categoria) => categoria.id == categoriaId,
+    );
+    if (seleccionada.any((categoria) => categoria.esSubcategoria)) {
+      return {categoriaId};
+    }
+
+    return {
+      categoriaId,
+      for (final categoria in categorias)
+        if (categoria.parentId == categoriaId && categoria.id != null)
+          categoria.id!,
+    };
+  }
+
   Future<void> _ajustarStock(Producto producto) async {
     final nuevo = await showDialog<double>(
       context: context,
@@ -161,9 +178,13 @@ class _ProductsPageState extends State<ProductsPage> {
         final data = snapshot.data;
         final productos = data?.productos ?? [];
         final categorias = data?.categorias ?? [];
+        final categoriaIds = _categoriaId == null
+            ? null
+            : _categoriaIdsIncluidos(categorias);
         final filtrados = productos.where((producto) {
           if (_soloActivos && !producto.activo) return false;
-          if (_categoriaId != null && producto.categoriaId != _categoriaId) {
+          if (categoriaIds != null &&
+              !categoriaIds.contains(producto.categoriaId)) {
             return false;
           }
           final term = _search.trim().toLowerCase();
