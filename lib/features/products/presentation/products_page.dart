@@ -180,8 +180,7 @@ class _ProductsPageState extends State<ProductsPage> {
             children: [
               PageHeader(
                 title: 'Productos',
-                subtitle:
-                    'Platos y bebidas que usan receta. Los precios solo se cambian aquí y las categorías se crean desde esta misma pantalla.',
+                subtitle: 'Platos y bebidas que usan receta. Los precios solo se cambian aquí y las categorías se crean desde esta misma pantalla.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -222,7 +221,9 @@ class _ProductsPageState extends State<ProductsPage> {
                             (categoria) => DropdownMenuItem<int?>(
                               value: categoria.id,
                               child: Text(
-                                categoria.nombre,
+                                categoria.esSubcategoria
+                                    ? '   ${categoria.nombreCompleto}'
+                                    : categoria.nombre,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -340,9 +341,8 @@ class _ProductRow extends StatelessWidget {
           children: [
             Text(
               producto.nombre,
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (producto.esVentaDirecta)
               Chip(
@@ -357,18 +357,16 @@ class _ProductRow extends StatelessWidget {
         const SizedBox(height: 2),
         Text(
           '${producto.categoriaNombre} · $etiqueta',
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
         if (producto.descripcion != null)
           Text(
             producto.descripcion!,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
       ],
     );
@@ -377,9 +375,8 @@ class _ProductRow extends StatelessWidget {
       children: [
         Text(
           formatMoney(producto.precio),
-          style: Theme.of(
-            context,
-          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         Text(
           producto.esDirecto
@@ -388,8 +385,7 @@ class _ProductRow extends StatelessWidget {
               ? 'Receta fija: 1 unidad'
               : 'Con receta',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: producto.esDirecto &&
-                    producto.stock <= producto.stockMinimo
+            color: producto.esDirecto && producto.stock <= producto.stockMinimo
                 ? scheme.error
                 : scheme.onSurfaceVariant,
           ),
@@ -527,7 +523,7 @@ class _ProductDialogState extends State<_ProductDialog> {
     _categorias = List.of(widget.categorias);
     final activas = _categorias.where((categoria) => categoria.activo).toList();
     int? categoriaPorDefecto;
-    for (final nombre in const ['Almuerzo', 'Desayuno']) {
+    for (final nombre in const ['Almuerzo', 'Plato suelto', 'Completo']) {
       for (final categoria in activas) {
         if (categoria.nombre.toLowerCase() == nombre.toLowerCase()) {
           categoriaPorDefecto = categoria.id;
@@ -536,7 +532,8 @@ class _ProductDialogState extends State<_ProductDialog> {
       }
       if (categoriaPorDefecto != null) break;
     }
-    _categoriaId = producto?.categoriaId ??
+    _categoriaId =
+        producto?.categoriaId ??
         categoriaPorDefecto ??
         (activas.isEmpty ? null : activas.first.id);
     _tipo = producto?.tipo ?? 'PREPARADO';
@@ -556,16 +553,17 @@ class _ProductDialogState extends State<_ProductDialog> {
   }
 
   Future<void> _crearCategoria() async {
-    final nombre = await showDialog<String>(
+    final input = await showDialog<_NuevaCategoriaInput>(
       context: context,
-      builder: (context) => const _NuevaCategoriaDialog(),
+      builder: (context) => _NuevaCategoriaDialog(categorias: _categorias),
     );
-    if (nombre == null || nombre.trim().isEmpty) return;
+    if (input == null || input.nombre.trim().isEmpty) return;
     try {
       await widget.repository.saveCategoria(
         CategoriaProducto(
-          nombre: nombre.trim(),
+          nombre: input.nombre.trim(),
           color: _paleta[_categorias.length % _paleta.length],
+          parentId: input.parentId,
           siempreDisponible: false,
           orden: _categorias.length,
           activo: true,
@@ -573,7 +571,9 @@ class _ProductDialogState extends State<_ProductDialog> {
       );
       final categorias = await widget.repository.getCategorias();
       final creada = categorias.firstWhere(
-        (categoria) => categoria.nombre == nombre.trim(),
+        (categoria) =>
+            categoria.nombre == input.nombre.trim() &&
+            categoria.parentId == input.parentId,
       );
       if (!mounted) return;
       setState(() {
@@ -657,18 +657,13 @@ class _ProductDialogState extends State<_ProductDialog> {
   @override
   Widget build(BuildContext context) {
     final directo = _tipo == 'DIRECTO';
-    final angosto = esAngosto(
-      MediaQuery.sizeOf(context).width,
-      limite: 430,
-    );
+    final angosto = esAngosto(MediaQuery.sizeOf(context).width, limite: 430);
     final vistaPrevia = Container(
       height: 130,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
       child: _imagen == null
@@ -689,11 +684,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                 ),
               ],
             )
-          : Image.memory(
-              _imagen!,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-            ),
+          : Image.memory(_imagen!, fit: BoxFit.cover, gaplessPlayback: true),
     );
     final botonesImagen = Wrap(
       spacing: 8,
@@ -720,7 +711,9 @@ class _ProductDialogState extends State<_ProductDialog> {
     );
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-      title: Text(widget.producto == null ? 'Nuevo producto' : 'Editar producto'),
+      title: Text(
+        widget.producto == null ? 'Nuevo producto' : 'Editar producto',
+      ),
       content: DialogSurface(
         maxWidth: 520,
         child: Form(
@@ -732,8 +725,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                 TextFormField(
                   controller: _nombre,
                   decoration: appInput(label: 'Nombre del producto'),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
+                  validator: (value) => (value == null || value.trim().isEmpty)
                       ? 'Ingresa un nombre'
                       : null,
                 ),
@@ -770,7 +762,9 @@ class _ProductDialogState extends State<_ProductDialog> {
                               (categoria) => DropdownMenuItem(
                                 value: categoria.id,
                                 child: Text(
-                                  categoria.nombre,
+                                  categoria.esSubcategoria
+                                      ? '   ${categoria.nombreCompleto}'
+                                      : categoria.nombre,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -795,9 +789,8 @@ class _ProductDialogState extends State<_ProductDialog> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.tertiaryContainer.withValues(alpha: 0.4),
+                      color: Theme.of(context).colorScheme.tertiaryContainer
+                          .withValues(alpha: 0.4),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: const Text(
@@ -809,9 +802,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                 TextFormField(
                   controller: _descripcion,
                   maxLines: 2,
-                  decoration: appInput(
-                    label: 'Descripción (opcional)',
-                  ),
+                  decoration: appInput(label: 'Descripción (opcional)'),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -839,10 +830,9 @@ class _ProductDialogState extends State<_ProductDialog> {
                       Expanded(
                         child: TextFormField(
                           controller: _stockMinimo,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
                           decoration: appInput(
                             label: 'Stock mínimo',
                             icon: Icons.warning_amber_outlined,
@@ -859,10 +849,9 @@ class _ProductDialogState extends State<_ProductDialog> {
                       Expanded(
                         child: TextFormField(
                           controller: _stockActual,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
                           decoration: appInput(
                             label: 'Stock actual',
                             icon: Icons.inventory_2_outlined,
@@ -873,10 +862,9 @@ class _ProductDialogState extends State<_ProductDialog> {
                       Expanded(
                         child: TextFormField(
                           controller: _costo,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
                           decoration: appInput(
                             label: 'Costo unitario (Bs)',
                             icon: Icons.price_check,
@@ -924,8 +912,17 @@ class _ProductDialogState extends State<_ProductDialog> {
   }
 }
 
+class _NuevaCategoriaInput {
+  const _NuevaCategoriaInput({required this.nombre, this.parentId});
+
+  final String nombre;
+  final int? parentId;
+}
+
 class _NuevaCategoriaDialog extends StatefulWidget {
-  const _NuevaCategoriaDialog();
+  const _NuevaCategoriaDialog({required this.categorias});
+
+  final List<CategoriaProducto> categorias;
 
   @override
   State<_NuevaCategoriaDialog> createState() => _NuevaCategoriaDialogState();
@@ -934,6 +931,7 @@ class _NuevaCategoriaDialog extends StatefulWidget {
 class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
   final _controller = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  int? _parentId;
 
   @override
   void dispose() {
@@ -941,8 +939,22 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
     super.dispose();
   }
 
+  void _guardar() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(
+      context,
+      _NuevaCategoriaInput(
+        nombre: _controller.text.trim().toUpperCase(),
+        parentId: _parentId,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final principales = widget.categorias
+        .where((categoria) => categoria.parentId == null && categoria.activo)
+        .toList();
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: const Text('Nueva categoría'),
@@ -950,22 +962,53 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
         maxWidth: 380,
         child: Form(
           key: _formKey,
-          child: TextFormField(
-            controller: _controller,
-            autofocus: true,
-            decoration: appInput(
-              label: 'Nombre',
-              hint: 'Ej. Masitas, Bebidas, Almuerzos',
-            ),
-            validator: (value) =>
-                (value == null || value.trim().isEmpty)
-                ? 'Ingresa un nombre'
-                : null,
-            onFieldSubmitted: (_) {
-              if (_formKey.currentState!.validate()) {
-                Navigator.pop(context, _controller.text.trim());
-              }
-            },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _controller,
+                autofocus: true,
+                textCapitalization: TextCapitalization.characters,
+                decoration: appInput(
+                  label: 'Nombre',
+                  hint: 'Ej. MASITAS, BEBIDAS, PLATO SUELTO',
+                ),
+                onChanged: (value) {
+                  final upper = value.toUpperCase();
+                  if (upper == value) return;
+                  _controller.value = TextEditingValue(
+                    text: upper,
+                    selection: TextSelection.collapsed(offset: upper.length),
+                  );
+                },
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Ingresa un nombre'
+                    : null,
+                onFieldSubmitted: (_) => _guardar(),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int?>(
+                initialValue: _parentId,
+                isExpanded: true,
+                decoration: appInput(label: 'Categoría padre (opcional)'),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('Sin categoría padre'),
+                  ),
+                  ...principales.map(
+                    (categoria) => DropdownMenuItem<int?>(
+                      value: categoria.id,
+                      child: Text(
+                        categoria.nombre,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _parentId = value),
+              ),
+            ],
           ),
         ),
       ),
@@ -974,14 +1017,7 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancelar'),
         ),
-        FilledButton(
-          onPressed: () {
-            if (_formKey.currentState!.validate()) {
-              Navigator.pop(context, _controller.text.trim());
-            }
-          },
-          child: const Text('Crear'),
-        ),
+        FilledButton(onPressed: _guardar, child: const Text('Crear')),
       ],
     );
   }
@@ -1142,10 +1178,11 @@ class _RecipeDialogState extends State<_RecipeDialog> {
   List<UnidadMedida> _unidadesCompatibles(Insumo insumo) {
     final base = _unidadBase(insumo);
     if (!base.esConvertible) return [base];
-    final lista = widget.unidades
-        .where((unidad) => unidad.familia == base.familia)
-        .toList()
-      ..sort((a, b) => b.factorBase.compareTo(a.factorBase));
+    final lista =
+        widget.unidades
+            .where((unidad) => unidad.familia == base.familia)
+            .toList()
+          ..sort((a, b) => b.factorBase.compareTo(a.factorBase));
     return lista.isEmpty ? [base] : lista;
   }
 
@@ -1197,15 +1234,12 @@ class _RecipeDialogState extends State<_RecipeDialog> {
       _error = null;
     });
     try {
-      await widget.repository.saveRecetaCantidades(
-        widget.producto.id!,
-        {
-          for (final id in _seleccionados)
-            id: _cantidadEnBase(
-              widget.insumos.firstWhere((insumo) => insumo.id == id),
-            ),
-        },
-      );
+      await widget.repository.saveRecetaCantidades(widget.producto.id!, {
+        for (final id in _seleccionados)
+          id: _cantidadEnBase(
+            widget.insumos.firstWhere((insumo) => insumo.id == id),
+          ),
+      });
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (error) {
@@ -1227,10 +1261,7 @@ class _RecipeDialogState extends State<_RecipeDialog> {
     final alcanza = enBase > 0 ? (insumo.stock / enBase).floor() : null;
     final costo = enBase * insumo.costoPromedio;
     final scheme = Theme.of(context).colorScheme;
-    final angosto = esAngosto(
-      MediaQuery.sizeOf(context).width,
-      limite: 430,
-    );
+    final angosto = esAngosto(MediaQuery.sizeOf(context).width, limite: 430);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1270,9 +1301,8 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                     ),
                     Text(
                       'stock ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                     if (seleccionado && equivalencia.isNotEmpty)
                       Text(
@@ -1303,9 +1333,7 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                   ),
                   validator: (value) {
                     if (!_seleccionados.contains(id)) return null;
-                    return parseAmount(value ?? '') <= 0
-                        ? 'Mayor a 0'
-                        : null;
+                    return parseAmount(value ?? '') <= 0 ? 'Mayor a 0' : null;
                   },
                 );
                 final selector = compatibles.length <= 1
@@ -1331,9 +1359,7 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                           final nueva = compatibles.firstWhere(
                             (unidad) => unidad.id == nuevoId,
                           );
-                          final actual = parseAmount(
-                            _cantidades[id]!.text,
-                          );
+                          final actual = parseAmount(_cantidades[id]!.text);
                           if (actual > 0) {
                             _cantidades[id]!.text = formatQty(
                               actual * anterior.factorBase / nueva.factorBase,
@@ -1380,15 +1406,16 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                   Text(
                     'Alcanza para $alcanza porción(es)',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: alcanza > 0 ? scheme.onSurfaceVariant : scheme.error,
+                      color: alcanza > 0
+                          ? scheme.onSurfaceVariant
+                          : scheme.error,
                     ),
                   ),
                 if (costo > 0)
                   Text(
                     'Costo ${formatMoney(costo)}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
               ],
             ),
@@ -1443,14 +1470,14 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                     ? const EmptyState(
                         icon: Icons.inventory_2_outlined,
                         title: 'No hay insumos activos',
-                        message:
-                            'Crea insumos en la sección Insumos para poder armar la receta.',
+                        message: 'Crea insumos en la sección Insumos para poder armar la receta.',
                       )
                     : filtrados.isEmpty
                     ? const EmptyState(
                         icon: Icons.search_off,
                         title: 'Sin resultados',
-                        message: 'No hay insumos que coincidan con la búsqueda.',
+                        message:
+                            'No hay insumos que coincidan con la búsqueda.',
                       )
                     : ListView.separated(
                         itemCount: filtrados.length,
@@ -1465,9 +1492,8 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                   alignment: Alignment.centerRight,
                   child: Text(
                     'Costo estimado de la receta: ${formatMoney(costoTotal)}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -1475,9 +1501,7 @@ class _RecipeDialogState extends State<_RecipeDialog> {
                 const SizedBox(height: 8),
                 Text(
                   _error!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                  ),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
             ],

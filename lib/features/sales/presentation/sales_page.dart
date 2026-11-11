@@ -6,9 +6,11 @@ import '../../../core/cash_repository.dart';
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
+import '../../../core/receipt_service.dart';
 import '../../../core/sales_repository.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
+import '../../../ui/producto_catalogo_card.dart';
 
 class _SaleProduct {
   const _SaleProduct({
@@ -17,6 +19,7 @@ class _SaleProduct {
     required this.nombre,
     required this.precio,
     required this.categoriaNombre,
+    this.categoriaPadreNombre,
     required this.categoriaColor,
     required this.tipo,
     required this.disponible,
@@ -31,6 +34,7 @@ class _SaleProduct {
   final String nombre;
   final double precio;
   final String categoriaNombre;
+  final String? categoriaPadreNombre;
   final int categoriaColor;
   final String tipo;
   final bool disponible;
@@ -40,6 +44,10 @@ class _SaleProduct {
   final Uint8List? imagen;
 
   bool get esDirecto => tipo == 'DIRECTO';
+
+  String get categoriaEtiqueta => categoriaPadreNombre == null
+      ? categoriaNombre
+      : '$categoriaPadreNombre · $categoriaNombre';
 
   /// Solo lo que está en el menú publicado se puede vender.
   bool get vendible => enMenu && disponible && (!esDirecto || stock > 0);
@@ -71,10 +79,12 @@ class SalesPage extends StatefulWidget {
     super.key,
     required this.usuario,
     required this.refreshToken,
+    this.onAbrirCaja,
   });
 
   final Usuario usuario;
   final int refreshToken;
+  final VoidCallback? onAbrirCaja;
 
   @override
   State<SalesPage> createState() => _SalesPageState();
@@ -90,7 +100,8 @@ class _SalesPageState extends State<SalesPage> {
   final _referencia = TextEditingController();
   final _observacion = TextEditingController();
   String _search = '';
-  String? _categoria;
+  String? _categoriaPadre;
+  String? _subcategoria;
   int? _pedidoEditandoId;
   bool _saving = false;
 
@@ -122,18 +133,7 @@ class _SalesPageState extends State<SalesPage> {
   Future<_SalesData> _load() async {
     final caja = await _cashRepository.getCajaAbierta();
     final now = DateTime.now();
-    final tipoPreferido = caja == null
-        ? (now.hour < 12 ? 'DESAYUNO' : 'ALMUERZO')
-        : MenuRepository.tipoDesdeTurno(caja.turno);
-    final tipoAlterno = tipoPreferido == 'DESAYUNO' ? 'ALMUERZO' : 'DESAYUNO';
-
-    // El menú del turno es el principal; si no está publicado se usa el otro
-    // publicado de hoy para que el cajero siempre pueda vender.
-    MenuDia? menu = await _menuRepository.getMenu(now, tipoPreferido);
-    if (menu == null || !menu.publicado) {
-      final alterno = await _menuRepository.getMenu(now, tipoAlterno);
-      if (alterno != null && alterno.publicado) menu = alterno;
-    }
+    final menu = await _menuRepository.getMenu(now, MenuRepository.tipoMenu);
     final menuItems = menu != null && menu.publicado
         ? await _menuRepository.getItems(menu.id)
         : <MenuItem>[];
@@ -147,6 +147,7 @@ class _SalesPageState extends State<SalesPage> {
         nombre: item.nombre,
         precio: item.precio,
         categoriaNombre: item.categoriaNombre,
+        categoriaPadreNombre: producto?.categoriaParentNombre,
         categoriaColor: item.categoriaColor,
         tipo: item.tipoProducto,
         disponible: item.disponible,
@@ -175,6 +176,7 @@ class _SalesPageState extends State<SalesPage> {
         nombre: producto.nombre,
         precio: producto.precio,
         categoriaNombre: producto.categoriaNombre,
+        categoriaPadreNombre: producto.categoriaParentNombre,
         categoriaColor: producto.categoriaColor,
         tipo: producto.tipo,
         disponible: disponible,
@@ -196,10 +198,8 @@ class _SalesPageState extends State<SalesPage> {
   double get _total =>
       _cart.values.fold<double>(0, (sum, line) => sum + line.subtotal);
 
-  int get _unidades => _cart.values.fold<int>(
-    0,
-    (sum, line) => sum + line.cantidad.round(),
-  );
+  int get _unidades =>
+      _cart.values.fold<int>(0, (sum, line) => sum + line.cantidad.round());
 
   void _add(_SaleProduct producto) {
     if (!producto.vendible) {
@@ -222,9 +222,7 @@ class _SalesPageState extends State<SalesPage> {
           tipo: producto.tipo,
         );
       } else {
-        _cart[producto.productoId] = line.copyWith(
-          cantidad: line.cantidad + 1,
-        );
+        _cart[producto.productoId] = line.copyWith(cantidad: line.cantidad + 1);
       }
     });
   }
@@ -315,20 +313,23 @@ class _SalesPageState extends State<SalesPage> {
     if (pagos == null) return;
     setState(() => _saving = true);
     try {
-      if (_pedidoEditandoId != null) {
+      final int pedidoId;
+      final editando = _pedidoEditandoId;
+      if (editando != null) {
+        pedidoId = editando;
         await _salesRepository.agregarLineas(
-          _pedidoEditandoId!,
+          pedidoId,
           _cart.values.toList(),
           cajaId: caja.id,
         );
         await _salesRepository.agregarPagos(
-          pedidoId: _pedidoEditandoId!,
+          pedidoId: pedidoId,
           usuarioId: widget.usuario.id,
           cajaId: caja.id,
           pagos: pagos,
         );
       } else {
-        await _salesRepository.crearPedido(
+        pedidoId = await _salesRepository.crearPedido(
           usuarioId: widget.usuario.id,
           cajaId: caja.id,
           menuDiaId: data.menu?.publicado == true ? data.menu!.id : null,
@@ -338,8 +339,8 @@ class _SalesPageState extends State<SalesPage> {
           pagos: pagos,
         );
       }
+      final detalle = await _salesRepository.getPedido(pedidoId);
       if (!mounted) return;
-      final editando = _pedidoEditandoId;
       _limpiarCarrito();
       setState(() {
         _saving = false;
@@ -351,6 +352,9 @@ class _SalesPageState extends State<SalesPage> {
             ? 'Venta registrada por ${formatMoney(_totalAnterior(pagos))}.'
             : 'Pago agregado al pedido.',
       );
+      if (detalle.pedido.pagadoCompleto) {
+        await _ofrecerImprimir(detalle, caja);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -383,12 +387,54 @@ class _SalesPageState extends State<SalesPage> {
         cajaId: caja.id,
         pagos: pagos,
       );
+      final detalle = await _salesRepository.getPedido(pedido.id);
       if (!mounted) return;
       setState(_reload);
       showAppMessage(context, 'Pago registrado para el pedido #${pedido.id}.');
+      if (detalle.pedido.pagadoCompleto) {
+        await _ofrecerImprimir(detalle, caja);
+      }
     } catch (error) {
       if (!mounted) return;
       showAppMessage(context, '$error', error: true);
+    }
+  }
+
+  Future<void> _ofrecerImprimir(PedidoDetalle detalle, Caja caja) async {
+    final imprimir = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Nota de venta'),
+        content: Text(
+          '¿Deseas imprimir la nota de venta del pedido #${detalle.pedido.id}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.print_outlined),
+            label: const Text('Sí, imprimir'),
+          ),
+        ],
+      ),
+    );
+    if (imprimir != true) return;
+    try {
+      await ReceiptService().imprimirNotaVenta(
+        detalle: detalle,
+        turno: caja.turnoLabel,
+        cajero: widget.usuario.nombre,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo generar la nota de venta: $error',
+        error: true,
+      );
     }
   }
 
@@ -423,7 +469,11 @@ class _SalesPageState extends State<SalesPage> {
       );
     } catch (error) {
       if (!mounted) return;
-      showAppMessage(context, 'No se pudo cargar el pedido: $error', error: true);
+      showAppMessage(
+        context,
+        'No se pudo cargar el pedido: $error',
+        error: true,
+      );
     }
   }
 
@@ -439,11 +489,7 @@ class _SalesPageState extends State<SalesPage> {
       destructive: true,
     );
     if (!confirmado) return;
-    await _menuRepository.setDisponible(
-      menuItemId,
-      false,
-      motivo: 'Agotado',
-    );
+    await _menuRepository.setDisponible(menuItemId, false, motivo: 'Agotado');
     if (!mounted) return;
     setState(_reload);
     showAppMessage(context, '${producto.nombre} marcado como agotado.');
@@ -464,8 +510,7 @@ class _SalesPageState extends State<SalesPage> {
             children: [
               PageHeader(
                 title: 'Ventas',
-                subtitle:
-                    'Toca el producto para agregarlo al pedido. Solo se venden los del menú publicado.',
+                subtitle: 'Toca el producto para agregarlo al pedido. Solo se venden los del menú publicado.',
                 actions: [
                   OutlinedButton.icon(
                     onPressed: () => setState(_reload),
@@ -489,8 +534,16 @@ class _SalesPageState extends State<SalesPage> {
                     EmptyState(
                       icon: Icons.lock_outline,
                       title: 'No hay caja abierta',
-                      message:
-                          'Abre una caja en la sección Caja para registrar ventas.',
+                      message: 'Abre una caja en la sección Caja para registrar ventas.',
+                      action: widget.onAbrirCaja == null
+                          ? null
+                          : FilledButton.icon(
+                              onPressed: widget.onAbrirCaja,
+                              icon: const Icon(
+                                Icons.account_balance_wallet_outlined,
+                              ),
+                              label: const Text('Ir a Caja'),
+                            ),
                     ),
                     if (data.pedidosAbiertos.isNotEmpty)
                       _pedidosAbiertos(context, data),
@@ -517,11 +570,7 @@ class _SalesPageState extends State<SalesPage> {
                       );
                     }
                     return Column(
-                      children: [
-                        catalogo,
-                        const SizedBox(height: 16),
-                        carrito,
-                      ],
+                      children: [catalogo, const SizedBox(height: 16), carrito],
                     );
                   },
                 ),
@@ -551,12 +600,12 @@ class _SalesPageState extends State<SalesPage> {
           Expanded(
             child: Text(
               publicado
-                  ? 'Menú de ${menu!.tipo.toLowerCase()} publicado. Turno ${data.caja!.turno}.'
-                  : 'No hay menú publicado para este turno. El administrador debe publicarlo para poder vender.',
+                  ? 'Menú de ${menu!.tipo.toLowerCase()} publicado. ${data.caja!.turnoLabel}.'
+                  : 'No hay menú publicado para hoy. El administrador debe publicarlo para poder vender.',
             ),
           ),
           Chip(
-            label: Text('Caja ${data.caja!.turno}'),
+            label: Text(data.caja!.turnoLabel),
             side: BorderSide.none,
             visualDensity: VisualDensity.compact,
           ),
@@ -566,11 +615,23 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   Widget _filtros(BuildContext context, _SalesData data) {
-    final categorias = data.productos
-        .map((producto) => producto.categoriaNombre)
-        .toSet()
-        .toList()
-      ..sort();
+    String padre(_SaleProduct producto) =>
+        producto.categoriaPadreNombre ?? producto.categoriaNombre;
+    final padres = data.productos.map(padre).toSet().toList()..sort();
+    final subcategorias =
+        _categoriaPadre == null
+              ? <String>[]
+              : (data.productos
+                    .where(
+                      (producto) =>
+                          padre(producto) == _categoriaPadre &&
+                          producto.categoriaNombre !=
+                              producto.categoriaPadreNombre,
+                    )
+                    .map((producto) => producto.categoriaNombre)
+                    .toSet()
+                    .toList())
+          ..sort();
     return AppCard(
       padding: const EdgeInsets.all(12),
       child: Wrap(
@@ -590,24 +651,50 @@ class _SalesPageState extends State<SalesPage> {
           ),
           ChoiceChip(
             label: const Text('Todos'),
-            selected: _categoria == null,
-            onSelected: (_) => setState(() => _categoria = null),
+            selected: _categoriaPadre == null,
+            onSelected: (_) => setState(() {
+              _categoriaPadre = null;
+              _subcategoria = null;
+            }),
           ),
-          ...categorias.map(
+          ...padres.map(
             (categoria) => ChoiceChip(
               label: Text(categoria),
-              selected: _categoria == categoria,
-              onSelected: (_) => setState(() => _categoria = categoria),
+              selected: _categoriaPadre == categoria,
+              onSelected: (_) => setState(() {
+                _categoriaPadre = categoria;
+                _subcategoria = null;
+              }),
             ),
           ),
+          if (subcategorias.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('Todas las subcategorías'),
+              selected: _subcategoria == null,
+              onSelected: (_) => setState(() => _subcategoria = null),
+            ),
+            ...subcategorias.map(
+              (categoria) => ChoiceChip(
+                label: Text(categoria),
+                selected: _subcategoria == categoria,
+                onSelected: (_) => setState(() => _subcategoria = categoria),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _catalogo(BuildContext context, _SalesData data) {
+    String padre(_SaleProduct producto) =>
+        producto.categoriaPadreNombre ?? producto.categoriaNombre;
     final filtrados = data.productos.where((producto) {
-      if (_categoria != null && producto.categoriaNombre != _categoria) {
+      if (_categoriaPadre != null && padre(producto) != _categoriaPadre) {
+        return false;
+      }
+      if (_subcategoria != null && producto.categoriaNombre != _subcategoria) {
         return false;
       }
       final term = _search.trim().toLowerCase();
@@ -617,8 +704,7 @@ class _SalesPageState extends State<SalesPage> {
       return const EmptyState(
         icon: Icons.search_off,
         title: 'No hay productos disponibles',
-        message:
-            'Crea productos activos en Productos y publícalos en el Menú del día.',
+        message: 'Crea productos activos en Productos y publícalos en el Menú del día.',
       );
     }
     return LayoutBuilder(
@@ -632,24 +718,38 @@ class _SalesPageState extends State<SalesPage> {
         return Wrap(
           spacing: 12,
           runSpacing: 12,
-          children: filtrados
-              .map(
-                (producto) => SizedBox(
-                  width: width,
-                  child: _ProductoVentaCard(
-                    producto: producto,
-                    cantidad:
-                        _cart[producto.productoId]?.cantidad.round() ?? 0,
-                    onAdd: producto.vendible ? () => _add(producto) : null,
-                    onAgotar:
-                        producto.menuDiaItemId != null &&
-                            widget.usuario.puede(Permiso.agotamiento)
-                        ? () => _agotar(producto)
-                        : null,
-                  ),
-                ),
-              )
-              .toList(),
+          children: filtrados.map((producto) {
+            final cantidad = _cart[producto.productoId]?.cantidad.round() ?? 0;
+            return SizedBox(
+              width: width,
+              child: ProductoCatalogoCard(
+                nombre: producto.nombre,
+                categoria: producto.categoriaEtiqueta,
+                precio: producto.precio,
+                color: producto.categoriaColor,
+                imagen: producto.imagen,
+                esDirecto: producto.esDirecto,
+                stock: producto.stock,
+                habilitado: producto.vendible,
+                mensaje: producto.vendible
+                    ? (cantidad > 0
+                          ? 'Toca para agregar · $cantidad en el pedido'
+                          : 'Toca para agregar')
+                    : producto.razon,
+                onTap: producto.vendible ? () => _add(producto) : null,
+                accion:
+                    producto.menuDiaItemId != null &&
+                        widget.usuario.puede(Permiso.agotamiento)
+                    ? IconButton(
+                        tooltip: 'Reportar agotado',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _agotar(producto),
+                        icon: const Icon(Icons.block, size: 18),
+                      )
+                    : null,
+              ),
+            );
+          }).toList(),
         );
       },
     );
@@ -667,9 +767,8 @@ class _SalesPageState extends State<SalesPage> {
               const SizedBox(width: 8),
               Text(
                 'Pedido',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               Text(
@@ -714,7 +813,10 @@ class _SalesPageState extends State<SalesPage> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final angosto = esAngosto(constraints.maxWidth, limite: 460);
+                    final angosto = esAngosto(
+                      constraints.maxWidth,
+                      limite: 460,
+                    );
                     final info = Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -769,13 +871,7 @@ class _SalesPageState extends State<SalesPage> {
                               quitar,
                             ],
                           ),
-                          Row(
-                            children: [
-                              controles,
-                              const Spacer(),
-                              subtotal,
-                            ],
-                          ),
+                          Row(children: [controles, const Spacer(), subtotal]),
                         ],
                       );
                     }
@@ -794,10 +890,7 @@ class _SalesPageState extends State<SalesPage> {
             const Divider(height: 20),
             Row(
               children: [
-                Text(
-                  'Total',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+                Text('Total', style: Theme.of(context).textTheme.titleMedium),
                 const Spacer(),
                 Text(
                   formatMoney(_total),
@@ -833,7 +926,7 @@ class _SalesPageState extends State<SalesPage> {
               FilledButton.icon(
                 onPressed: _saving ? null : () => _cobrar(data),
                 icon: const Icon(Icons.point_of_sale),
-                label: const Text('Cobrar'),
+                label: const Text('Pagado'),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -858,9 +951,8 @@ class _SalesPageState extends State<SalesPage> {
       children: [
         Text(
           'Pedidos pendientes de pago',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         if (!hayCaja) ...[
           const SizedBox(height: 4),
@@ -876,19 +968,13 @@ class _SalesPageState extends State<SalesPage> {
           (pedido) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: AppCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 10,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final angosto = esAngosto(constraints.maxWidth, limite: 820);
                   final cabecera = Row(
                     children: [
-                      CircleAvatar(
-                        radius: 18,
-                        child: Text('${pedido.id}'),
-                      ),
+                      CircleAvatar(radius: 18, child: Text('${pedido.id}')),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
@@ -906,9 +992,9 @@ class _SalesPageState extends State<SalesPage> {
                               '${formatDateTimeText(pedido.fecha)} · ${pedido.usuarioNombre}',
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
                                   ),
                             ),
                           ],
@@ -954,9 +1040,7 @@ class _SalesPageState extends State<SalesPage> {
                       TextButton(
                         onPressed: hayCaja
                             ? () {
-                                setState(
-                                  () => _pedidoEditandoId = pedido.id,
-                                );
+                                setState(() => _pedidoEditandoId = pedido.id);
                                 showAppMessage(
                                   context,
                                   'Agrega productos y usa “Agregar al pedido”.',
@@ -968,9 +1052,7 @@ class _SalesPageState extends State<SalesPage> {
                       TextButton(
                         onPressed: () => _anular(pedido),
                         style: TextButton.styleFrom(
-                          foregroundColor: Theme.of(
-                            context,
-                          ).colorScheme.error,
+                          foregroundColor: Theme.of(context).colorScheme.error,
                         ),
                         child: const Text('Anular'),
                       ),
@@ -1004,171 +1086,6 @@ class _SalesPageState extends State<SalesPage> {
   }
 }
 
-class _ProductoVentaCard extends StatelessWidget {
-  const _ProductoVentaCard({
-    required this.producto,
-    required this.onAdd,
-    this.onAgotar,
-    this.cantidad = 0,
-  });
-
-  final _SaleProduct producto;
-  final VoidCallback? onAdd;
-  final VoidCallback? onAgotar;
-  final int cantidad;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final vendible = producto.vendible;
-    final texto = vendible ? scheme.onSurface : scheme.onSurfaceVariant;
-    return Opacity(
-      opacity: vendible ? 1 : 0.55,
-      child: Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        child: InkWell(
-          onTap: vendible ? onAdd : null,
-          borderRadius: BorderRadius.circular(18),
-          child: Ink(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.6),
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(
-                      height: 92,
-                      width: double.infinity,
-                      child: producto.imagen != null
-                          ? Image.memory(
-                              producto.imagen!,
-                              fit: BoxFit.cover,
-                              gaplessPlayback: true,
-                            )
-                          : Container(
-                              color: Color(
-                                producto.categoriaColor,
-                              ).withValues(alpha: 0.10),
-                              child: Icon(
-                                producto.esDirecto
-                                    ? Icons.local_drink_outlined
-                                    : Icons.restaurant,
-                                size: 34,
-                                color: Color(producto.categoriaColor),
-                              ),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: Color(producto.categoriaColor),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          producto.categoriaNombre,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ),
-                      if (onAgotar != null)
-                        IconButton(
-                          tooltip: 'Reportar agotado',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: onAgotar,
-                          icon: const Icon(Icons.block, size: 18),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    producto.nombre,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: texto,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    formatMoney(producto.precio),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: vendible ? scheme.primary : texto,
-                    ),
-                  ),
-                  if (producto.esDirecto)
-                    Text(
-                      'Stock: ${formatQty(producto.stock)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: vendible ? scheme.onSurfaceVariant : texto,
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (vendible)
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.add_circle_outline,
-                          size: 18,
-                          color: scheme.primary,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          cantidad > 0
-                              ? 'Toca para agregar · $cantidad en el pedido'
-                              : 'Toca para agregar',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    )
-                  else
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.block,
-                          size: 16,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            producto.razon,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: scheme.onSurfaceVariant),
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _PaymentDialog extends StatefulWidget {
   const _PaymentDialog({required this.total});
 
@@ -1178,56 +1095,64 @@ class _PaymentDialog extends StatefulWidget {
   State<_PaymentDialog> createState() => _PaymentDialogState();
 }
 
-class _PagoRow {
-  _PagoRow({required this.metodo, required this.monto});
-
-  String metodo;
-  final TextEditingController monto;
-}
-
 class _PaymentDialogState extends State<_PaymentDialog> {
-  late final List<_PagoRow> _rows;
+  late final TextEditingController _efectivo;
+  late final TextEditingController _qr;
 
   @override
   void initState() {
     super.initState();
-    _rows = [
-      _PagoRow(
-        metodo: 'EFECTIVO',
-        monto: TextEditingController(text: widget.total.toStringAsFixed(2)),
-      ),
-    ];
+    _efectivo = TextEditingController(text: widget.total.toStringAsFixed(2));
+    _qr = TextEditingController(text: '0');
   }
 
   @override
   void dispose() {
-    for (final row in _rows) {
-      row.monto.dispose();
-    }
+    _efectivo.dispose();
+    _qr.dispose();
     super.dispose();
   }
 
-  double get _suma =>
-      _rows.fold<double>(0, (sum, row) => sum + parseAmount(row.monto.text));
+  double get _suma => parseAmount(_efectivo.text) + parseAmount(_qr.text);
 
   double get _restante => widget.total - _suma;
 
-  bool get _valido => _suma > 0 && _suma <= widget.total + 0.05;
+  bool get _completo => _suma > 0 && _restante.abs() <= 0.05;
 
-  void _agregar() {
+  bool get _excede => _restante < -0.05;
+
+  void _actualizar(String metodo, String value) {
+    final monto = parseAmount(value);
+    final complemento = (widget.total - monto).clamp(0.0, widget.total);
     setState(() {
-      _rows.add(
-        _PagoRow(metodo: 'QR', monto: TextEditingController(text: '0')),
-      );
+      if (metodo == 'EFECTIVO') {
+        _qr.text = complemento.toStringAsFixed(2);
+      } else {
+        _efectivo.text = complemento.toStringAsFixed(2);
+      }
     });
   }
 
-  void _quitar(int index) {
-    if (_rows.length == 1) return;
+  void _todo(String metodo) {
     setState(() {
-      _rows[index].monto.dispose();
-      _rows.removeAt(index);
+      _efectivo.text = metodo == 'EFECTIVO'
+          ? widget.total.toStringAsFixed(2)
+          : '0';
+      _qr.text = metodo == 'QR' ? widget.total.toStringAsFixed(2) : '0';
     });
+  }
+
+  void _confirmar() {
+    final pagos = <PagoInput>[];
+    final efectivo = parseAmount(_efectivo.text);
+    final qr = parseAmount(_qr.text);
+    if (efectivo > 0) {
+      pagos.add(PagoInput(metodo: 'EFECTIVO', monto: efectivo));
+    }
+    if (qr > 0) {
+      pagos.add(PagoInput(metodo: 'QR', monto: qr));
+    }
+    Navigator.pop(context, pagos);
   }
 
   @override
@@ -1254,60 +1179,52 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            ...List.generate(_rows.length, (index) {
-              final row = _rows[index];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 120,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: row.metodo,
-                        decoration: appInput(label: 'Método'),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'EFECTIVO',
-                            child: Text('Efectivo'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'QR',
-                            child: Text('QR'),
-                          ),
-                        ],
-                        onChanged: (value) =>
-                            setState(() => row.metodo = value ?? 'EFECTIVO'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: row.monto,
-                        keyboardType:
-                            const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                        decoration: appInput(label: 'Monto (Bs)'),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _rows.length == 1
-                          ? null
-                          : () => _quitar(index),
-                      icon: const Icon(Icons.remove_circle_outline),
-                    ),
-                  ],
-                ),
-              );
-            }),
+            const SizedBox(height: 6),
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _agregar,
-                icon: const Icon(Icons.add),
-                label: const Text('Agregar otro método'),
+              child: Text(
+                'El otro método se completa automáticamente.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _efectivo,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: appInput(
+                label: 'Efectivo (Bs)',
+                icon: Icons.payments_outlined,
+              ),
+              onChanged: (value) => _actualizar('EFECTIVO', value),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _qr,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: appInput(label: 'QR (Bs)', icon: Icons.qr_code_2),
+              onChanged: (value) => _actualizar('QR', value),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  ActionChip(
+                    label: const Text('Todo efectivo'),
+                    onPressed: () => _todo('EFECTIVO'),
+                  ),
+                  ActionChip(
+                    label: const Text('Todo QR'),
+                    onPressed: () => _todo('QR'),
+                  ),
+                ],
               ),
             ),
             const Divider(),
@@ -1337,7 +1254,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 ),
               ],
             ),
-            if (_restante < -0.004)
+            if (_excede)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
@@ -1354,23 +1271,8 @@ class _PaymentDialogState extends State<_PaymentDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
-          onPressed: _valido
-              ? () => Navigator.pop(
-                  context,
-                  _rows
-                      .where((row) => parseAmount(row.monto.text) > 0)
-                      .map(
-                        (row) => PagoInput(
-                          metodo: row.metodo,
-                          monto: parseAmount(row.monto.text),
-                        ),
-                      )
-                      .toList(),
-                )
-              : null,
-          child: Text(
-            _restante > 0.004 ? 'Guardar pago parcial' : 'Confirmar cobro',
-          ),
+          onPressed: _completo ? _confirmar : null,
+          child: const Text('Confirmar pago'),
         ),
       ],
     );
@@ -1394,10 +1296,7 @@ class _PedidoDetalleDialog extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              LabelValue(
-                label: 'Estado de pago',
-                value: pedido.estadoPago,
-              ),
+              LabelValue(label: 'Estado de pago', value: pedido.estadoPago),
               LabelValue(
                 label: 'Estado de entrega',
                 value: pedido.estadoEntrega,
@@ -1414,9 +1313,8 @@ class _PedidoDetalleDialog extends StatelessWidget {
               const Divider(height: 22),
               Text(
                 'Productos',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
               ...detalle.lineas.map(
@@ -1437,9 +1335,8 @@ class _PedidoDetalleDialog extends StatelessWidget {
               const Divider(height: 22),
               Text(
                 'Pagos',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
               if (detalle.pagos.isEmpty)
@@ -1448,11 +1345,7 @@ class _PedidoDetalleDialog extends StatelessWidget {
                 ...detalle.pagos.map(
                   (pago) => Row(
                     children: [
-                      Expanded(
-                        child: Text(
-                          '${pago.metodo} · ${pago.estado}',
-                        ),
-                      ),
+                      Expanded(child: Text('${pago.metodo} · ${pago.estado}')),
                       Text(formatMoney(pago.monto)),
                     ],
                   ),

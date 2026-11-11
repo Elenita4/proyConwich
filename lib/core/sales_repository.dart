@@ -152,7 +152,8 @@ class SalesRepository {
     final db = await AppDatabase.instance.database;
     final inicio = DateTime(fecha.year, fecha.month, fecha.day);
     final fin = inicio.add(const Duration(days: 1));
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT p.*, u.nombre AS usuario_nombre,
              COALESCE((SELECT SUM(monto) FROM pagos
                        WHERE pedido_id = p.id AND estado = 'CONFIRMADO'), 0) AS pagado
@@ -160,13 +161,16 @@ class SalesRepository {
       INNER JOIN usuarios u ON u.id = p.usuario_id
       WHERE p.fecha >= ? AND p.fecha < ?
       ORDER BY p.fecha DESC
-    ''', [sqlDateTime(inicio), sqlDateTime(fin)]);
+    ''',
+      [sqlDateTime(inicio), sqlDateTime(fin)],
+    );
     return rows.map(_pedidoFromRow).toList();
   }
 
   Future<PedidoDetalle> getPedido(int pedidoId) async {
     final db = await AppDatabase.instance.database;
-    final pedidoRows = await db.rawQuery('''
+    final pedidoRows = await db.rawQuery(
+      '''
       SELECT p.*, u.nombre AS usuario_nombre,
              COALESCE((SELECT SUM(monto) FROM pagos
                        WHERE pedido_id = p.id AND estado = 'CONFIRMADO'), 0) AS pagado
@@ -174,7 +178,9 @@ class SalesRepository {
       INNER JOIN usuarios u ON u.id = p.usuario_id
       WHERE p.id = ?
       LIMIT 1
-    ''', [pedidoId]);
+    ''',
+      [pedidoId],
+    );
     if (pedidoRows.isEmpty) throw StateError('El pedido no existe.');
     final lineas = await db.query(
       'detalle_pedido',
@@ -239,7 +245,11 @@ class SalesRepository {
     final pagosValidos = pagos
         .where((pago) => pago.monto > 0)
         .toList(growable: false);
-    final pagado = pagosValidos.fold<double>(0, (sum, pago) => sum + pago.monto);
+    await _validarMetodosPago(db, null, pagosValidos);
+    final pagado = pagosValidos.fold<double>(
+      0,
+      (sum, pago) => sum + pago.monto,
+    );
     if (pagado > total + 0.05) {
       throw StateError('El pago supera el total del pedido.');
     }
@@ -363,8 +373,10 @@ class SalesRepository {
     if (pedido.anulado) throw StateError('El pedido está anulado.');
     final cajaDestino = cajaId ?? pedido.cajaId;
     await _validarCajaAbierta(db, cajaDestino);
+    await _validarMetodosPago(db, pedidoId, validos);
     final nuevoPagado =
-        pedido.pagado + validos.fold<double>(0, (sum, pago) => sum + pago.monto);
+        pedido.pagado +
+        validos.fold<double>(0, (sum, pago) => sum + pago.monto);
     if (nuevoPagado > pedido.total + 0.05) {
       throw StateError('El pago supera el saldo del pedido.');
     }
@@ -507,12 +519,15 @@ class SalesRepository {
     required int detalleId,
     required String fecha,
   }) async {
-    final receta = await txn.rawQuery('''
+    final receta = await txn.rawQuery(
+      '''
       SELECT r.insumo_id, r.cantidad, i.costo_promedio
       FROM receta_insumos r
       INNER JOIN insumos i ON i.id = r.insumo_id
       WHERE r.producto_id = ?
-    ''', [productoId]);
+    ''',
+      [productoId],
+    );
     for (final row in receta) {
       await txn.insert('consumos_insumo', {
         'insumo_id': row['insumo_id'],
@@ -523,6 +538,31 @@ class SalesRepository {
         'costo_unitario': (row['costo_promedio'] as num).toDouble(),
         'estado': 'CONFIRMADO',
       });
+    }
+  }
+
+  Future<void> _validarMetodosPago(
+    Database db,
+    int? pedidoId,
+    List<PagoInput> pagos,
+  ) async {
+    final metodos = <String>{};
+    if (pedidoId != null) {
+      final rows = await db.query(
+        'pagos',
+        columns: ['metodo_pago'],
+        where: "pedido_id = ? AND estado = 'CONFIRMADO'",
+        whereArgs: [pedidoId],
+      );
+      metodos.addAll(rows.map((row) => row['metodo_pago']! as String));
+    }
+    metodos.addAll(
+      pagos.where((pago) => pago.monto > 0).map((pago) => pago.metodo),
+    );
+    if (metodos.length > 2) {
+      throw StateError(
+        'Un pedido admite como máximo dos métodos de pago (efectivo y QR).',
+      );
     }
   }
 

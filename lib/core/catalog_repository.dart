@@ -11,6 +11,8 @@ class CategoriaProducto {
     required this.siempreDisponible,
     required this.orden,
     required this.activo,
+    this.parentId,
+    this.parentNombre,
   });
 
   final int? id;
@@ -19,6 +21,13 @@ class CategoriaProducto {
   final bool siempreDisponible;
   final int orden;
   final bool activo;
+  final int? parentId;
+  final String? parentNombre;
+
+  bool get esSubcategoria => parentId != null;
+
+  String get nombreCompleto =>
+      parentNombre == null ? nombre : '$parentNombre · $nombre';
 }
 
 class UnidadMedida {
@@ -50,6 +59,8 @@ class Producto {
     required this.categoriaId,
     required this.categoriaNombre,
     required this.categoriaColor,
+    this.categoriaParentId,
+    this.categoriaParentNombre,
     this.descripcion,
     required this.precio,
     this.imagen,
@@ -67,6 +78,8 @@ class Producto {
   final int categoriaId;
   final String categoriaNombre;
   final int categoriaColor;
+  final int? categoriaParentId;
+  final String? categoriaParentNombre;
   final String? descripcion;
   final double precio;
   final Uint8List? imagen;
@@ -84,6 +97,10 @@ class Producto {
 
   bool get esDirecto => tipo == 'DIRECTO';
   bool get esVentaDirecta => insumoVinculadoId != null;
+
+  String get categoriaEtiqueta => categoriaParentNombre == null
+      ? categoriaNombre
+      : '$categoriaParentNombre · $categoriaNombre';
 }
 
 class Insumo {
@@ -153,11 +170,13 @@ class CatalogRepository {
     bool soloActivas = false,
   }) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.query(
-      'categorias_producto',
-      where: soloActivas ? 'activo = 1' : null,
-      orderBy: 'activo DESC, orden, nombre COLLATE NOCASE',
-    );
+    final rows = await db.rawQuery('''
+      SELECT c.*, p.nombre AS parent_nombre
+      FROM categorias_producto c
+      LEFT JOIN categorias_producto p ON p.id = c.parent_id
+      ${soloActivas ? 'WHERE c.activo = 1' : ''}
+      ORDER BY c.activo DESC, c.orden, c.nombre COLLATE NOCASE
+    ''');
     return rows
         .map(
           (row) => CategoriaProducto(
@@ -167,6 +186,8 @@ class CatalogRepository {
             siempreDisponible: (row['siempre_disponible'] as num).toInt() == 1,
             orden: (row['orden'] as num?)?.toInt() ?? 0,
             activo: (row['activo'] as num).toInt() == 1,
+            parentId: row['parent_id'] as int?,
+            parentNombre: row['parent_nombre'] as String?,
           ),
         )
         .toList();
@@ -175,8 +196,9 @@ class CatalogRepository {
   Future<void> saveCategoria(CategoriaProducto categoria) async {
     final db = await AppDatabase.instance.database;
     final values = <String, Object?>{
-      'nombre': categoria.nombre.trim(),
+      'nombre': categoria.nombre.trim().toUpperCase(),
       'color': categoria.color,
+      'parent_id': categoria.parentId,
       'siempre_disponible': categoria.siempreDisponible ? 1 : 0,
       'orden': categoria.orden,
       'activo': categoria.activo ? 1 : 0,
@@ -227,11 +249,14 @@ class CatalogRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT p.*, c.nombre AS categoria_nombre, c.color AS categoria_color,
+             c.parent_id AS categoria_parent_id,
+             cp.nombre AS categoria_parent_nombre,
              c.siempre_disponible AS categoria_siempre_disponible,
              iv.id AS insumo_vinculado_id,
              COALESCE(s.stock, 0) AS stock
       FROM productos p
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
+      LEFT JOIN categorias_producto cp ON cp.id = c.parent_id
       LEFT JOIN insumos iv ON iv.producto_id = p.id AND iv.venta_directa = 1
       LEFT JOIN v_stock_productos s ON s.producto_id = p.id
       ${soloActivos ? 'WHERE p.activo = 1' : ''}
@@ -254,18 +279,24 @@ class CatalogRepository {
 
   Future<Producto?> getProducto(int id) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT p.*, c.nombre AS categoria_nombre, c.color AS categoria_color,
+             c.parent_id AS categoria_parent_id,
+             cp.nombre AS categoria_parent_nombre,
              c.siempre_disponible AS categoria_siempre_disponible,
              iv.id AS insumo_vinculado_id,
              COALESCE(s.stock, 0) AS stock
       FROM productos p
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
+      LEFT JOIN categorias_producto cp ON cp.id = c.parent_id
       LEFT JOIN insumos iv ON iv.producto_id = p.id AND iv.venta_directa = 1
       LEFT JOIN v_stock_productos s ON s.producto_id = p.id
       WHERE p.id = ?
       LIMIT 1
-    ''', [id]);
+    ''',
+      [id],
+    );
     return rows.isEmpty ? null : _productFromRow(rows.first);
   }
 
@@ -317,7 +348,8 @@ class CatalogRepository {
 
   Future<List<RecetaLinea>> getReceta(int productoId) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT r.insumo_id, i.nombre AS insumo_nombre,
              u.abreviatura AS unidad_abreviatura,
              r.cantidad,
@@ -328,7 +360,9 @@ class CatalogRepository {
       LEFT JOIN v_stock_insumos s ON s.insumo_id = i.id
       WHERE r.producto_id = ?
       ORDER BY i.nombre COLLATE NOCASE
-    ''', [productoId]);
+    ''',
+      [productoId],
+    );
     return rows
         .map(
           (row) => RecetaLinea(
@@ -403,7 +437,8 @@ class CatalogRepository {
 
   Future<Insumo?> getInsumo(int id) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT i.*, u.abreviatura AS unidad_abreviatura,
              u.nombre AS unidad_nombre, u.familia AS unidad_familia,
              u.factor_base AS unidad_factor,
@@ -416,7 +451,9 @@ class CatalogRepository {
       LEFT JOIN v_stock_insumos s ON s.insumo_id = i.id
       WHERE i.id = ?
       LIMIT 1
-    ''', [id]);
+    ''',
+      [id],
+    );
     return rows.isEmpty ? null : _insumoFromRow(rows.first);
   }
 
@@ -438,18 +475,10 @@ class CatalogRepository {
       id = await db.insert('insumos', values);
     } else {
       id = insumo.id!;
-      await db.update(
-        'insumos',
-        values,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+      await db.update('insumos', values, where: 'id = ?', whereArgs: [id]);
     }
     if (insumo.ventaDirecta) {
-      await _sincronizarProductoVentaDirecta(
-        insumoId: id,
-        insumo: insumo,
-      );
+      await _sincronizarProductoVentaDirecta(insumoId: id, insumo: insumo);
     } else if (insumo.productoId != null) {
       // Se desactiva, no se borra: conserva el historial de ventas.
       await db.update(
@@ -555,7 +584,7 @@ class CatalogRepository {
     final rows = await db.query(
       'categorias_producto',
       columns: ['id'],
-      where: 'nombre = ?',
+      where: 'nombre = ? COLLATE NOCASE',
       whereArgs: ['Venta directa'],
       limit: 1,
     );
@@ -563,14 +592,14 @@ class CatalogRepository {
       final id = rows.first['id'] as int;
       await db.update(
         'categorias_producto',
-        {'siempre_disponible': 1, 'activo': 1},
+        {'nombre': 'VENTA DIRECTA', 'siempre_disponible': 1, 'activo': 1},
         where: 'id = ?',
         whereArgs: [id],
       );
       return id;
     }
     return db.insert('categorias_producto', {
-      'nombre': 'Venta directa',
+      'nombre': 'VENTA DIRECTA',
       'color': 0xFF0F766E,
       'siempre_disponible': 1,
       'orden': 90,
@@ -679,6 +708,8 @@ class CatalogRepository {
     categoriaId: row['categoria_id']! as int,
     categoriaNombre: row['categoria_nombre']! as String,
     categoriaColor: row['categoria_color']! as int,
+    categoriaParentId: row['categoria_parent_id'] as int?,
+    categoriaParentNombre: row['categoria_parent_nombre'] as String?,
     descripcion: row['descripcion'] as String?,
     precio: (row['precio'] as num).toDouble(),
     imagen: _asBytes(row['imagen']),

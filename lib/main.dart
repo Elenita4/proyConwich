@@ -115,9 +115,9 @@ class _StartupGateState extends State<StartupGate> {
       _error = null;
     });
     try {
-      final usuario = await _repository
-          .restaurarSesion()
-          .timeout(const Duration(seconds: 30));
+      final usuario = await _repository.restaurarSesion().timeout(
+        const Duration(seconds: 30),
+      );
       if (!mounted) return;
       setState(() {
         _usuario = usuario;
@@ -127,8 +127,7 @@ class _StartupGateState extends State<StartupGate> {
     } on TimeoutException {
       if (!mounted) return;
       setState(() {
-        _error =
-            'La base de datos tardó demasiado en abrir. Cierra la app y vuelve a intentar.';
+        _error = 'La base de datos tardó demasiado en abrir. Cierra la app y vuelve a intentar.';
         _loading = false;
       });
     } catch (error) {
@@ -154,6 +153,13 @@ class _StartupGateState extends State<StartupGate> {
     setState(() => _usuario = null);
   }
 
+  Future<void> _cambiarUsuario(Usuario usuario) async {
+    Sesion.instance.iniciar(usuario);
+    await _repository.guardarSesion(usuario.id);
+    if (!mounted) return;
+    setState(() => _usuario = usuario);
+  }
+
   /// El primer acceso obligatorio terminó: se continúa sin volver a pedir
   /// credenciales.
   void _completarPrimerAcceso(Usuario usuario) {
@@ -164,9 +170,7 @@ class _StartupGateState extends State<StartupGate> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_error != null) {
       return Scaffold(
@@ -200,7 +204,11 @@ class _StartupGateState extends State<StartupGate> {
           onLogout: _logout,
         );
       }
-      return AppShell(usuario: usuario, onLogout: _logout);
+      return AppShell(
+        usuario: usuario,
+        onLogout: _logout,
+        onUsuarioCambiado: _cambiarUsuario,
+      );
     }
     return LoginPage(onLogin: _login);
   }

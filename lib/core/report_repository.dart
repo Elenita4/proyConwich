@@ -45,6 +45,35 @@ class ProductoReporte {
   double get margen => ventas - cogs;
 }
 
+class PedidoReporte {
+  const PedidoReporte({
+    required this.id,
+    required this.fecha,
+    required this.referencia,
+    required this.usuario,
+    required this.numeroTurno,
+    required this.total,
+    required this.efectivo,
+    required this.qr,
+    required this.estadoPago,
+    required this.estadoEntrega,
+  });
+
+  final int id;
+  final String fecha;
+  final String? referencia;
+  final String usuario;
+  final int numeroTurno;
+  final double total;
+  final double efectivo;
+  final double qr;
+  final String estadoPago;
+  final String estadoEntrega;
+
+  double get pagado => efectivo + qr;
+  String get turnoLabel => 'Turno $numeroTurno';
+}
+
 class GastoReporte {
   const GastoReporte({required this.nombre, required this.total});
 
@@ -79,7 +108,8 @@ class ReportRepository {
     final db = await AppDatabase.instance.database;
     final inicio = sqlDateTime(desde);
     final fin = sqlDateTime(hasta);
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT
         COALESCE((SELECT SUM(total) FROM pedidos
                   WHERE estado_pago <> 'ANULADO' AND estado_entrega <> 'ANULADO'
@@ -113,17 +143,19 @@ class ReportRepository {
         COALESCE((SELECT SUM(monto) FROM gastos
                   WHERE estado = 'REGISTRADO' AND metodo_pago = 'QR'
                     AND fecha >= ? AND fecha < ?), 0) AS salidas_qr
-    ''', [
-      inicio, fin, // ventas
-      inicio, fin, // pedidos
-      inicio, fin, // cobros efectivo
-      inicio, fin, // cobros qr
-      inicio, fin, // cogs consumos
-      inicio, fin, // cogs productos directos
-      inicio, fin, // salidas
-      inicio, fin, // salidas efectivo
-      inicio, fin, // salidas qr
-    ]);
+    ''',
+      [
+        inicio, fin, // ventas
+        inicio, fin, // pedidos
+        inicio, fin, // cobros efectivo
+        inicio, fin, // cobros qr
+        inicio, fin, // cogs consumos
+        inicio, fin, // cogs productos directos
+        inicio, fin, // salidas
+        inicio, fin, // salidas efectivo
+        inicio, fin, // salidas qr
+      ],
+    );
     final row = rows.first;
     double value(String key) => (row[key] as num?)?.toDouble() ?? 0;
     return ResumenFinanciero(
@@ -143,7 +175,8 @@ class ReportRepository {
     DateTime hasta,
   ) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT dp.nombre_producto AS nombre,
              SUM(dp.cantidad) AS cantidad,
              SUM(dp.subtotal) AS ventas,
@@ -165,7 +198,9 @@ class ReportRepository {
         AND p.fecha >= ? AND p.fecha < ?
       GROUP BY dp.nombre_producto
       ORDER BY ventas DESC
-    ''', [sqlDateTime(desde), sqlDateTime(hasta)]);
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
     return rows
         .map(
           (row) => ProductoReporte(
@@ -178,12 +213,56 @@ class ReportRepository {
         .toList();
   }
 
+  Future<List<PedidoReporte>> getPedidos(DateTime desde, DateTime hasta) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT p.id, p.fecha, p.referencia, p.total, p.estado_pago,
+             p.estado_entrega, u.nombre AS usuario,
+             COALESCE(c.numero_turno, 0) AS numero_turno,
+             COALESCE(SUM(CASE
+               WHEN pg.estado = 'CONFIRMADO' AND pg.metodo_pago = 'EFECTIVO'
+               THEN pg.monto ELSE 0 END), 0) AS efectivo,
+             COALESCE(SUM(CASE
+               WHEN pg.estado = 'CONFIRMADO' AND pg.metodo_pago = 'QR'
+               THEN pg.monto ELSE 0 END), 0) AS qr
+      FROM pedidos p
+      INNER JOIN usuarios u ON u.id = p.usuario_id
+      LEFT JOIN cajas c ON c.id = p.caja_id
+      LEFT JOIN pagos pg ON pg.pedido_id = p.id
+      WHERE p.fecha >= ? AND p.fecha < ?
+        AND p.estado_pago <> 'ANULADO'
+        AND p.estado_entrega <> 'ANULADO'
+      GROUP BY p.id
+      ORDER BY p.fecha DESC
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
+    return rows
+        .map(
+          (row) => PedidoReporte(
+            id: row['id']! as int,
+            fecha: row['fecha']! as String,
+            referencia: row['referencia'] as String?,
+            usuario: (row['usuario'] as String?) ?? '',
+            numeroTurno: ((row['numero_turno'] as num?) ?? 0).toInt(),
+            total: (row['total'] as num).toDouble(),
+            efectivo: (row['efectivo'] as num).toDouble(),
+            qr: (row['qr'] as num).toDouble(),
+            estadoPago: row['estado_pago']! as String,
+            estadoEntrega: row['estado_entrega']! as String,
+          ),
+        )
+        .toList();
+  }
+
   Future<List<GastoReporte>> getSalidasPorMotivo(
     DateTime desde,
     DateTime hasta,
   ) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT COALESCE(NULLIF(g.descripcion, ''), cg.nombre) AS nombre,
              SUM(g.monto) AS total
       FROM gastos g
@@ -191,7 +270,9 @@ class ReportRepository {
       WHERE g.estado = 'REGISTRADO' AND g.fecha >= ? AND g.fecha < ?
       GROUP BY COALESCE(NULLIF(g.descripcion, ''), cg.nombre)
       ORDER BY total DESC
-    ''', [sqlDateTime(desde), sqlDateTime(hasta)]);
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
     return rows
         .map(
           (row) => GastoReporte(

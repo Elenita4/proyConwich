@@ -10,11 +10,13 @@ class _CashData {
     required this.caja,
     required this.resumen,
     required this.historial,
+    required this.proximoTurno,
   });
 
   final Caja? caja;
   final CajaResumen? resumen;
   final List<Caja> historial;
+  final int proximoTurno;
 }
 
 class CashPage extends StatefulWidget {
@@ -39,7 +41,6 @@ class _CashPageState extends State<CashPage> {
   late final TextEditingController _qr;
   late final TextEditingController _observacion;
   late DateTime _fecha;
-  late String _turno;
   int? _resumenCajaId;
   bool _saving = false;
 
@@ -48,7 +49,6 @@ class _CashPageState extends State<CashPage> {
     super.initState();
     final now = DateTime.now();
     _fecha = DateTime(now.year, now.month, now.day);
-    _turno = now.hour < 12 ? 'MAÑANA' : 'TARDE';
     _fondo = TextEditingController(text: '0');
     _efectivo = TextEditingController();
     _qr = TextEditingController();
@@ -91,15 +91,20 @@ class _CashPageState extends State<CashPage> {
       _resumenCajaId = null;
     }
     final historial = await _repository.getCajas();
-    return _CashData(caja: caja, resumen: resumen, historial: historial);
+    final proximoTurno = await _repository.proximoTurno(_fecha);
+    return _CashData(
+      caja: caja,
+      resumen: resumen,
+      historial: historial,
+      proximoTurno: proximoTurno,
+    );
   }
 
   Future<void> _abrir() async {
     setState(() => _saving = true);
     try {
-      await _repository.abrirCaja(
+      final caja = await _repository.abrirCaja(
         fecha: _fecha,
-        turno: _turno,
         fondoInicial: parseAmount(_fondo.text),
         usuarioId: widget.usuario.id,
       );
@@ -108,7 +113,7 @@ class _CashPageState extends State<CashPage> {
         _saving = false;
         _reload();
       });
-      showAppMessage(context, 'Caja abierta para el turno $_turno.');
+      showAppMessage(context, 'Caja abierta como ${caja.turnoLabel}.');
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -124,7 +129,7 @@ class _CashPageState extends State<CashPage> {
       context,
       title: 'Cerrar caja',
       message:
-          'Se cerrará la caja del turno ${caja.turno} y el menú publicado del turno quedará cerrado. ¿Continuar?',
+          'Se cerrará la caja del ${caja.turnoLabel}. El menú del día seguirá abierto para los próximos turnos. ¿Continuar?',
       confirmLabel: 'Cerrar caja',
       destructive: true,
     );
@@ -197,8 +202,7 @@ class _CashPageState extends State<CashPage> {
             children: [
               PageHeader(
                 title: 'Caja',
-                subtitle:
-                    'Una caja abierta a la vez. El fondo inicial no es un ingreso.',
+                subtitle: 'Varios turnos por día (Turno 1, 2, 3…). Una caja abierta a la vez. El fondo inicial no es un ingreso.',
                 actions: [
                   OutlinedButton.icon(
                     onPressed: () => setState(_reload),
@@ -218,15 +222,14 @@ class _CashPageState extends State<CashPage> {
                 const SizedBox.shrink()
               else ...[
                 if (data.caja == null)
-                  _aperturaCard(context)
+                  _aperturaCard(context, data)
                 else
                   _cajaAbierta(context, data),
                 const SizedBox(height: 22),
                 Text(
-                  'Historial de cajas',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  'Historial de cajas (${data.historial.length})',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 10),
                 if (data.historial.isEmpty)
@@ -246,7 +249,7 @@ class _CashPageState extends State<CashPage> {
     );
   }
 
-  Widget _aperturaCard(BuildContext context) {
+  Widget _aperturaCard(BuildContext context, _CashData data) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
       child: Column(
@@ -258,15 +261,14 @@ class _CashPageState extends State<CashPage> {
               const SizedBox(width: 8),
               Text(
                 'Abrir caja',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
-            'Registra el turno y el fondo inicial en efectivo.',
+            'El turno se asigna automáticamente y puedes abrir varias cajas en el mismo día.',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
@@ -287,13 +289,14 @@ class _CashPageState extends State<CashPage> {
                       lastDate: DateTime.now().add(const Duration(days: 7)),
                     );
                     if (elegida != null) {
-                      setState(
-                        () => _fecha = DateTime(
+                      setState(() {
+                        _fecha = DateTime(
                           elegida.year,
                           elegida.month,
                           elegida.day,
-                        ),
-                      );
+                        );
+                        _reload();
+                      });
                     }
                   },
                   child: InputDecorator(
@@ -307,15 +310,9 @@ class _CashPageState extends State<CashPage> {
               ),
               SizedBox(
                 width: 180,
-                child: DropdownButtonFormField<String>(
-                  initialValue: _turno,
-                  decoration: appInput(label: 'Turno'),
-                  items: const [
-                    DropdownMenuItem(value: 'MAÑANA', child: Text('Mañana')),
-                    DropdownMenuItem(value: 'TARDE', child: Text('Tarde')),
-                  ],
-                  onChanged: (value) =>
-                      setState(() => _turno = value ?? 'MAÑANA'),
+                child: InputDecorator(
+                  decoration: appInput(label: 'Turno', icon: Icons.numbers),
+                  child: Text('Turno ${data.proximoTurno}'),
                 ),
               ),
               SizedBox(
@@ -357,10 +354,7 @@ class _CashPageState extends State<CashPage> {
             children: [
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final angosto = esAngosto(
-                    constraints.maxWidth,
-                    limite: 700,
-                  );
+                  final angosto = esAngosto(constraints.maxWidth, limite: 700);
                   final informacion = Row(
                     children: [
                       Container(
@@ -381,12 +375,16 @@ class _CashPageState extends State<CashPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Caja abierta · Turno ${caja.turno}',
+                              'Caja abierta · ${caja.turnoLabel}',
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             Text(
-                              '${formatDateShort(parseSqlDate(caja.fecha))} · apertura ${formatDateTimeText(caja.fechaApertura)} · ${caja.usuarioApertura}',
+                              '${formatDateShort(parseSqlDate(caja.fecha))} · apertura ${formatDateTimeText(caja.fechaApertura)}',
+                              style: TextStyle(color: scheme.onSurfaceVariant),
+                            ),
+                            Text(
+                              'Cajero: ${caja.usuarioApertura}',
                               style: TextStyle(color: scheme.onSurfaceVariant),
                             ),
                           ],
@@ -486,11 +484,7 @@ class _CashPageState extends State<CashPage> {
                     );
                   }
                   return Column(
-                    children: [
-                      movimientos,
-                      const SizedBox(height: 12),
-                      cierre,
-                    ],
+                    children: [movimientos, const SizedBox(height: 12), cierre],
                   );
                 },
               ),
@@ -508,19 +502,15 @@ class _CashPageState extends State<CashPage> {
         children: [
           Text(
             'Movimientos del turno',
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           LabelValue(
             label: 'Ventas efectivo',
             value: formatMoney(resumen.ventasEfectivo),
           ),
-          LabelValue(
-            label: 'Ventas QR',
-            value: formatMoney(resumen.ventasQr),
-          ),
+          LabelValue(label: 'Ventas QR', value: formatMoney(resumen.ventasQr)),
           LabelValue(
             label: 'Salidas efectivo',
             value: '- ${formatMoney(resumen.salidasEfectivo)}',
@@ -554,9 +544,8 @@ class _CashPageState extends State<CashPage> {
         children: [
           Text(
             'Cerrar caja',
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -583,9 +572,7 @@ class _CashPageState extends State<CashPage> {
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 8),
-          _Diferencia(
-            diferencia: parseAmount(_qr.text) - resumen.esperadoQr,
-          ),
+          _Diferencia(diferencia: parseAmount(_qr.text) - resumen.esperadoQr),
           const SizedBox(height: 12),
           TextField(
             controller: _observacion,
@@ -762,8 +749,12 @@ class _CajaHistorialRow extends StatelessWidget {
       color: caja.abierta ? scheme.tertiary : scheme.primary,
     );
     final fecha = Text(
-      '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turno}',
+      '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turnoLabel}',
       style: const TextStyle(fontWeight: FontWeight.w600),
+    );
+    final cajero = Text(
+      'Cajero: ${caja.usuarioApertura}',
+      style: TextStyle(color: scheme.onSurfaceVariant),
     );
     final fondo = Text(
       'Fondo ${formatMoney(caja.fondoInicial)}',
@@ -796,6 +787,7 @@ class _CajaHistorialRow extends StatelessWidget {
                 icono,
                 const SizedBox(width: 12),
                 Expanded(flex: 2, child: fecha),
+                Expanded(flex: 2, child: cajero),
                 Expanded(flex: 2, child: fondo),
                 Expanded(flex: 2, child: cierre),
                 ?contado,
@@ -816,6 +808,7 @@ class _CajaHistorialRow extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 4),
+              cajero,
               fondo,
               cierre,
               ?contado,

@@ -35,7 +35,7 @@ void main() {
     final catalog = CatalogRepository();
     await catalog.saveCategoria(
       const CategoriaProducto(
-        nombre: 'Almuerzos',
+        nombre: 'ALMUERZOS',
         color: 0xFF0F766E,
         siempreDisponible: false,
         orden: 1,

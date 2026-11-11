@@ -1,24 +1,22 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/cash_repository.dart';
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
+import '../../../ui/producto_catalogo_card.dart';
 
 class _MenuData {
   const _MenuData({
     required this.menu,
     required this.items,
     required this.productos,
-    required this.categorias,
   });
 
   final MenuDia? menu;
   final List<MenuItem> items;
   final List<Producto> productos;
-  final List<CategoriaProducto> categorias;
 }
 
 class MenuPage extends StatefulWidget {
@@ -38,47 +36,26 @@ class MenuPage extends StatefulWidget {
 class _MenuPageState extends State<MenuPage> {
   final _repository = MenuRepository();
   final _catalog = CatalogRepository();
-  final _cash = CashRepository();
   late DateTime _fecha;
   late String _tipo;
   late Future<_MenuData> _future;
+  String _search = '';
 
   bool get _esAdmin => widget.usuario.puede(Permiso.menu);
-  bool get _puedeAgotar => widget.usuario.puede(Permiso.agotamiento);
 
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
     _fecha = DateTime(now.year, now.month, now.day);
-    _tipo = now.hour < 12 ? 'DESAYUNO' : 'ALMUERZO';
+    _tipo = MenuRepository.tipoMenu;
     _reload();
-    _ajustarTurnoCaja();
   }
 
   @override
   void didUpdateWidget(MenuPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.refreshToken != widget.refreshToken) {
-      _reload();
-      _ajustarTurnoCaja();
-    }
-  }
-
-  /// El tipo de menú sigue el turno de la caja abierta (no la hora del reloj).
-  Future<void> _ajustarTurnoCaja() async {
-    try {
-      final caja = await _cash.getCajaAbierta();
-      if (!mounted || caja == null) return;
-      final tipo = MenuRepository.tipoDesdeTurno(caja.turno);
-      if (tipo == _tipo) return;
-      setState(() {
-        _tipo = tipo;
-        _reload();
-      });
-    } catch (_) {
-      // Si no se puede leer la caja se mantiene el tipo por hora.
-    }
+    if (oldWidget.refreshToken != widget.refreshToken) _reload();
   }
 
   // Debe devolver void: si devolviera el Future, setState lanzaría error y la
@@ -92,124 +69,58 @@ class _MenuPageState extends State<MenuPage> {
     final items = menu == null
         ? <MenuItem>[]
         : await _repository.getItems(menu.id);
-    final productos = _esAdmin
-        ? await _catalog.getProductos(soloActivos: true)
-        : <Producto>[];
-    final categorias = _esAdmin
-        ? await _catalog.getCategorias()
-        : <CategoriaProducto>[];
-    return _MenuData(
-      menu: menu,
-      items: items,
-      productos: productos,
-      categorias: categorias,
-    );
+    final productos = await _catalog.getProductos(soloActivos: true);
+    return _MenuData(menu: menu, items: items, productos: productos);
   }
 
-  bool _esCategoriaDelTipo(CategoriaProducto categoria) {
-    final nombre = categoria.nombre
-        .toLowerCase()
-        .replaceAll('á', 'a')
-        .replaceAll('é', 'e')
-        .replaceAll('í', 'i')
-        .replaceAll('ó', 'o')
-        .replaceAll('ú', 'u');
-    return _tipo == 'DESAYUNO'
-        ? nombre.contains('desayuno')
-        : nombre.contains('almuerzo');
-  }
-
-  /// Productos que corresponden al tipo de menú actual. Se descartan los de
-  /// venta directa porque se venden siempre.
-  List<Producto> _sugeridos(_MenuData data) {
-    final base = data.productos
-        .where(
-          (producto) =>
-              !producto.categoriaSiempreDisponible &&
-              !producto.esVentaDirecta,
-        )
-        .toList();
-    final categoriasTipo = data.categorias
-        .where(_esCategoriaDelTipo)
-        .map((categoria) => categoria.id)
-        .toSet();
-    if (categoriasTipo.isEmpty) return base;
-    final filtrados = base
-        .where((producto) => categoriasTipo.contains(producto.categoriaId))
-        .toList();
-    return filtrados.isEmpty ? base : filtrados;
-  }
-
-  Future<void> _armarMenu(_MenuData data) async {
-    final sugeridos = _sugeridos(data);
-    // Conserva los platos que ya están en el borrador aunque su categoría no
-    // coincida con el filtro, para no perderlos al volver a guardar.
-    final idsSugeridos = sugeridos.map((producto) => producto.id).toSet();
-    for (final item in data.items) {
-      if (idsSugeridos.contains(item.productoId)) continue;
-      for (final producto in data.productos) {
-        if (producto.id == item.productoId) {
-          sugeridos.add(producto);
-          idsSugeridos.add(producto.id);
-          break;
-        }
-      }
+  MenuItem? _itemDe(List<MenuItem> items, int productoId) {
+    for (final item in items) {
+      if (item.productoId == productoId) return item;
     }
-    if (sugeridos.isEmpty) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'No hay productos activos para este menú. Crea productos en Productos.',
-        error: true,
-      );
+    return null;
+  }
+
+  Future<void> _toggleProducto(_MenuData data, Producto producto) async {
+    if (!_esAdmin || producto.id == null) return;
+    if (data.menu?.cerrado == true) {
+      showAppMessage(context, 'El menú está cerrado.', error: true);
       return;
     }
-    final anteriores = await _repository.getProductosMenuAnterior(
-      _fecha,
-      _tipo,
-    );
-    if (!mounted) return;
-    final seleccionInicial = data.items.isNotEmpty
-        ? data.items.map((item) => item.productoId).toList()
-        : anteriores;
-    final seleccionados = await showDialog<List<int>>(
-      context: context,
-      builder: (_) => _MenuBuilderDialog(
-        productos: sugeridos,
-        seleccionInicial: seleccionInicial,
-        anteriores: anteriores,
-        tipo: _tipo,
-      ),
-    );
-    if (seleccionados == null) return;
+    final item = _itemDe(data.items, producto.id!);
     try {
-      final menu = data.menu ??
-          await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
-      await _repository.reemplazarItems(menu.id, seleccionados);
-      if (!mounted) return;
-      setState(_reload);
-      showAppMessage(
-        context,
-        seleccionados.isEmpty
-            ? 'El menú quedó vacío.'
-            : 'Menú guardado con ${seleccionados.length} producto(s).',
-      );
+      if (item != null) {
+        await _repository.quitarItem(item.id);
+        if (!mounted) return;
+        setState(_reload);
+        showAppMessage(
+          context,
+          '${producto.nombre} ya no está en el menú de hoy.',
+        );
+      } else {
+        final menu =
+            data.menu ??
+            await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
+        await _repository.agregarProducto(menu.id, producto.id!);
+        if (!mounted) return;
+        setState(_reload);
+        showAppMessage(context, '${producto.nombre} agregado al menú de hoy.');
+      }
     } catch (error) {
       if (!mounted) return;
-      showAppMessage(context, 'No se pudo guardar el menú: $error', error: true);
+      showAppMessage(
+        context,
+        'No se pudo actualizar el menú: $error',
+        error: true,
+      );
     }
   }
 
-  Future<void> _quitar(MenuItem item) async {
-    final confirmado = await confirmAction(
-      context,
-      title: 'Quitar del menú',
-      message: '¿Quitar ${item.nombre} del menú de hoy?',
-      confirmLabel: 'Quitar',
-      destructive: true,
+  Future<void> _toggleDisponible(MenuItem item, bool disponible) async {
+    await _repository.setDisponible(
+      item.id,
+      disponible,
+      motivo: disponible ? null : 'Agotado',
     );
-    if (!confirmado) return;
-    await _repository.quitarItem(item.id);
     if (!mounted) return;
     setState(_reload);
   }
@@ -237,8 +148,7 @@ class _MenuPageState extends State<MenuPage> {
     final confirmado = await confirmAction(
       context,
       title: 'Cerrar menú',
-      message:
-          'El menú quedará cerrado y no se podrán registrar más ventas de estos platos.',
+      message: 'El menú quedará cerrado y no se podrán registrar más ventas de estos platos.',
       confirmLabel: 'Cerrar menú',
       destructive: true,
     );
@@ -247,16 +157,6 @@ class _MenuPageState extends State<MenuPage> {
     if (!mounted) return;
     setState(_reload);
     showAppMessage(context, 'Menú cerrado.');
-  }
-
-  Future<void> _toggleDisponible(MenuItem item, bool disponible) async {
-    await _repository.setDisponible(
-      item.id,
-      disponible,
-      motivo: disponible ? null : 'Agotado',
-    );
-    if (!mounted) return;
-    setState(_reload);
   }
 
   Future<void> _elegirFecha() async {
@@ -276,7 +176,8 @@ class _MenuPageState extends State<MenuPage> {
   @override
   Widget build(BuildContext context) {
     final hoy = DateTime.now();
-    final esHoy = _fecha.year == hoy.year &&
+    final esHoy =
+        _fecha.year == hoy.year &&
         _fecha.month == hoy.month &&
         _fecha.day == hoy.day;
     return FutureBuilder<_MenuData>(
@@ -292,15 +193,16 @@ class _MenuPageState extends State<MenuPage> {
             children: [
               PageHeader(
                 title: 'Menú del día',
-                subtitle:
-                    'El cajero solo vende el menú publicado de hoy. Las bebidas siempre disponibles se venden aparte.',
+                subtitle: 'Igual que en Ventas: toca un plato para quitarlo o volver a agregarlo.',
                 actions: [
                   if (_esAdmin)
                     OutlinedButton.icon(
                       onPressed: _elegirFecha,
                       icon: const Icon(Icons.calendar_today_outlined),
                       label: Text(
-                        esHoy ? 'Hoy · ${formatDateShort(_fecha)}' : formatDateShort(_fecha),
+                        esHoy
+                            ? 'Hoy · ${formatDateShort(_fecha)}'
+                            : formatDateShort(_fecha),
                       ),
                     ),
                   OutlinedButton.icon(
@@ -310,44 +212,6 @@ class _MenuPageState extends State<MenuPage> {
                   ),
                 ],
               ),
-              AppCard(
-                padding: const EdgeInsets.all(12),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Desayuno'),
-                      selected: _tipo == 'DESAYUNO',
-                      onSelected: (_) => setState(() {
-                        _tipo = 'DESAYUNO';
-                        _reload();
-                      }),
-                    ),
-                    ChoiceChip(
-                      label: const Text('Almuerzo'),
-                      selected: _tipo == 'ALMUERZO',
-                      onSelected: (_) => setState(() {
-                        _tipo = 'ALMUERZO';
-                        _reload();
-                      }),
-                    ),
-                    const SizedBox(width: 12),
-                    if (data?.menu != null) ...[
-                      Chip(
-                        label: Text('Estado: ${data!.menu!.estado}'),
-                        side: BorderSide.none,
-                      ),
-                      Chip(
-                        label: Text('${data.items.length} plato(s)'),
-                        side: BorderSide.none,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
               if (snapshot.connectionState == ConnectionState.waiting)
                 const LoadingView()
               else if (snapshot.hasError)
@@ -355,25 +219,24 @@ class _MenuPageState extends State<MenuPage> {
                   message: '${snapshot.error}',
                   onRetry: () => setState(_reload),
                 )
-              else if (data == null || data.menu == null)
-                EmptyState(
-                  icon: Icons.restaurant_menu_outlined,
-                  title: _esAdmin
-                      ? 'No hay menú para ${_tipo.toLowerCase()}'
-                      : 'El menú de hoy aún no está publicado',
-                  message: _esAdmin
-                      ? 'Elige los productos de desayuno o almuerzo en un solo paso.'
-                      : 'El administrador debe publicar el menú para poder vender.',
-                  action: _esAdmin && data != null
-                      ? FilledButton.icon(
-                          onPressed: () => _armarMenu(data),
-                          icon: const Icon(Icons.playlist_add_check),
-                          label: const Text('Armar menú'),
-                        )
-                      : null,
-                )
-              else
-                _menuContenido(context, data),
+              else if (data == null)
+                const SizedBox.shrink()
+              else ...[
+                _estadoCard(context, data),
+                const SizedBox(height: 16),
+                AppCard(
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    decoration: appInput(
+                      label: 'Buscar producto',
+                      icon: Icons.search,
+                    ),
+                    onChanged: (value) => setState(() => _search = value),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _catalogo(context, data),
+              ],
             ],
           ),
         );
@@ -381,412 +244,244 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
-  Widget _menuContenido(BuildContext context, _MenuData data) {
-    final menu = data.menu!;
+  Widget _estadoCard(BuildContext context, _MenuData data) {
     final scheme = Theme.of(context).colorScheme;
-    final publicado = menu.estado == 'PUBLICADO';
-    final cerrado = menu.estado == 'CERRADO';
-    final borrador = menu.estado == 'BORRADOR';
-    final puedeEditar = _esAdmin && borrador;
-    final puedeAgotar = !cerrado && (publicado || borrador) &&
-        (_esAdmin || (_puedeAgotar && publicado));
-
-    if (!publicado && !_esAdmin) {
-      return EmptyState(
-        icon: Icons.lock_clock_outlined,
-        title: 'El menú no está publicado',
-        message:
-            'El menú de ${_tipo.toLowerCase()} está en estado ${menu.estado.toLowerCase()}. El administrador debe publicarlo.',
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AppCard(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final angosto = esAngosto(constraints.maxWidth, limite: 760);
-              final titulo = Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(Icons.restaurant_menu, color: scheme.primary),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Menú de ${_tipo.toLowerCase()} · ${formatDateShort(parseSqlDate(menu.fecha))}',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          cerrado
-                              ? 'Cerrado. Solo consulta.'
-                              : publicado
-                              ? 'Publicado. Los platos se pueden vender.'
-                              : 'Borrador. Elige los platos y publica cuando esté listo.',
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-              final botones = Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  if (puedeEditar)
-                    OutlinedButton.icon(
-                      onPressed: () => _armarMenu(data),
-                      icon: const Icon(Icons.playlist_add_check),
-                      label: const Text('Editar platos'),
-                    ),
-                  if (puedeEditar)
-                    FilledButton.icon(
-                      onPressed: () => _publicar(data),
-                      icon: const Icon(Icons.publish),
-                      label: const Text('Publicar'),
-                    ),
-                  if (_esAdmin && publicado)
-                    OutlinedButton.icon(
-                      onPressed: () => _cerrar(data),
-                      icon: const Icon(Icons.lock_outline),
-                      label: const Text('Cerrar menú'),
-                    ),
-                ],
-              );
-              if (angosto) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    titulo,
-                    if (botones.children.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      botones,
-                    ],
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: titulo),
-                  if (botones.children.isNotEmpty) ...[
-                    const SizedBox(width: 12),
-                    botones,
-                  ],
-                ],
-              );
-            },
+    final menu = data.menu;
+    final estado = menu?.estado ?? 'SIN MENÚ';
+    final cerrado = menu?.cerrado == true;
+    final borrador = menu?.estado == 'BORRADOR';
+    final publicado = menu?.estado == 'PUBLICADO';
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Chip(
+                avatar: Icon(Icons.restaurant, size: 18),
+                label: Text('MENÚ DE ALMUERZO'),
+                side: BorderSide.none,
+              ),
+              Chip(label: Text('Estado: $estado'), side: BorderSide.none),
+              Chip(
+                label: Text('${data.items.length} plato(s)'),
+                side: BorderSide.none,
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 16),
-        if (data.items.isEmpty)
-          EmptyState(
-            icon: Icons.restaurant_outlined,
-            title: 'El menú está vacío',
-            message: _esAdmin
-                ? 'Agrega los platos que se venderán hoy.'
-                : 'El administrador aún no agregó platos.',
-            action: puedeEditar
-                ? FilledButton.icon(
-                    onPressed: () => _armarMenu(data),
-                    icon: const Icon(Icons.playlist_add_check),
-                    label: const Text('Elegir platos'),
-                  )
-                : null,
-          )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 1100
-                  ? 3
-                  : constraints.maxWidth >= 720
-                  ? 2
-                  : 1;
-              final width = (constraints.maxWidth - (columns - 1) * 12) /
-                  columns;
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: data.items
-                    .map(
-                      (item) => SizedBox(
-                        width: width,
-                        child: AppCard(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      color: Color(item.categoriaColor),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      item.categoriaNombre,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: scheme.onSurfaceVariant,
-                                          ),
-                                    ),
-                                  ),
-                                  if (puedeEditar)
-                                    IconButton(
-                                      tooltip: 'Quitar',
-                                      visualDensity: VisualDensity.compact,
-                                      onPressed: () => _quitar(item),
-                                      icon: const Icon(
-                                        Icons.delete_outline,
-                                        size: 20,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                item.nombre,
-                                style: Theme.of(context).textTheme.titleSmall
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                formatMoney(item.precio),
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      color: scheme.primary,
-                                    ),
-                              ),
-                              const SizedBox(height: 10),
-                              Row(
-                                children: [
-                                  Icon(
-                                    item.disponible
-                                        ? Icons.check_circle_outline
-                                        : Icons.cancel_outlined,
-                                    size: 18,
-                                    color: item.disponible
-                                        ? scheme.primary
-                                        : scheme.error,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      item.disponible
-                                          ? 'Disponible'
-                                          : (item.motivoAgotado ?? 'Agotado'),
-                                      style: TextStyle(
-                                        color: item.disponible
-                                            ? scheme.onSurfaceVariant
-                                            : scheme.error,
-                                      ),
-                                    ),
-                                  ),
-                                  if (puedeAgotar)
-                                    Switch(
-                                      value: item.disponible,
-                                      onChanged: (value) =>
-                                          _toggleDisponible(item, value),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              );
-            },
+          const SizedBox(height: 10),
+          Text(
+            cerrado ? 'Menú cerrado. Solo consulta.' : 'Toca un plato del menú para quitarlo. Los platos grises muestran “No disponible en el menú de hoy”; toca uno para volver a agregarlo.',
+            style: TextStyle(color: scheme.onSurfaceVariant),
           ),
-      ],
+          if (_esAdmin && menu != null) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (borrador)
+                  FilledButton.icon(
+                    onPressed: () => _publicar(data),
+                    icon: const Icon(Icons.publish),
+                    label: const Text('Publicar'),
+                  ),
+                if (publicado)
+                  OutlinedButton.icon(
+                    onPressed: () => _cerrar(data),
+                    icon: const Icon(Icons.lock_outline),
+                    label: const Text('Cerrar menú'),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
   }
-}
 
-class _MenuBuilderDialog extends StatefulWidget {
-  const _MenuBuilderDialog({
-    required this.productos,
-    required this.seleccionInicial,
-    required this.anteriores,
-    required this.tipo,
-  });
-
-  final List<Producto> productos;
-  final List<int> seleccionInicial;
-  final List<int> anteriores;
-  final String tipo;
-
-  @override
-  State<_MenuBuilderDialog> createState() => _MenuBuilderDialogState();
-}
-
-class _MenuBuilderDialogState extends State<_MenuBuilderDialog> {
-  late final Set<int> _seleccionados;
-  String _search = '';
-
-  @override
-  void initState() {
-    super.initState();
-    final disponibles = widget.productos
-        .map((producto) => producto.id!)
-        .toSet();
-    _seleccionados = widget.seleccionInicial
-        .where(disponibles.contains)
-        .toSet();
-  }
-
-  List<Producto> get _filtrados {
+  Widget _catalogo(BuildContext context, _MenuData data) {
     final term = _search.trim().toLowerCase();
-    return widget.productos
+    final filtrados = data.productos
         .where(
           (producto) =>
               term.isEmpty || producto.nombre.toLowerCase().contains(term),
         )
         .toList();
+    if (filtrados.isEmpty) {
+      return const EmptyState(
+        icon: Icons.search_off,
+        title: 'Sin productos',
+        message: 'No hay productos activos que coincidan con la búsqueda.',
+      );
+    }
+
+    final directos =
+        filtrados
+            .where(
+              (producto) =>
+                  producto.categoriaSiempreDisponible ||
+                  producto.esVentaDirecta,
+            )
+            .toList()
+          ..sort(_compararProductos);
+    final menu = filtrados
+        .where(
+          (producto) =>
+              !producto.categoriaSiempreDisponible && !producto.esVentaDirecta,
+        )
+        .toList();
+
+    final grupos = <String, Map<String, List<Producto>>>{};
+    for (final producto in menu) {
+      final padre = (producto.categoriaParentNombre ?? producto.categoriaNombre)
+          .toUpperCase();
+      final sub = producto.categoriaParentNombre == null
+          ? ''
+          : producto.categoriaNombre.toUpperCase();
+      grupos
+          .putIfAbsent(padre, () => {})
+          .putIfAbsent(sub, () => [])
+          .add(producto);
+    }
+    final padres = grupos.keys.toList()..sort();
+
+    final children = <Widget>[];
+    for (final padre in padres) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            padre,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      );
+      final subcategorias = grupos[padre]!.keys.toList()..sort();
+      for (final sub in subcategorias) {
+        if (sub.isNotEmpty && sub != padre) {
+          children.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 6),
+              child: Text(
+                sub,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          );
+        }
+        final productos = grupos[padre]![sub]!..sort(_compararProductos);
+        children.add(_gridProductos(context, data, productos));
+        children.add(const SizedBox(height: 16));
+      }
+    }
+
+    if (directos.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            'SIEMPRE DISPONIBLES',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: Theme.of(context).colorScheme.tertiary,
+            ),
+          ),
+        ),
+      );
+      children.add(_gridProductos(context, data, directos, directo: true));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final filtrados = _filtrados;
-    final grupos = <String, List<Producto>>{};
-    for (final producto in filtrados) {
-      grupos.putIfAbsent(producto.categoriaNombre, () => []).add(producto);
-    }
-    final scheme = Theme.of(context).colorScheme;
-    return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-      title: Text('Menú de ${widget.tipo.toLowerCase()}'),
-      content: DialogSurface(
-        maxWidth: 560,
-        maxHeightFactor: 0.85,
-        child: Column(
-          children: [
-            TextField(
-              decoration: appInput(
-                label: 'Buscar producto',
-                icon: Icons.search,
+  int _compararProductos(Producto a, Producto b) =>
+      a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+
+  Widget _gridProductos(
+    BuildContext context,
+    _MenuData data,
+    List<Producto> productos, {
+    bool directo = false,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 900
+            ? 3
+            : constraints.maxWidth >= 560
+            ? 2
+            : 1;
+        final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: productos
+              .map(
+                (producto) => SizedBox(
+                  width: width,
+                  child: _tarjeta(context, data, producto, directo: directo),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+
+  Widget _tarjeta(
+    BuildContext context,
+    _MenuData data,
+    Producto producto, {
+    required bool directo,
+  }) {
+    final item = _itemDe(data.items, producto.id!);
+    final cerrado = data.menu?.cerrado == true;
+    final editable = _esAdmin && !cerrado && !directo;
+    final enMenu = item != null;
+    final agotado = item != null && !item.disponible;
+    final habilitado = directo || (enMenu && !agotado);
+    final mensaje = directo
+        ? 'Siempre disponible'
+        : item == null
+        ? 'No disponible en el menú de hoy · toca para agregar'
+        : agotado
+        ? (item.motivoAgotado ?? 'Agotado')
+        : 'En el menú de hoy · toca para quitar';
+
+    return ProductoCatalogoCard(
+      nombre: producto.nombre,
+      categoria: producto.categoriaEtiqueta,
+      precio: producto.precio,
+      color: producto.categoriaColor,
+      imagen: producto.imagen,
+      esDirecto: producto.esDirecto,
+      stock: producto.stock,
+      habilitado: habilitado,
+      mensaje: mensaje,
+      onTap: editable ? () => _toggleProducto(data, producto) : null,
+      accion: item != null && !directo && _esAdmin && !cerrado
+          ? IconButton(
+              tooltip: item.disponible ? 'Marcar agotado' : 'Marcar disponible',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _toggleDisponible(item, !item.disponible),
+              icon: Icon(
+                item.disponible ? Icons.block : Icons.check_circle_outline,
+                size: 18,
               ),
-              onChanged: (value) => setState(() => _search = value),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                TextButton.icon(
-                  onPressed: filtrados.isEmpty
-                      ? null
-                      : () => setState(
-                          () => _seleccionados.addAll(
-                            filtrados.map((producto) => producto.id!),
-                          ),
-                        ),
-                  icon: const Icon(Icons.done_all, size: 18),
-                  label: const Text('Seleccionar todos'),
-                ),
-                TextButton.icon(
-                  onPressed: _seleccionados.isEmpty
-                      ? null
-                      : () => setState(_seleccionados.clear),
-                  icon: const Icon(Icons.clear_all, size: 18),
-                  label: const Text('Limpiar'),
-                ),
-                if (widget.anteriores.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () => setState(() {
-                      _seleccionados
-                        ..clear()
-                        ..addAll(
-                          widget.anteriores.where(
-                            (id) => widget.productos.any(
-                              (producto) => producto.id == id,
-                            ),
-                          ),
-                        );
-                    }),
-                    icon: const Icon(Icons.history, size: 18),
-                    label: const Text('Copiar día anterior'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Expanded(
-              child: filtrados.isEmpty
-                  ? const EmptyState(
-                      icon: Icons.search_off,
-                      title: 'Sin resultados',
-                      message: 'No hay productos activos que coincidan.',
-                    )
-                  : ListView(
-                      children: [
-                        for (final grupo in grupos.entries) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
-                            child: Text(
-                              grupo.key,
-                              style: Theme.of(context).textTheme.titleSmall
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: scheme.primary,
-                                  ),
-                            ),
-                          ),
-                          for (final producto in grupo.value)
-                            CheckboxListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              value: _seleccionados.contains(producto.id),
-                              onChanged: (value) {
-                                setState(() {
-                                  if (value == true) {
-                                    _seleccionados.add(producto.id!);
-                                  } else {
-                                    _seleccionados.remove(producto.id);
-                                  }
-                                });
-                              },
-                              title: Text(producto.nombre),
-                              subtitle: Text(
-                                '${formatMoney(producto.precio)} · '
-                                '${producto.esVentaDirecta ? 'Venta directa' : 'Con receta'}',
-                              ),
-                            ),
-                        ],
-                      ],
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancelar'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, _seleccionados.toList()),
-          child: Text('Guardar (${_seleccionados.length})'),
-        ),
-      ],
+            )
+          : null,
     );
   }
 }

@@ -99,6 +99,22 @@ class AuthRepository {
     return _fromRow(row, permisos);
   }
 
+  /// Busca un administrador activo cuya contraseña coincida. Se usa para
+  /// "Ver como administrador" desde cualquier otro usuario.
+  Future<Usuario?> loginAdminPorPassword(String password) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query('usuarios', where: 'activo = 1', orderBy: 'id');
+    final hash = hashPassword(password);
+    for (final row in rows) {
+      final esAdmin = row['rol'] == 'ADMIN' || row['perfil'] == Perfil.admin;
+      if (!esAdmin) continue;
+      if (row['password_hash'] != hash) continue;
+      final permisos = await getPermisos(row['id']! as int);
+      return _fromRow(row, permisos);
+    }
+    return null;
+  }
+
   Future<Usuario?> restaurarSesion() async {
     final db = await AppDatabase.instance.database;
     final sesiones = await db.query('sesion_actual', limit: 1);
@@ -158,9 +174,9 @@ class AuthRepository {
     final byUser = <int, Set<String>>{};
     for (final row in permissionRows) {
       final userId = row['usuario_id']! as int;
-      byUser.putIfAbsent(userId, () => <String>{}).add(
-        row['permiso']! as String,
-      );
+      byUser
+          .putIfAbsent(userId, () => <String>{})
+          .add(row['permiso']! as String);
     }
     return rows
         .map((row) => _fromRow(row, byUser[row['id']] ?? <String>{}))
@@ -239,10 +255,7 @@ class AuthRepository {
     final db = await AppDatabase.instance.database;
     await db.update(
       'usuarios',
-      {
-        'password_hash': hashPassword(password),
-        'debe_cambiar_password': 0,
-      },
+      {'password_hash': hashPassword(password), 'debe_cambiar_password': 0},
       where: 'id = ?',
       whereArgs: [usuarioId],
     );
@@ -252,10 +265,9 @@ class AuthRepository {
     id: row['id']! as int,
     nombre: row['nombre']! as String,
     usuario: row['usuario']! as String,
-    perfil:
-        ((row['perfil'] as String?)?.isNotEmpty ?? false)
-            ? row['perfil']! as String
-            : (row['rol'] == 'ADMIN' ? Perfil.admin : Perfil.cajero),
+    perfil: ((row['perfil'] as String?)?.isNotEmpty ?? false)
+        ? row['perfil']! as String
+        : (row['rol'] == 'ADMIN' ? Perfil.admin : Perfil.cajero),
     activo: (row['activo'] as num? ?? 1).toInt() == 1,
     debeCambiarPassword:
         (row['debe_cambiar_password'] as num? ?? 0).toInt() == 1,

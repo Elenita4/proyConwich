@@ -2,13 +2,12 @@ import 'package:sqflite/sqflite.dart';
 
 import '../data/database/app_database.dart';
 import 'date_utils.dart';
-import 'menu_repository.dart';
 
 class Caja {
   const Caja({
     required this.id,
     required this.fecha,
-    required this.turno,
+    required this.numeroTurno,
     required this.estado,
     required this.fondoInicial,
     this.efectivoContado,
@@ -21,7 +20,7 @@ class Caja {
 
   final int id;
   final String fecha;
-  final String turno;
+  final int numeroTurno;
   final String estado;
   final double fondoInicial;
   final double? efectivoContado;
@@ -32,6 +31,7 @@ class Caja {
   final String? usuarioCierre;
 
   bool get abierta => estado == 'ABIERTA';
+  String get turnoLabel => 'Turno $numeroTurno';
 }
 
 class CajaResumen {
@@ -81,29 +81,20 @@ class CashRepository {
 
   Future<Caja> abrirCaja({
     required DateTime fecha,
-    required String turno,
     required double fondoInicial,
     required int usuarioId,
   }) async {
     final abierta = await getCajaAbierta();
     if (abierta != null) {
       throw StateError(
-        'Ya hay una caja abierta (${abierta.turno}). Ciérrala antes de abrir otra.',
+        'Ya hay una caja abierta (${abierta.turnoLabel}). Ciérrala antes de abrir otra.',
       );
     }
     final db = await AppDatabase.instance.database;
-    final existente = await db.query(
-      'cajas',
-      where: 'fecha = ? AND turno = ?',
-      whereArgs: [sqlDate(fecha), turno],
-      limit: 1,
-    );
-    if (existente.isNotEmpty) {
-      throw StateError('Ya existe una caja para ese turno y fecha.');
-    }
+    final numeroTurno = await proximoTurno(fecha);
     final id = await db.insert('cajas', {
       'fecha': sqlDate(fecha),
-      'turno': turno,
+      'numero_turno': numeroTurno,
       'usuario_apertura_id': usuarioId,
       'fecha_apertura': sqlNow(),
       'fondo_inicial': fondoInicial,
@@ -112,12 +103,23 @@ class CashRepository {
     return Caja(
       id: id,
       fecha: sqlDate(fecha),
-      turno: turno,
+      numeroTurno: numeroTurno,
       estado: 'ABIERTA',
       fondoInicial: fondoInicial,
       fechaApertura: sqlNow(),
       usuarioApertura: '',
     );
+  }
+
+  /// Número que tendrá la próxima caja abierta para la fecha indicada.
+  Future<int> proximoTurno(DateTime fecha) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(MAX(numero_turno), 0) + 1 AS siguiente '
+      'FROM cajas WHERE fecha = ?',
+      [sqlDate(fecha)],
+    );
+    return ((rows.first['siguiente'] as num?)?.toInt()) ?? 1;
   }
 
   Future<void> cerrarCaja({
@@ -128,7 +130,6 @@ class CashRepository {
     String? observacion,
   }) async {
     final db = await AppDatabase.instance.database;
-    final caja = await _getCaja(cajaId);
     await db.update(
       'cajas',
       {
@@ -141,10 +142,6 @@ class CashRepository {
       },
       where: 'id = ?',
       whereArgs: [cajaId],
-    );
-    await MenuRepository().cerrarPorTurno(
-      parseSqlDate(caja.fecha),
-      caja.turno,
     );
   }
 
@@ -181,15 +178,13 @@ class CashRepository {
       limit: 1,
     );
     if (rows.isNotEmpty) return rows.first['id']! as int;
-    return db.insert('categorias_gasto', {
-      'nombre': 'Salidas',
-      'activo': 1,
-    });
+    return db.insert('categorias_gasto', {'nombre': 'Salidas', 'activo': 1});
   }
 
   Future<CajaResumen> getResumen(int cajaId) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT
         c.fondo_inicial,
         c.efectivo_contado,
@@ -200,7 +195,9 @@ class CashRepository {
         COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'REGISTRADO'), 0) AS salidas_qr
       FROM cajas c
       WHERE c.id = ?
-    ''', [cajaId]);
+    ''',
+      [cajaId],
+    );
     if (rows.isEmpty) throw StateError('La caja no existe.');
     final row = rows.first;
     double value(String key) => (row[key] as num?)?.toDouble() ?? 0;
@@ -228,37 +225,25 @@ class CashRepository {
 
   Future<List<Caja>> getCajas({int limite = 60}) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT c.*, ua.nombre AS usuario_apertura,
              uc.nombre AS usuario_cierre
       FROM cajas c
       INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
       LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
-      ORDER BY c.fecha DESC, c.fecha_apertura DESC
+      ORDER BY c.fecha DESC, c.numero_turno DESC, c.fecha_apertura DESC
       LIMIT ?
-    ''', [limite]);
+    ''',
+      [limite],
+    );
     return rows.map(_fromRow).toList();
-  }
-
-  Future<Caja> _getCaja(int id) async {
-    final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
-      SELECT c.*, ua.nombre AS usuario_apertura,
-             uc.nombre AS usuario_cierre
-      FROM cajas c
-      INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
-      LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
-      WHERE c.id = ?
-      LIMIT 1
-    ''', [id]);
-    if (rows.isEmpty) throw StateError('La caja no existe.');
-    return _fromRow(rows.first);
   }
 
   Caja _fromRow(Map<String, Object?> row) => Caja(
     id: row['id']! as int,
     fecha: row['fecha']! as String,
-    turno: row['turno']! as String,
+    numeroTurno: (row['numero_turno'] as num).toInt(),
     estado: row['estado']! as String,
     fondoInicial: (row['fondo_inicial'] as num).toDouble(),
     efectivoContado: row['efectivo_contado'] == null

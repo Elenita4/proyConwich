@@ -51,8 +51,7 @@ class MenuItem {
 }
 
 class MenuRepository {
-  static String tipoDesdeTurno(String turno) =>
-      turno == 'MAÑANA' ? 'DESAYUNO' : 'ALMUERZO';
+  static const String tipoMenu = 'ALMUERZO';
 
   Future<MenuDia?> getMenu(DateTime fecha, String tipo) async {
     final db = await AppDatabase.instance.database;
@@ -115,23 +114,20 @@ class MenuRepository {
       orderBy: 'orden',
     );
     for (final item in items) {
-      await db.insert(
-        'menu_dia_items',
-        {
-          'menu_dia_id': nuevo.id,
-          'producto_id': item['producto_id'],
-          'disponible': 1,
-          'orden': item['orden'],
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      await db.insert('menu_dia_items', {
+        'menu_dia_id': nuevo.id,
+        'producto_id': item['producto_id'],
+        'disponible': 1,
+        'orden': item['orden'],
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     return nuevo;
   }
 
   Future<List<MenuItem>> getItems(int menuDiaId) async {
     final db = await AppDatabase.instance.database;
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT mi.*, p.nombre, p.precio, p.tipo AS tipo_producto,
              c.nombre AS categoria_nombre, c.color AS categoria_color
       FROM menu_dia_items mi
@@ -139,7 +135,9 @@ class MenuRepository {
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
       WHERE mi.menu_dia_id = ?
       ORDER BY mi.orden, p.nombre COLLATE NOCASE
-    ''', [menuDiaId]);
+    ''',
+      [menuDiaId],
+    );
     return rows
         .map(
           (row) => MenuItem(
@@ -166,23 +164,16 @@ class MenuRepository {
       [menuDiaId],
     );
     final orden = ((maxRows.first['maximo'] as num?)?.toInt() ?? 0) + 1;
-    await db.insert(
-      'menu_dia_items',
-      {
-        'menu_dia_id': menuDiaId,
-        'producto_id': productoId,
-        'disponible': 1,
-        'orden': orden,
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    await db.insert('menu_dia_items', {
+      'menu_dia_id': menuDiaId,
+      'producto_id': productoId,
+      'disponible': 1,
+      'orden': orden,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   /// Deja el menú exactamente con los productos indicados, en ese orden.
-  Future<void> reemplazarItems(
-    int menuDiaId,
-    List<int> productoIds,
-  ) async {
+  Future<void> reemplazarItems(int menuDiaId, List<int> productoIds) async {
     final db = await AppDatabase.instance.database;
     await db.transaction((txn) async {
       await txn.delete(
@@ -193,16 +184,12 @@ class MenuRepository {
       var orden = 0;
       for (final productoId in productoIds.toSet()) {
         orden++;
-        await txn.insert(
-          'menu_dia_items',
-          {
-            'menu_dia_id': menuDiaId,
-            'producto_id': productoId,
-            'disponible': 1,
-            'orden': orden,
-          },
-          conflictAlgorithm: ConflictAlgorithm.ignore,
-        );
+        await txn.insert('menu_dia_items', {
+          'menu_dia_id': menuDiaId,
+          'producto_id': productoId,
+          'disponible': 1,
+          'orden': orden,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
       }
     });
   }
@@ -274,20 +261,7 @@ class MenuRepository {
     );
   }
 
-  Future<void> cerrarPorTurno(DateTime fecha, String turno) async {
-    final db = await AppDatabase.instance.database;
-    await db.update(
-      'menus_dia',
-      {'estado': 'CERRADO'},
-      where: 'fecha = ? AND tipo = ? AND estado = ?',
-      whereArgs: [sqlDate(fecha), tipoDesdeTurno(turno), 'PUBLICADO'],
-    );
-  }
-
-  Future<List<MenuItem>> getMenuPublicado(
-    DateTime fecha,
-    String tipo,
-  ) async {
+  Future<List<MenuItem>> getMenuPublicado(DateTime fecha, String tipo) async {
     final menu = await getMenu(fecha, tipo);
     if (menu == null || !menu.publicado) return <MenuItem>[];
     return getItems(menu.id);

@@ -28,10 +28,16 @@ class _Destination {
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.usuario, required this.onLogout});
+  const AppShell({
+    super.key,
+    required this.usuario,
+    required this.onLogout,
+    required this.onUsuarioCambiado,
+  });
 
   final Usuario usuario;
   final VoidCallback onLogout;
+  final ValueChanged<Usuario> onUsuarioCambiado;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -40,6 +46,12 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
   int _refreshToken = 0;
+
+  @override
+  void didUpdateWidget(AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.usuario.id != widget.usuario.id) _index = 0;
+  }
 
   void _seleccionar(int index) {
     setState(() {
@@ -59,14 +71,39 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _abrirRespaldo() async {
-    final restaurado = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const BackupPage()),
-    );
+    final restaurado = await Navigator.of(context)
+        .push<bool>(MaterialPageRoute(builder: (_) => const BackupPage()));
     if (restaurado == true && mounted) {
       // La base cambió por completo: se cierra la sesión para que el usuario
       // entre con las credenciales del archivo restaurado.
       widget.onLogout();
     }
+  }
+
+  Future<void> _verComoAdministrador() async {
+    final admin = await showDialog<Usuario>(
+      context: context,
+      builder: (_) => const _AdminPasswordDialog(),
+    );
+    if (admin != null && mounted) {
+      widget.onUsuarioCambiado(admin);
+    }
+  }
+
+  Future<void> _cambiarUsuario() async {
+    final usuario = await showDialog<Usuario>(
+      context: context,
+      builder: (_) => _CambiarUsuarioDialog(actual: widget.usuario),
+    );
+    if (usuario != null && mounted) {
+      widget.onUsuarioCambiado(usuario);
+    }
+  }
+
+  void _irACaja() {
+    final destinations = _destinations();
+    final index = destinations.indexWhere((item) => item.label == 'Caja');
+    if (index >= 0) _seleccionar(index);
   }
 
   List<_Destination> _destinations() {
@@ -89,7 +126,11 @@ class _AppShellState extends State<AppShell> {
           label: 'Ventas',
           icon: Icons.point_of_sale_outlined,
           selectedIcon: Icons.point_of_sale,
-          page: SalesPage(usuario: usuario, refreshToken: token),
+          page: SalesPage(
+            usuario: usuario,
+            refreshToken: token,
+            onAbrirCaja: usuario.puede(Permiso.caja) ? _irACaja : null,
+          ),
         ),
       );
     }
@@ -177,6 +218,8 @@ class _AppShellState extends State<AppShell> {
           onSelected: (value) {
             if (value == 'password') _cambiarPassword();
             if (value == 'backup') _abrirRespaldo();
+            if (value == 'ver_admin') _verComoAdministrador();
+            if (value == 'cambiar_usuario') _cambiarUsuario();
             if (value == 'logout') widget.onLogout();
           },
           itemBuilder: (context) => [
@@ -184,12 +227,53 @@ class _AppShellState extends State<AppShell> {
               value: 'password',
               child: Text('Cambiar mi contraseña'),
             ),
+            if (!widget.usuario.esAdmin)
+              const PopupMenuItem(
+                value: 'ver_admin',
+                child: Row(
+                  children: [
+                    Icon(Icons.admin_panel_settings_outlined),
+                    SizedBox(width: 10),
+                    Text('Ver como administrador'),
+                  ],
+                ),
+              ),
+            if (widget.usuario.esAdmin)
+              const PopupMenuItem(
+                value: 'cambiar_usuario',
+                child: Row(
+                  children: [
+                    Icon(Icons.switch_account_outlined),
+                    SizedBox(width: 10),
+                    Text('Cambiar de usuario'),
+                  ],
+                ),
+              ),
             if (widget.usuario.esAdmin)
               const PopupMenuItem(
                 value: 'backup',
                 child: Text('Respaldo y restauración'),
               ),
-            const PopupMenuItem(value: 'logout', child: Text('Cerrar sesión')),
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              value: 'logout',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.logout,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Cerrar sesión',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -251,17 +335,15 @@ class _AppShellState extends State<AppShell> {
                 ],
                 Text(
                   'Sazón',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(context).textTheme.titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 if (wide) ...[
                   const SizedBox(width: 10),
                   Text(
                     '· ${current.label}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
                 ],
               ],
@@ -297,6 +379,41 @@ class _AppShellState extends State<AppShell> {
                               Navigator.pop(context);
                             },
                           ),
+                        const Divider(),
+                        if (!widget.usuario.esAdmin)
+                          ListTile(
+                            leading: const Icon(
+                              Icons.admin_panel_settings_outlined,
+                            ),
+                            title: const Text('Ver como administrador'),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _verComoAdministrador();
+                            },
+                          ),
+                        if (widget.usuario.esAdmin)
+                          ListTile(
+                            leading: const Icon(Icons.switch_account_outlined),
+                            title: const Text('Cambiar de usuario'),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _cambiarUsuario();
+                            },
+                          ),
+                        ListTile(
+                          leading: Icon(Icons.logout, color: scheme.error),
+                          title: Text(
+                            'Cerrar sesión',
+                            style: TextStyle(
+                              color: scheme.error,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          onTap: () {
+                            Navigator.pop(context);
+                            widget.onLogout();
+                          },
+                        ),
                       ],
                     ),
                   ),
@@ -308,8 +425,7 @@ class _AppShellState extends State<AppShell> {
                       extended: extended,
                       minExtendedWidth: 210,
                       selectedIndex: index,
-                      onDestinationSelected: (value) =>
-                          _seleccionar(value),
+                      onDestinationSelected: (value) => _seleccionar(value),
                       leading: Padding(
                         padding: const EdgeInsets.fromLTRB(8, 12, 8, 20),
                         child: Column(
@@ -354,6 +470,184 @@ class _AppShellState extends State<AppShell> {
               : body,
         );
       },
+    );
+  }
+}
+
+class _AdminPasswordDialog extends StatefulWidget {
+  const _AdminPasswordDialog();
+
+  @override
+  State<_AdminPasswordDialog> createState() => _AdminPasswordDialogState();
+}
+
+class _AdminPasswordDialogState extends State<_AdminPasswordDialog> {
+  final _repository = AuthRepository();
+  final _password = TextEditingController();
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ingresar() async {
+    if (_password.text.isEmpty) {
+      setState(() => _error = 'Ingresa la contraseña de un administrador.');
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final admin = await _repository.loginAdminPorPassword(_password.text);
+      if (!mounted) return;
+      if (admin == null) {
+        setState(() {
+          _error = 'Contraseña incorrecta o el usuario no es administrador.';
+          _loading = false;
+        });
+        return;
+      }
+      Navigator.pop(context, admin);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'No se pudo validar: $error';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: const Text('Ver como administrador'),
+      content: DialogSurface(
+        maxWidth: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Ingresa la contraseña de cualquier administrador activo.',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _password,
+              autofocus: true,
+              obscureText: true,
+              onSubmitted: (_) => _ingresar(),
+              decoration: appInput(
+                label: 'Contraseña de administrador',
+                icon: Icons.lock_outline,
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _loading ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _loading ? null : _ingresar,
+          child: Text(_loading ? 'Validando…' : 'Entrar como admin'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CambiarUsuarioDialog extends StatefulWidget {
+  const _CambiarUsuarioDialog({required this.actual});
+
+  final Usuario actual;
+
+  @override
+  State<_CambiarUsuarioDialog> createState() => _CambiarUsuarioDialogState();
+}
+
+class _CambiarUsuarioDialogState extends State<_CambiarUsuarioDialog> {
+  final _repository = AuthRepository();
+  late Future<List<Usuario>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _repository.getUsuarios();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: const Text('Cambiar de usuario'),
+      content: DialogSurface(
+        maxWidth: 420,
+        maxHeightFactor: 0.7,
+        child: FutureBuilder<List<Usuario>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const LoadingView();
+            }
+            if (snapshot.hasError) {
+              return ErrorView(message: '${snapshot.error}');
+            }
+            final usuarios = (snapshot.data ?? [])
+                .where(
+                  (usuario) => usuario.activo && usuario.id != widget.actual.id,
+                )
+                .toList();
+            if (usuarios.isEmpty) {
+              return const EmptyState(
+                icon: Icons.people_outline,
+                title: 'No hay otros usuarios activos',
+                message: 'Crea usuarios en la sección Usuarios.',
+              );
+            }
+            return ListView.separated(
+              itemCount: usuarios.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final usuario = usuarios[index];
+                return ListTile(
+                  leading: CircleAvatar(child: Text(usuario.inicial)),
+                  title: Text(usuario.nombre),
+                  subtitle: Text(
+                    '@${usuario.usuario} · ${usuario.nombrePerfil}',
+                  ),
+                  trailing: usuario.esAdmin
+                      ? const Icon(Icons.admin_panel_settings_outlined)
+                      : null,
+                  onTap: () => Navigator.pop(context, usuario),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+      ],
     );
   }
 }

@@ -75,11 +75,10 @@ class _DashboardPageState extends State<DashboardPage> {
     final caja = await _cashRepository.getCajaAbierta();
     final abiertos = await _salesRepository.getPedidosAbiertos();
     final alertas = await _reportRepository.getAlertasStock();
-    final tipo = caja == null
-        ? (now.hour < 12 ? 'DESAYUNO' : 'ALMUERZO')
-        : MenuRepository.tipoDesdeTurno(caja.turno);
-    final menu = await _menuRepository.getMenu(today, tipo);
-    final items = menu == null ? 0 : (await _menuRepository.getItems(menu.id)).length;
+    final menu = await _menuRepository.getMenu(today, MenuRepository.tipoMenu);
+    final items = menu == null
+        ? 0
+        : (await _menuRepository.getItems(menu.id)).length;
     return _DashboardData(
       resumen: resumen,
       caja: caja,
@@ -213,7 +212,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: data.caja == null ? 'Cerrada' : 'Abierta',
                 caption: data.caja == null
                     ? 'Abre una caja para vender'
-                    : 'Turno ${data.caja!.turno}',
+                    : data.caja!.turnoLabel,
                 icon: Icons.account_balance_wallet_outlined,
                 color: data.caja == null ? scheme.error : scheme.primary,
               ),
@@ -276,9 +275,8 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(width: 8),
               Text(
                 'Caja',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               Chip(
@@ -297,7 +295,7 @@ class _DashboardPageState extends State<DashboardPage> {
               style: TextStyle(color: scheme.onSurfaceVariant),
             )
           else ...[
-            LabelValue(label: 'Turno', value: caja.turno),
+            LabelValue(label: 'Turno', value: caja.turnoLabel),
             LabelValue(
               label: 'Fondo inicial',
               value: formatMoney(caja.fondoInicial),
@@ -325,9 +323,8 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(width: 8),
               Text(
                 'Menú de hoy',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -349,10 +346,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Widget _alertasCard(
-    BuildContext context,
-    List<InventarioReporte> alertas,
-  ) {
+  Widget _alertasCard(BuildContext context, List<InventarioReporte> alertas) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
       child: Column(
@@ -370,9 +364,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   'Alertas de stock',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
               Text(
@@ -391,26 +384,28 @@ class _DashboardPageState extends State<DashboardPage> {
               style: TextStyle(color: scheme.onSurfaceVariant),
             )
           else
-            ...alertas.take(6).map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: scheme.error,
+            ...alertas
+                .take(6)
+                .map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: scheme.error,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(item.nombre)),
+                        Text(
+                          '${formatQty(item.stock)} / ${formatQty(item.stockMinimo)}',
+                          style: TextStyle(color: scheme.error),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item.nombre)),
-                    Text(
-                      '${formatQty(item.stock)} / ${formatQty(item.stockMinimo)}',
-                      style: TextStyle(color: scheme.error),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
         ],
       ),
     );
@@ -424,9 +419,8 @@ class _DashboardPageState extends State<DashboardPage> {
         children: [
           Text(
             'Resumen financiero de hoy',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 12),
           LayoutBuilder(

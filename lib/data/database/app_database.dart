@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 7;
+  static const int schemaVersion = 9;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -57,15 +57,11 @@ class AppDatabase {
     required String appVersion,
   }) async {
     final db = await database;
-    await db.update(
-      'app_meta',
-      {
-        'ultimo_respaldo_en': sqlNow(),
-        'ultimo_respaldo_app': appVersion,
-        'ultimo_respaldo_motivo': motivo,
-      },
-      where: 'id = 1',
-    );
+    await db.update('app_meta', {
+      'ultimo_respaldo_en': sqlNow(),
+      'ultimo_respaldo_app': appVersion,
+      'ultimo_respaldo_motivo': motivo,
+    }, where: 'id = 1');
   }
 
   Future<Database> _openDatabase() async {
@@ -74,7 +70,11 @@ class AppDatabase {
     return openDatabase(
       path,
       version: schemaVersion,
-      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+      // Las claves foráneas se activan al terminar la apertura. Durante las
+      // migraciones se mantienen desactivadas para poder reconstruir tablas
+      // referenciadas (por ejemplo, cajas al cambiar los turnos).
+      onConfigure: (db) => db.execute('PRAGMA foreign_keys = OFF'),
+      onOpen: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: (db, version) async {
         await _createSchema(db, version);
         await _afterOpen(db);
@@ -82,6 +82,9 @@ class AppDatabase {
       onUpgrade: (db, oldVersion, newVersion) async {
         await _createSchema(db, newVersion);
         await _migrarUnidades(db);
+        await _migrarCategorias(db);
+        await _migrarCategoriasMayusculas(db);
+        await _migrarCajasTurnos(db);
         await _migrarPerfiles(db);
         await _migrarModosInsumo(db);
         await _migrarPrimerAcceso(db);
@@ -100,29 +103,44 @@ class AppDatabase {
   }
 
   /// Categorías base para que el menú y los productos nuevos tengan una
-  /// opción por defecto coherente.
+  /// opción por defecto coherente. Almuerzo es la categoría principal y
+  /// Plato suelto / Completo son sus subcategorías.
   Future<void> _seedCategorias(Database db) async {
-    const categorias = [
-      {
-        'nombre': 'Desayuno',
-        'color': 0xFFEA580C,
-        'siempre_disponible': 0,
-        'orden': 1,
-        'activo': 1,
-      },
-      {
-        'nombre': 'Almuerzo',
-        'color': 0xFF0F766E,
-        'siempre_disponible': 0,
-        'orden': 2,
-        'activo': 1,
-      },
+    await db.insert('categorias_producto', {
+      'nombre': 'ALMUERZO',
+      'color': 0xFF0F766E,
+      'siempre_disponible': 0,
+      'orden': 1,
+      'activo': 1,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    final padres = await db.query(
+      'categorias_producto',
+      columns: ['id'],
+      where: 'nombre = ? COLLATE NOCASE',
+      whereArgs: ['ALMUERZO'],
+      limit: 1,
+    );
+    if (padres.isEmpty) return;
+    final padreId = padres.first['id']! as int;
+
+    const hijas = [
+      {'nombre': 'PLATO SUELTO', 'color': 0xFF2563EB, 'orden': 2},
+      {'nombre': 'COMPLETO', 'color': 0xFFEA580C, 'orden': 3},
     ];
-    for (final categoria in categorias) {
-      await db.insert(
+    for (final hija in hijas) {
+      await db.insert('categorias_producto', {
+        'nombre': hija['nombre'],
+        'color': hija['color'],
+        'parent_id': padreId,
+        'siempre_disponible': 0,
+        'orden': hija['orden'],
+        'activo': 1,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await db.update(
         'categorias_producto',
-        categoria,
-        conflictAlgorithm: ConflictAlgorithm.ignore,
+        {'parent_id': padreId, 'activo': 1},
+        where: 'nombre = ? COLLATE NOCASE',
+        whereArgs: [hija['nombre']],
       );
     }
   }
@@ -188,9 +206,11 @@ class AppDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
         color INTEGER NOT NULL DEFAULT 4280391418,
+        parent_id INTEGER,
         siempre_disponible INTEGER NOT NULL DEFAULT 0,
         orden INTEGER NOT NULL DEFAULT 0,
-        activo INTEGER NOT NULL DEFAULT 1
+        activo INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (parent_id) REFERENCES categorias_producto(id)
       )
     ''');
 
@@ -257,7 +277,7 @@ class AppDatabase {
       CREATE TABLE IF NOT EXISTS menus_dia (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
-        tipo TEXT NOT NULL CHECK (tipo IN ('DESAYUNO','ALMUERZO')),
+        tipo TEXT NOT NULL CHECK (tipo IN ('ALMUERZO')),
         estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','PUBLICADO','CERRADO')),
         usuario_id INTEGER NOT NULL,
         observacion TEXT,
@@ -286,7 +306,7 @@ class AppDatabase {
       CREATE TABLE IF NOT EXISTS cajas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
-        turno TEXT NOT NULL CHECK (turno IN ('MAÑANA','TARDE')),
+        numero_turno INTEGER NOT NULL,
         usuario_apertura_id INTEGER NOT NULL,
         usuario_cierre_id INTEGER,
         fecha_apertura TEXT NOT NULL,
@@ -296,7 +316,7 @@ class AppDatabase {
         qr_verificado REAL,
         estado TEXT NOT NULL DEFAULT 'ABIERTA' CHECK (estado IN ('ABIERTA','CERRADA')),
         observacion TEXT,
-        UNIQUE (fecha, turno),
+        UNIQUE (fecha, numero_turno),
         FOREIGN KEY (usuario_apertura_id) REFERENCES usuarios(id),
         FOREIGN KEY (usuario_cierre_id) REFERENCES usuarios(id)
       )
@@ -513,8 +533,12 @@ class AppDatabase {
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_consumos_fecha ON consumos_insumo(fecha)',
     );
-    batch.execute('CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha)');
-    batch.execute('CREATE INDEX IF NOT EXISTS idx_sueldos_fecha ON sueldos(fecha)');
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sueldos_fecha ON sueldos(fecha)',
+    );
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_ajustes_insumo ON ajustes_stock(insumo_id)',
     );
@@ -579,6 +603,208 @@ class AppDatabase {
     ''');
 
     await batch.commit(noResult: true);
+  }
+
+  /// Agrega la jerarquía de categorías y elimina Desayuno. Los productos de
+  /// Desayuno sin historial se borran; los que ya tienen ventas o recetas se
+  /// mueven a Almuerzo y quedan inactivos para no romper las claves foráneas.
+  Future<void> _migrarCategorias(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'categorias_producto', 'parent_id')) {
+        await db.execute(
+          'ALTER TABLE categorias_producto ADD COLUMN parent_id INTEGER',
+        );
+      }
+
+      final desayunos = await db.query(
+        'categorias_producto',
+        columns: ['id'],
+        where: 'nombre = ? COLLATE NOCASE',
+        whereArgs: ['Desayuno'],
+        limit: 1,
+      );
+      if (desayunos.isEmpty) return;
+      final desayunoId = desayunos.first['id']! as int;
+
+      var almuerzos = await db.query(
+        'categorias_producto',
+        columns: ['id'],
+        where: 'nombre = ? COLLATE NOCASE',
+        whereArgs: ['Almuerzo'],
+        limit: 1,
+      );
+      final int almuerzoId;
+      if (almuerzos.isEmpty) {
+        almuerzoId = await db.insert('categorias_producto', {
+          'nombre': 'Almuerzo',
+          'color': 0xFF0F766E,
+          'siempre_disponible': 0,
+          'orden': 1,
+          'activo': 1,
+        });
+      } else {
+        almuerzoId = almuerzos.first['id']! as int;
+      }
+
+      final productos = await db.query(
+        'productos',
+        where: 'categoria_id = ?',
+        whereArgs: [desayunoId],
+      );
+      for (final producto in productos) {
+        final productoId = producto['id']! as int;
+        if (await _productoTieneHistorial(db, productoId)) {
+          await db.update(
+            'productos',
+            {'categoria_id': almuerzoId, 'activo': 0},
+            where: 'id = ?',
+            whereArgs: [productoId],
+          );
+        } else {
+          await db.delete(
+            'receta_insumos',
+            where: 'producto_id = ?',
+            whereArgs: [productoId],
+          );
+          await db.delete(
+            'menu_dia_items',
+            where: 'producto_id = ?',
+            whereArgs: [productoId],
+          );
+          await db.delete(
+            'ajustes_stock',
+            where: 'producto_id = ?',
+            whereArgs: [productoId],
+          );
+          await db.delete(
+            'productos',
+            where: 'id = ?',
+            whereArgs: [productoId],
+          );
+        }
+      }
+
+      final restantes =
+          Sqflite.firstIntValue(
+            await db.rawQuery(
+              'SELECT COUNT(*) FROM productos WHERE categoria_id = ?',
+              [desayunoId],
+            ),
+          ) ??
+          0;
+      if (restantes == 0) {
+        await db.delete(
+          'categorias_producto',
+          where: 'id = ?',
+          whereArgs: [desayunoId],
+        );
+      } else {
+        await db.update(
+          'categorias_producto',
+          {'activo': 0},
+          where: 'id = ?',
+          whereArgs: [desayunoId],
+        );
+      }
+    } catch (error) {
+      debugPrint('No se pudieron migrar las categorías: $error');
+    }
+  }
+
+  /// Convierte todas las categorías existentes a mayúsculas. Se hace desde
+  /// Dart para respetar acentos y evitar los límites de UPPER() de SQLite.
+  Future<void> _migrarCategoriasMayusculas(Database db) async {
+    try {
+      final rows = await db.query('categorias_producto');
+      for (final row in rows) {
+        final id = row['id']! as int;
+        final actual = (row['nombre'] as String?) ?? '';
+        final nuevo = actual.trim().toUpperCase();
+        if (nuevo == actual) continue;
+        try {
+          await db.update(
+            'categorias_producto',
+            {'nombre': nuevo},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        } catch (error) {
+          debugPrint('No se pudo poner en mayúsculas la categoría $id: $error');
+        }
+      }
+    } catch (error) {
+      debugPrint(
+        'No se pudieron convertir las categorías a mayúsculas: $error',
+      );
+    }
+  }
+
+  Future<bool> _productoTieneHistorial(Database db, int productoId) async {
+    for (final tabla in const [
+      'detalle_pedido',
+      'detalle_compra',
+      'receta_insumos',
+      'menu_dia_items',
+      'ajustes_stock',
+      'insumos',
+    ]) {
+      final count =
+          Sqflite.firstIntValue(
+            await db.rawQuery(
+              'SELECT COUNT(*) FROM $tabla WHERE producto_id = ?',
+              [productoId],
+            ),
+          ) ??
+          0;
+      if (count > 0) return true;
+    }
+    return false;
+  }
+
+  /// Cambia los turnos MAÑANA/TARDE por un número consecutivo por día.
+  /// La tabla se reconstruye porque SQLite no permite quitar el CHECK ni el
+  /// UNIQUE de una tabla existente.
+  Future<void> _migrarCajasTurnos(Database db) async {
+    try {
+      if (await _tieneColumna(db, 'cajas', 'numero_turno')) return;
+      await db.execute('''
+        CREATE TABLE cajas_nueva (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          fecha TEXT NOT NULL,
+          numero_turno INTEGER NOT NULL,
+          usuario_apertura_id INTEGER NOT NULL,
+          usuario_cierre_id INTEGER,
+          fecha_apertura TEXT NOT NULL,
+          fecha_cierre TEXT,
+          fondo_inicial REAL NOT NULL DEFAULT 0,
+          efectivo_contado REAL,
+          qr_verificado REAL,
+          estado TEXT NOT NULL DEFAULT 'ABIERTA' CHECK (estado IN ('ABIERTA','CERRADA')),
+          observacion TEXT,
+          UNIQUE (fecha, numero_turno),
+          FOREIGN KEY (usuario_apertura_id) REFERENCES usuarios(id),
+          FOREIGN KEY (usuario_cierre_id) REFERENCES usuarios(id)
+        )
+      ''');
+      await db.execute('''
+        INSERT INTO cajas_nueva (
+          id, fecha, numero_turno, usuario_apertura_id, usuario_cierre_id,
+          fecha_apertura, fecha_cierre, fondo_inicial, efectivo_contado,
+          qr_verificado, estado, observacion
+        )
+        SELECT
+          id, fecha,
+          CASE turno WHEN 'MAÑANA' THEN 1 WHEN 'TARDE' THEN 2 ELSE 1 END,
+          usuario_apertura_id, usuario_cierre_id, fecha_apertura,
+          fecha_cierre, fondo_inicial, efectivo_contado, qr_verificado,
+          estado, observacion
+        FROM cajas
+      ''');
+      await db.execute('DROP TABLE cajas');
+      await db.execute('ALTER TABLE cajas_nueva RENAME TO cajas');
+    } catch (error) {
+      debugPrint('No se pudieron migrar los turnos de caja: $error');
+    }
   }
 
   /// Todos los insumos pasan a controlarse por cantidad.
@@ -669,10 +895,7 @@ class AppDatabase {
         await db.execute('ALTER TABLE insumos ADD COLUMN producto_id INTEGER');
       }
 
-      final directos = await db.query(
-        'productos',
-        where: "tipo = 'DIRECTO'",
-      );
+      final directos = await db.query('productos', where: "tipo = 'DIRECTO'");
       if (directos.isEmpty) return;
 
       final admin = await db.rawQuery(
@@ -807,11 +1030,7 @@ class AppDatabase {
     }
   }
 
-  Future<bool> _tieneColumna(
-    Database db,
-    String tabla,
-    String columna,
-  ) async {
+  Future<bool> _tieneColumna(Database db, String tabla, String columna) async {
     final columnas = await db.rawQuery('PRAGMA table_info($tabla)');
     return columnas.any((c) => c['name'] == columna);
   }
@@ -820,7 +1039,9 @@ class AppDatabase {
   /// instalación. Ese identificador viaja dentro de cada respaldo.
   Future<void> _seedAppMeta(Database db) async {
     final count =
-        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM app_meta')) ??
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM app_meta'),
+        ) ??
         0;
     if (count > 0) return;
     await db.insert('app_meta', {
@@ -913,12 +1134,42 @@ class AppDatabase {
 
   Future<void> _seedUnits(Database db) async {
     const units = [
-      {'nombre': 'Unidad', 'abreviatura': 'und', 'familia': 'UNIDAD', 'factor_base': 1.0},
-      {'nombre': 'Porción', 'abreviatura': 'porc', 'familia': 'PORCION', 'factor_base': 1.0},
-      {'nombre': 'Kilogramo', 'abreviatura': 'kg', 'familia': 'MASA', 'factor_base': 1000.0},
-      {'nombre': 'Gramo', 'abreviatura': 'g', 'familia': 'MASA', 'factor_base': 1.0},
-      {'nombre': 'Litro', 'abreviatura': 'L', 'familia': 'VOLUMEN', 'factor_base': 1000.0},
-      {'nombre': 'Mililitro', 'abreviatura': 'ml', 'familia': 'VOLUMEN', 'factor_base': 1.0},
+      {
+        'nombre': 'Unidad',
+        'abreviatura': 'und',
+        'familia': 'UNIDAD',
+        'factor_base': 1.0,
+      },
+      {
+        'nombre': 'Porción',
+        'abreviatura': 'porc',
+        'familia': 'PORCION',
+        'factor_base': 1.0,
+      },
+      {
+        'nombre': 'Kilogramo',
+        'abreviatura': 'kg',
+        'familia': 'MASA',
+        'factor_base': 1000.0,
+      },
+      {
+        'nombre': 'Gramo',
+        'abreviatura': 'g',
+        'familia': 'MASA',
+        'factor_base': 1.0,
+      },
+      {
+        'nombre': 'Litro',
+        'abreviatura': 'L',
+        'familia': 'VOLUMEN',
+        'factor_base': 1000.0,
+      },
+      {
+        'nombre': 'Mililitro',
+        'abreviatura': 'ml',
+        'familia': 'VOLUMEN',
+        'factor_base': 1.0,
+      },
     ];
     for (final unit in units) {
       await db.insert(

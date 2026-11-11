@@ -18,7 +18,8 @@ const _paletaCategorias = <int>[
   0xFF475569,
 ];
 
-class _InsumosData {  const _InsumosData({
+class _InsumosData {
+  const _InsumosData({
     required this.insumos,
     required this.unidades,
     required this.categorias,
@@ -154,8 +155,7 @@ class _InventoryPageState extends State<InventoryPage> {
             children: [
               PageHeader(
                 title: 'Insumos',
-                subtitle:
-                    'Materias primas y su stock. Al vender un plato se descuentan según su receta.',
+                subtitle: 'Materias primas y su stock. Al vender un plato se descuentan según su receta.',
                 actions: [
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
@@ -168,9 +168,8 @@ class _InventoryPageState extends State<InventoryPage> {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: AppCard(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.errorContainer.withValues(alpha: 0.35),
+                    color: Theme.of(context).colorScheme.errorContainer
+                        .withValues(alpha: 0.35),
                     child: Row(
                       children: [
                         Icon(
@@ -300,9 +299,8 @@ class _InsumoRow extends StatelessWidget {
           children: [
             Text(
               insumo.nombre,
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (insumo.ventaDirecta)
               Chip(
@@ -317,9 +315,8 @@ class _InsumoRow extends StatelessWidget {
         Text(
           '${insumo.unidadAbreviatura} · costo ${formatMoney(insumo.costoPromedio)}'
           '${insumo.ventaDirecta ? ' · se vende a ${formatMoney(insumo.precioVenta)}' : ''}',
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
       ],
     );
@@ -335,9 +332,8 @@ class _InsumoRow extends StatelessWidget {
         ),
         Text(
           'Mínimo: ${formatQty(insumo.stockMinimo)}',
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
       ],
     );
@@ -473,7 +469,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     _precioVenta = TextEditingController(
       text: insumo == null ? '' : insumo.precioVenta.toStringAsFixed(2),
     );
-    _unidadId = insumo?.unidadId ??
+    _unidadId =
+        insumo?.unidadId ??
         (widget.unidades.isEmpty ? null : widget.unidades.first.id);
     if (!widget.unidades.any((unidad) => unidad.id == _unidadId)) {
       _unidadId = widget.unidades.isEmpty ? null : widget.unidades.first.id;
@@ -481,7 +478,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     _categoriaVentaId = insumo?.categoriaVentaDirectaId;
     if (_categoriaVentaId == null) {
       for (final categoria in _categorias) {
-        if (categoria.nombre == 'Venta directa') {
+        if (categoria.nombre.toLowerCase() == 'venta directa') {
           _categoriaVentaId = categoria.id;
           break;
         }
@@ -530,7 +527,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
       await widget.repository.saveCategoria(
         CategoriaProducto(
           nombre: nombre.trim(),
-          color: _paletaCategorias[_categorias.length % _paletaCategorias.length],
+          color:
+              _paletaCategorias[_categorias.length % _paletaCategorias.length],
           siempreDisponible: false,
           orden: _categorias.length,
           activo: true,
@@ -562,9 +560,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
       children: [
         Text(
           'Foto para la venta directa',
-          style: Theme.of(
-            context,
-          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         Container(
@@ -587,9 +584,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                     const SizedBox(height: 6),
                     Text(
                       'Sin imagen',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 )
@@ -643,9 +639,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
       _error = null;
     });
     try {
-      final unidad = widget.unidades.firstWhere(
-        (item) => item.id == _unidadId,
-      );
+      final unidad = widget.unidades.firstWhere((item) => item.id == _unidadId);
       final id = await widget.repository.saveInsumo(
         Insumo(
           id: widget.insumo?.id,
@@ -691,8 +685,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
         : widget.unidades.firstWhere((u) => u.id == _unidadId);
     final categoriasActivas = _categorias
         .where(
-          (categoria) =>
-              categoria.activo || categoria.id == _categoriaVentaId,
+          (categoria) => categoria.activo || categoria.id == _categoriaVentaId,
         )
         .toList();
     return AlertDialog(
@@ -710,8 +703,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                 TextFormField(
                   controller: _nombre,
                   decoration: appInput(label: 'Nombre del insumo'),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
+                  validator: (value) => (value == null || value.trim().isEmpty)
                       ? 'Ingresa un nombre'
                       : null,
                 ),
@@ -739,9 +731,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                 Text(
                   'Registra el stock en la unidad elegida. Ej.: 30 botellas de '
                   '1 L se cargan como 30 L; en la receta puedes usar 250 ml.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 12),
                 Builder(
@@ -774,11 +765,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                     );
                     if (angosto) {
                       return Column(
-                        children: [
-                          actual,
-                          const SizedBox(height: 12),
-                          minimo,
-                        ],
+                        children: [actual, const SizedBox(height: 12), minimo],
                       );
                     }
                     return Row(
@@ -863,9 +850,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                         child: DropdownButtonFormField<int?>(
                           initialValue: _categoriaVentaId,
                           isExpanded: true,
-                          decoration: appInput(
-                            label: 'Categoría en Productos',
-                          ),
+                          decoration: appInput(label: 'Categoría en Productos'),
                           items: [
                             const DropdownMenuItem<int?>(
                               value: null,
@@ -900,9 +885,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                     'Se venderá siempre, sin depender del menú del día. '
                     'La receta descuenta 1 ${unidad?.abreviatura ?? 'unidad'} '
                     'del insumo por cada venta.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
                 ],
                 const SizedBox(height: 4),
@@ -913,10 +897,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                   onChanged: (value) => setState(() => _activo = value),
                 ),
                 if (_error != null)
-                  Text(
-                    _error!,
-                    style: TextStyle(color: scheme.error),
-                  ),
+                  Text(_error!, style: TextStyle(color: scheme.error)),
               ],
             ),
           ),
@@ -969,8 +950,7 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
               label: 'Nombre',
               hint: 'Ej. Bebidas, Postres, Snacks',
             ),
-            validator: (value) =>
-                (value == null || value.trim().isEmpty)
+            validator: (value) => (value == null || value.trim().isEmpty)
                 ? 'Ingresa un nombre'
                 : null,
             onFieldSubmitted: (_) {

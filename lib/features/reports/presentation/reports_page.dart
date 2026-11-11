@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/date_utils.dart';
+import '../../../core/receipt_service.dart';
 import '../../../core/report_repository.dart';
+import '../../../core/sales_repository.dart';
 import '../../../ui/common.dart';
 
 class _ReportData {
@@ -10,12 +12,14 @@ class _ReportData {
     required this.productos,
     required this.salidas,
     required this.inventario,
+    required this.pedidos,
   });
 
   final ResumenFinanciero resumen;
   final List<ProductoReporte> productos;
   final List<GastoReporte> salidas;
   final List<InventarioReporte> inventario;
+  final List<PedidoReporte> pedidos;
 }
 
 class ReportsPage extends StatefulWidget {
@@ -129,11 +133,13 @@ class _ReportsPageState extends State<ReportsPage> {
       range.end,
     );
     final inventario = await _repository.getInventario();
+    final pedidos = await _repository.getPedidos(range.start, range.end);
     return _ReportData(
       resumen: resumen,
       productos: productos,
       salidas: salidas,
       inventario: inventario,
+      pedidos: pedidos,
     );
   }
 
@@ -142,7 +148,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final range = _range;
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
@@ -158,8 +164,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 children: [
                   PageHeader(
                     title: 'Reportes',
-                    subtitle:
-                        'Resultado = ventas − costo de insumos − salidas. Flujo de caja = cobros − salidas.',
+                    subtitle: 'Resultado = ventas − costo de insumos − salidas. Flujo de caja = cobros − salidas.',
                     actions: [
                       OutlinedButton.icon(
                         onPressed: () => setState(_reload),
@@ -213,11 +218,15 @@ class _ReportsPageState extends State<ReportsPage> {
               tabBar: const TabBar(
                 tabs: [
                   Tab(icon: Icon(Icons.summarize_outlined), text: 'Resumen'),
-                  Tab(icon: Icon(Icons.lunch_dining_outlined), text: 'Productos'),
+                  Tab(
+                    icon: Icon(Icons.lunch_dining_outlined),
+                    text: 'Productos',
+                  ),
                   Tab(
                     icon: Icon(Icons.inventory_2_outlined),
                     text: 'Inventario',
                   ),
+                  Tab(icon: Icon(Icons.receipt_long_outlined), text: 'Pedidos'),
                 ],
               ),
               color: Theme.of(context).scaffoldBackgroundColor,
@@ -242,6 +251,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 _resumenTab(context, data),
                 _productosTab(context, data),
                 _inventarioTab(context, data),
+                _pedidosTab(context, data),
               ],
             );
           },
@@ -312,9 +322,8 @@ class _ReportsPageState extends State<ReportsPage> {
             children: [
               Text(
                 'Indicadores',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 10),
               LabelValue(
@@ -343,9 +352,8 @@ class _ReportsPageState extends State<ReportsPage> {
             children: [
               Text(
                 'Salidas registradas',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 10),
               if (data.salidas.isEmpty)
@@ -501,9 +509,9 @@ class _ReportsPageState extends State<ReportsPage> {
                                     label: const Text('Bajo'),
                                     side: BorderSide.none,
                                     visualDensity: VisualDensity.compact,
-                                    backgroundColor: Theme.of(
-                                      context,
-                                    ).colorScheme.errorContainer,
+                                    backgroundColor: Theme.of(context)
+                                        .colorScheme
+                                        .errorContainer,
                                   )
                                 : const Text('OK'),
                           ),
@@ -514,6 +522,89 @@ class _ReportsPageState extends State<ReportsPage> {
               ),
             ),
           ),
+      ],
+    );
+  }
+
+  Future<void> _imprimirPedido(PedidoReporte pedido) async {
+    try {
+      final detalle = await SalesRepository().getPedido(pedido.id);
+      await ReceiptService().imprimirNotaVenta(
+        detalle: detalle,
+        turno: pedido.turnoLabel,
+        cajero: pedido.usuario,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo generar la nota de venta: $error',
+        error: true,
+      );
+    }
+  }
+
+  Widget _pedidosTab(BuildContext context, _ReportData data) {
+    if (data.pedidos.isEmpty) {
+      return const EmptyState(
+        icon: Icons.receipt_long_outlined,
+        title: 'Sin pedidos en el período',
+        message: 'No hay pedidos registrados para mostrar.',
+      );
+    }
+    return ListView(
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
+      children: [
+        AppCard(
+          padding: EdgeInsets.zero,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Pedido')),
+                DataColumn(label: Text('Fecha')),
+                DataColumn(label: Text('Cajero')),
+                DataColumn(label: Text('Turno')),
+                DataColumn(label: Text('Total'), numeric: true),
+                DataColumn(label: Text('Efectivo'), numeric: true),
+                DataColumn(label: Text('QR'), numeric: true),
+                DataColumn(label: Text('Estado')),
+                DataColumn(label: Text('Nota')),
+              ],
+              rows: data.pedidos
+                  .map(
+                    (pedido) => DataRow(
+                      cells: [
+                        DataCell(
+                          Text(
+                            pedido.referencia == null
+                                ? '#${pedido.id}'
+                                : '${pedido.referencia} · #${pedido.id}',
+                          ),
+                        ),
+                        DataCell(Text(formatDateTimeText(pedido.fecha))),
+                        DataCell(Text(pedido.usuario)),
+                        DataCell(Text(pedido.turnoLabel)),
+                        DataCell(Text(formatMoney(pedido.total))),
+                        DataCell(Text(formatMoney(pedido.efectivo))),
+                        DataCell(Text(formatMoney(pedido.qr))),
+                        DataCell(Text(pedido.estadoPago)),
+                        DataCell(
+                          IconButton(
+                            tooltip: 'Imprimir nota de venta',
+                            onPressed: () => _imprimirPedido(pedido),
+                            icon: const Icon(Icons.print_outlined),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ),
       ],
     );
   }
