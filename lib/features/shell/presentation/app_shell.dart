@@ -46,6 +46,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
   int _refreshToken = 0;
+  bool _flujoInicio = false;
 
   @override
   void didUpdateWidget(AppShell oldWidget) {
@@ -106,6 +107,20 @@ class _AppShellState extends State<AppShell> {
     if (index >= 0) _seleccionar(index);
   }
 
+  /// Flujo "Empezar el día": va al menú y activa el atajo hacia Caja.
+  void _empezarDia() {
+    setState(() => _flujoInicio = true);
+    final destinations = _destinations();
+    final index = destinations.indexWhere(
+      (item) => item.label == 'Menú del día',
+    );
+    if (index >= 0) _seleccionar(index);
+  }
+
+  void _finalizarAtajo() {
+    setState(() => _flujoInicio = false);
+  }
+
   List<_Destination> _destinations() {
     final usuario = widget.usuario;
     final token = _refreshToken;
@@ -116,7 +131,11 @@ class _AppShellState extends State<AppShell> {
           label: 'Tablero',
           icon: Icons.space_dashboard_outlined,
           selectedIcon: Icons.space_dashboard,
-          page: DashboardPage(usuario: usuario, refreshToken: token),
+          page: DashboardPage(
+            usuario: usuario,
+            refreshToken: token,
+            onEmpezarDia: usuario.puede(Permiso.menu) ? _empezarDia : null,
+          ),
         ),
       );
     }
@@ -150,7 +169,13 @@ class _AppShellState extends State<AppShell> {
           label: 'Menú del día',
           icon: Icons.restaurant_menu_outlined,
           selectedIcon: Icons.restaurant_menu,
-          page: MenuPage(usuario: usuario, refreshToken: token),
+          page: MenuPage(
+            usuario: usuario,
+            refreshToken: token,
+            onAbrirCaja: usuario.puede(Permiso.caja) ? _irACaja : null,
+            flujoInicioActivo: _flujoInicio,
+            onFinalizarAtajo: _finalizarAtajo,
+          ),
         ),
       );
     }

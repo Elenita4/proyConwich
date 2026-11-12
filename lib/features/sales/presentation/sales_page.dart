@@ -49,7 +49,7 @@ class _SaleProduct {
       ? categoriaNombre
       : '$categoriaPadreNombre · $categoriaNombre';
 
-  /// Solo lo que está en el menú publicado se puede vender.
+  /// Solo lo que está en el menú habilitado se puede vender.
   bool get vendible => enMenu && disponible && (!esDirecto || stock > 0);
 
   String get razon {
@@ -134,7 +134,7 @@ class _SalesPageState extends State<SalesPage> {
     final caja = await _cashRepository.getCajaAbierta();
     final now = DateTime.now();
     final menu = await _menuRepository.getMenu(now, MenuRepository.tipoMenu);
-    final menuItems = menu != null && menu.publicado
+    final menuItems = menu != null && menu.habilitado
         ? await _menuRepository.getItems(menu.id)
         : <MenuItem>[];
 
@@ -272,7 +272,7 @@ class _SalesPageState extends State<SalesPage> {
         await _salesRepository.crearPedido(
           usuarioId: widget.usuario.id,
           cajaId: caja.id,
-          menuDiaId: data.menu?.publicado == true ? data.menu!.id : null,
+          menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
           referencia: _referencia.text,
           observacion: _observacion.text,
           lineas: _cart.values.toList(),
@@ -332,7 +332,7 @@ class _SalesPageState extends State<SalesPage> {
         pedidoId = await _salesRepository.crearPedido(
           usuarioId: widget.usuario.id,
           cajaId: caja.id,
-          menuDiaId: data.menu?.publicado == true ? data.menu!.id : null,
+          menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
           referencia: _referencia.text,
           observacion: _observacion.text,
           lineas: _cart.values.toList(),
@@ -510,7 +510,7 @@ class _SalesPageState extends State<SalesPage> {
             children: [
               PageHeader(
                 title: 'Ventas',
-                subtitle: 'Toca el producto para agregarlo al pedido. Solo se venden los del menú publicado.',
+                subtitle: 'Toca el producto para agregarlo al pedido. Solo se venden los del menú habilitado.',
                 actions: [
                   OutlinedButton.icon(
                     onPressed: () => setState(_reload),
@@ -587,21 +587,21 @@ class _SalesPageState extends State<SalesPage> {
   Widget _estadoMenu(BuildContext context, _SalesData data) {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
-    final publicado = menu?.publicado == true;
+    final habilitado = menu?.habilitado == true;
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
           Icon(
-            publicado ? Icons.check_circle_outline : Icons.info_outline,
-            color: publicado ? scheme.primary : scheme.tertiary,
+            habilitado ? Icons.check_circle_outline : Icons.info_outline,
+            color: habilitado ? scheme.primary : scheme.tertiary,
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              publicado
-                  ? 'Menú de ${menu!.tipo.toLowerCase()} publicado. ${data.caja!.turnoLabel}.'
-                  : 'No hay menú publicado para hoy. El administrador debe publicarlo para poder vender.',
+              habilitado
+                  ? 'Menú de ${menu!.tipo.toLowerCase()} habilitado. ${data.caja!.turnoLabel}.'
+                  : 'No hay menú habilitado para hoy. El administrador debe habilitarlo para poder vender.',
             ),
           ),
           Chip(

@@ -204,9 +204,9 @@ void main() {
     final menuRepo = MenuRepository();
     final menu = await menuRepo.crearMenu(DateTime.now(), 'ALMUERZO', admin.id);
     await menuRepo.agregarProducto(menu.id, almuerzoId);
-    await menuRepo.publicar(menu.id);
+    await menuRepo.habilitar(menu.id);
     expect(
-      (await menuRepo.getMenuPublicado(DateTime.now(), 'ALMUERZO')).length,
+      (await menuRepo.getMenuHabilitado(DateTime.now(), 'ALMUERZO')).length,
       1,
     );
 
@@ -341,7 +341,7 @@ void main() {
     );
     expect(await cash.getCajaAbierta(), isNull);
     final menuTrasCierre = await menuRepo.getMenu(DateTime.now(), 'ALMUERZO');
-    expect(menuTrasCierre?.estado, 'PUBLICADO');
+    expect(menuTrasCierre?.estado, 'HABILITADO');
 
     final nuevaCaja = await cash.abrirCaja(
       fecha: DateTime.now(),
@@ -1097,5 +1097,121 @@ void main() {
     expect(elevado, isNotNull);
     expect(elevado!.id, admin.id);
     expect(elevado.esAdmin, isTrue);
+  });
+
+  test('la migración cambia el estado PUBLICADO por HABILITADO', () async {
+    final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
+    // Base vieja: menús con el estado PUBLICADO y la columna publicado_en.
+    final legacy = await databaseFactory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 6,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE usuarios (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              nombre TEXT NOT NULL,
+              usuario TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              rol TEXT NOT NULL CHECK (rol IN ('ADMIN','CAJERO')),
+              turno_asignado TEXT CHECK (turno_asignado IN ('MAÑANA','TARDE','AMBOS')),
+              sueldo_base REAL NOT NULL DEFAULT 0,
+              activo INTEGER NOT NULL DEFAULT 1,
+              creado_en TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE menus_dia (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              fecha TEXT NOT NULL,
+              tipo TEXT NOT NULL CHECK (tipo IN ('DESAYUNO','ALMUERZO')),
+              estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','PUBLICADO','CERRADO')),
+              usuario_id INTEGER NOT NULL,
+              observacion TEXT,
+              publicado_en TEXT,
+              creado_en TEXT NOT NULL,
+              UNIQUE (fecha, tipo),
+              FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE menu_dia_items (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              menu_dia_id INTEGER NOT NULL,
+              producto_id INTEGER NOT NULL,
+              disponible INTEGER NOT NULL DEFAULT 1,
+              motivo_agotado TEXT,
+              orden INTEGER NOT NULL DEFAULT 0,
+              UNIQUE (menu_dia_id, producto_id),
+              FOREIGN KEY (menu_dia_id) REFERENCES menus_dia(id)
+            )
+          ''');
+          await db.insert('usuarios', {
+            'nombre': 'Administrador',
+            'usuario': 'admin',
+            'password_hash': hashPassword('1234'),
+            'rol': 'ADMIN',
+            'turno_asignado': 'AMBOS',
+            'sueldo_base': 0,
+            'activo': 1,
+            'creado_en': '2026-01-01 08:00:00',
+          });
+          await db.insert('menus_dia', {
+            'fecha': '2026-01-01',
+            'tipo': 'ALMUERZO',
+            'estado': 'PUBLICADO',
+            'usuario_id': 1,
+            'observacion': 'Con sopa',
+            'publicado_en': '2026-01-01 08:30:00',
+            'creado_en': '2026-01-01 08:00:00',
+          });
+          await db.insert('menus_dia', {
+            'fecha': '2025-12-31',
+            'tipo': 'DESAYUNO',
+            'estado': 'BORRADOR',
+            'usuario_id': 1,
+            'creado_en': '2025-12-31 08:00:00',
+          });
+          await db.insert('menu_dia_items', {
+            'menu_dia_id': 1,
+            'producto_id': 1,
+            'disponible': 1,
+            'orden': 1,
+          });
+        },
+      ),
+    );
+    await legacy.close();
+
+    final db = await AppDatabase.instance.database;
+    final menus = await db.query('menus_dia', orderBy: 'id');
+    expect(menus.length, 2);
+    expect(menus.first['estado'], 'HABILITADO');
+    expect(menus.first['habilitado_en'], '2026-01-01 08:30:00');
+    expect(menus.first['observacion'], 'Con sopa');
+    // El menú histórico de otro tipo se conserva sin romperse.
+    expect(menus.last['tipo'], 'DESAYUNO');
+    // Los items siguen ligados al mismo menú después de reconstruir la tabla.
+    final items = await db.query('menu_dia_items');
+    expect(items.length, 1);
+    expect(items.first['menu_dia_id'], menus.first['id']);
+    // El CHECK nuevo rechaza el estado viejo.
+    var rechazaViejo = false;
+    try {
+      await db.insert('menus_dia', {
+        'fecha': '2026-01-02',
+        'tipo': 'ALMUERZO',
+        'estado': 'PUBLICADO',
+        'usuario_id': 1,
+        'creado_en': '2026-01-02 08:00:00',
+      });
+    } catch (_) {
+      rechazaViejo = true;
+    }
+    expect(
+      rechazaViejo,
+      isTrue,
+      reason: 'La base de datos debe rechazar el estado PUBLICADO.',
+    );
   });
 }

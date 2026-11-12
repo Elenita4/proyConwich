@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/cash_repository.dart';
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
@@ -12,11 +13,15 @@ class _MenuData {
     required this.menu,
     required this.items,
     required this.productos,
+    required this.categorias,
+    required this.cajaAbierta,
   });
 
   final MenuDia? menu;
   final List<MenuItem> items;
   final List<Producto> productos;
+  final List<CategoriaProducto> categorias;
+  final bool cajaAbierta;
 }
 
 class MenuPage extends StatefulWidget {
@@ -24,10 +29,20 @@ class MenuPage extends StatefulWidget {
     super.key,
     required this.usuario,
     required this.refreshToken,
+    this.onAbrirCaja,
+    this.flujoInicioActivo = false,
+    this.onFinalizarAtajo,
   });
 
   final Usuario usuario;
   final int refreshToken;
+
+  /// Atajo hacia la pantalla de Caja (flujo "Empezar el día").
+  final VoidCallback? onAbrirCaja;
+
+  /// Solo cuando el usuario llegó con el botón "Empezar el día" del tablero.
+  final bool flujoInicioActivo;
+  final VoidCallback? onFinalizarAtajo;
 
   @override
   State<MenuPage> createState() => _MenuPageState();
@@ -36,10 +51,12 @@ class MenuPage extends StatefulWidget {
 class _MenuPageState extends State<MenuPage> {
   final _repository = MenuRepository();
   final _catalog = CatalogRepository();
+  final _cash = CashRepository();
   late DateTime _fecha;
   late String _tipo;
   late Future<_MenuData> _future;
   String _search = '';
+  int? _categoriaId;
 
   bool get _esAdmin => widget.usuario.puede(Permiso.menu);
 
@@ -70,7 +87,15 @@ class _MenuPageState extends State<MenuPage> {
         ? <MenuItem>[]
         : await _repository.getItems(menu.id);
     final productos = await _catalog.getProductos(soloActivos: true);
-    return _MenuData(menu: menu, items: items, productos: productos);
+    final categorias = await _catalog.getCategorias();
+    final caja = await _cash.getCajaAbierta();
+    return _MenuData(
+      menu: menu,
+      items: items,
+      productos: productos,
+      categorias: categorias,
+      cajaAbierta: caja != null,
+    );
   }
 
   MenuItem? _itemDe(List<MenuItem> items, int productoId) {
@@ -78,6 +103,58 @@ class _MenuPageState extends State<MenuPage> {
       if (item.productoId == productoId) return item;
     }
     return null;
+  }
+
+  /// Crea el menú del día empezando con los platos del menú anterior para que
+  /// solo se ajuste lo que cambie. Si no hay menú anterior queda vacío.
+  Future<MenuDia> _crearConAnterior() async {
+    final desdeAnterior = await _repository.duplicarAnterior(
+      _fecha,
+      _tipo,
+      widget.usuario.id,
+    );
+    return desdeAnterior ??
+        await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
+  }
+
+  Future<void> _crearMenu() async {
+    try {
+      final previos = await _repository.getProductosMenuAnterior(
+        _fecha,
+        _tipo,
+      );
+      await _crearConAnterior();
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(
+        context,
+        previos.isEmpty
+            ? 'Menú creado vacío. Elige los platos del día.'
+            : 'Menú creado con ${previos.length} plato(s) del día anterior. '
+                  'Ajusta lo que haga falta o usa "Limpiar".',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, 'No se pudo crear el menú: $error', error: true);
+    }
+  }
+
+  Future<void> _limpiar(_MenuData data) async {
+    final menu = data.menu;
+    if (menu == null) return;
+    final confirmado = await confirmAction(
+      context,
+      title: 'Limpiar menú',
+      message:
+          'Se quitarán todos los platos del menú de hoy y podrás armarlo desde cero.',
+      confirmLabel: 'Limpiar',
+      destructive: true,
+    );
+    if (!confirmado) return;
+    await _repository.reemplazarItems(menu.id, []);
+    if (!mounted) return;
+    setState(_reload);
+    showAppMessage(context, 'Menú limpiado. Elige los platos del día.');
   }
 
   Future<void> _toggleProducto(_MenuData data, Producto producto) async {
@@ -97,9 +174,7 @@ class _MenuPageState extends State<MenuPage> {
           '${producto.nombre} ya no está en el menú de hoy.',
         );
       } else {
-        final menu =
-            data.menu ??
-            await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
+        final menu = data.menu ?? await _crearConAnterior();
         await _repository.agregarProducto(menu.id, producto.id!);
         if (!mounted) return;
         setState(_reload);
@@ -125,21 +200,21 @@ class _MenuPageState extends State<MenuPage> {
     setState(_reload);
   }
 
-  Future<void> _publicar(_MenuData data) async {
+  Future<void> _habilitar(_MenuData data) async {
     final menu = data.menu;
     if (menu == null) return;
     if (data.items.isEmpty) {
       showAppMessage(
         context,
-        'Agrega al menos un plato antes de publicar.',
+        'Agrega al menos un plato antes de habilitar.',
         error: true,
       );
       return;
     }
-    await _repository.publicar(menu.id);
+    await _repository.habilitar(menu.id);
     if (!mounted) return;
     setState(_reload);
-    showAppMessage(context, 'Menú publicado. Ya se puede vender.');
+    showAppMessage(context, 'Menú habilitado. Ya se puede vender.');
   }
 
   Future<void> _cerrar(_MenuData data) async {
@@ -222,18 +297,13 @@ class _MenuPageState extends State<MenuPage> {
               else if (data == null)
                 const SizedBox.shrink()
               else ...[
+                if (widget.flujoInicioActivo && !data.cajaAbierta) ...[
+                  _atajoCaja(context),
+                  const SizedBox(height: 16),
+                ],
                 _estadoCard(context, data),
                 const SizedBox(height: 16),
-                AppCard(
-                  padding: const EdgeInsets.all(12),
-                  child: TextField(
-                    decoration: appInput(
-                      label: 'Buscar producto',
-                      icon: Icons.search,
-                    ),
-                    onChanged: (value) => setState(() => _search = value),
-                  ),
-                ),
+                _filtros(context, data),
                 const SizedBox(height: 16),
                 _catalogo(context, data),
               ],
@@ -244,13 +314,153 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
+  /// Atajo del flujo "Empezar el día": solo aparece si se usó ese botón y la
+  /// caja todavía no está abierta.
+  Widget _atajoCaja(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final boton = FilledButton.icon(
+      onPressed: widget.onAbrirCaja == null
+          ? null
+          : () {
+              widget.onFinalizarAtajo?.call();
+              widget.onAbrirCaja!();
+            },
+      icon: const Icon(Icons.arrow_forward),
+      label: const Text('Abrir caja'),
+    );
+    return AppCard(
+      color: scheme.primaryContainer.withValues(alpha: 0.45),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final icono = Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: scheme.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.flag_outlined, color: scheme.primary),
+          );
+          const texto = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Paso 2: abre la caja para iniciar el día',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              Text('Cuando el menú esté listo, sigue a Caja.'),
+            ],
+          );
+          if (esAngosto(constraints.maxWidth, limite: 560)) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    icono,
+                    const SizedBox(width: 14),
+                    const Expanded(child: texto),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                boton,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              icono,
+              const SizedBox(width: 14),
+              const Expanded(child: texto),
+              const SizedBox(width: 12),
+              boton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _estadoLabel(String? estado) {
+    switch (estado) {
+      case 'HABILITADO':
+        return 'Habilitado';
+      case 'CERRADO':
+        return 'Cerrado';
+      case 'BORRADOR':
+        return 'Borrador';
+      default:
+        return 'Sin menú';
+    }
+  }
+
+  /// Buscador + chips de categorías (con su color) para filtrar el catálogo.
+  Widget _filtros(BuildContext context, _MenuData data) {
+    final relevantes = <int>{};
+    for (final producto in data.productos) {
+      relevantes.add(producto.categoriaId);
+      if (producto.categoriaParentId != null) {
+        relevantes.add(producto.categoriaParentId!);
+      }
+    }
+    final categorias = data.categorias
+        .where(
+          (categoria) => categoria.id != null && relevantes.contains(categoria.id),
+        )
+        .toList()
+      ..sort((a, b) {
+        if (a.orden != b.orden) return a.orden.compareTo(b.orden);
+        return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+      });
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            decoration: appInput(label: 'Buscar producto', icon: Icons.search),
+            onChanged: (value) => setState(() => _search = value),
+          ),
+          if (categorias.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Todas'),
+                  selected: _categoriaId == null,
+                  onSelected: (_) => setState(() => _categoriaId = null),
+                ),
+                ...categorias.map(
+                  (categoria) => ChoiceChip(
+                    avatar: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: Color(categoria.color),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    label: Text(categoria.nombre),
+                    selected: _categoriaId == categoria.id,
+                    onSelected: (_) =>
+                        setState(() => _categoriaId = categoria.id),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
   Widget _estadoCard(BuildContext context, _MenuData data) {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
-    final estado = menu?.estado ?? 'SIN MENÚ';
     final cerrado = menu?.cerrado == true;
     final borrador = menu?.estado == 'BORRADOR';
-    final publicado = menu?.estado == 'PUBLICADO';
+    final habilitado = menu?.habilitado == true;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -265,7 +475,10 @@ class _MenuPageState extends State<MenuPage> {
                 label: Text('MENÚ DE ALMUERZO'),
                 side: BorderSide.none,
               ),
-              Chip(label: Text('Estado: $estado'), side: BorderSide.none),
+              Chip(
+                label: Text('Estado: ${_estadoLabel(menu?.estado)}'),
+                side: BorderSide.none,
+              ),
               Chip(
                 label: Text('${data.items.length} plato(s)'),
                 side: BorderSide.none,
@@ -274,22 +487,36 @@ class _MenuPageState extends State<MenuPage> {
           ),
           const SizedBox(height: 10),
           Text(
-            cerrado ? 'Menú cerrado. Solo consulta.' : 'Toca un plato del menú para quitarlo. Los platos grises muestran “No disponible en el menú de hoy”; toca uno para volver a agregarlo.',
+            cerrado
+                ? 'Menú cerrado. Solo consulta.'
+                : 'Toca un plato para agregarlo o quitarlo. Los platos con check verde están en el menú de hoy; los rojos están agotados y se reactivan con el control de la tarjeta.',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
-          if (_esAdmin && menu != null) ...[
+          if (_esAdmin) ...[
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
+                if (menu == null)
+                  FilledButton.icon(
+                    onPressed: _crearMenu,
+                    icon: const Icon(Icons.history),
+                    label: const Text('Crear menú con los platos de ayer'),
+                  ),
                 if (borrador)
                   FilledButton.icon(
-                    onPressed: () => _publicar(data),
-                    icon: const Icon(Icons.publish),
-                    label: const Text('Publicar'),
+                    onPressed: () => _habilitar(data),
+                    icon: const Icon(Icons.task_alt),
+                    label: const Text('Habilitar'),
                   ),
-                if (publicado)
+                if (menu != null && !cerrado && data.items.isNotEmpty)
+                  OutlinedButton.icon(
+                    onPressed: () => _limpiar(data),
+                    icon: const Icon(Icons.delete_sweep_outlined),
+                    label: const Text('Limpiar'),
+                  ),
+                if (habilitado)
                   OutlinedButton.icon(
                     onPressed: () => _cerrar(data),
                     icon: const Icon(Icons.lock_outline),
@@ -306,10 +533,14 @@ class _MenuPageState extends State<MenuPage> {
   Widget _catalogo(BuildContext context, _MenuData data) {
     final term = _search.trim().toLowerCase();
     final filtrados = data.productos
-        .where(
-          (producto) =>
-              term.isEmpty || producto.nombre.toLowerCase().contains(term),
-        )
+        .where((producto) {
+          if (_categoriaId != null &&
+              producto.categoriaId != _categoriaId &&
+              producto.categoriaParentId != _categoriaId) {
+            return false;
+          }
+          return term.isEmpty || producto.nombre.toLowerCase().contains(term);
+        })
         .toList();
     if (filtrados.isEmpty) {
       return const EmptyState(
@@ -448,14 +679,14 @@ class _MenuPageState extends State<MenuPage> {
   }) {
     final item = _itemDe(data.items, producto.id!);
     final cerrado = data.menu?.cerrado == true;
-    final editable = _esAdmin && !cerrado && !directo;
-    final enMenu = item != null;
     final agotado = item != null && !item.disponible;
-    final habilitado = directo || (enMenu && !agotado);
+    final seleccionado = item != null && !agotado;
+    // El plato agotado queda bloqueado: se reactiva con el control de la tarjeta.
+    final editable = _esAdmin && !cerrado && !directo && !agotado;
     final mensaje = directo
         ? 'Siempre disponible'
         : item == null
-        ? 'No disponible en el menú de hoy · toca para agregar'
+        ? 'Toca para agregar'
         : agotado
         ? (item.motivoAgotado ?? 'Agotado')
         : 'En el menú de hoy · toca para quitar';
@@ -468,7 +699,9 @@ class _MenuPageState extends State<MenuPage> {
       imagen: producto.imagen,
       esDirecto: producto.esDirecto,
       stock: producto.stock,
-      habilitado: habilitado,
+      habilitado: true,
+      seleccionado: seleccionado,
+      agotado: agotado,
       mensaje: mensaje,
       onTap: editable ? () => _toggleProducto(data, producto) : null,
       accion: item != null && !directo && _esAdmin && !cerrado

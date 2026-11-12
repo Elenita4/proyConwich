@@ -13,10 +13,14 @@ class DashboardPage extends StatefulWidget {
     super.key,
     required this.usuario,
     required this.refreshToken,
+    this.onEmpezarDia,
   });
 
   final Usuario usuario;
   final int refreshToken;
+
+  /// Flujo de inicio del día: lleva a la pantalla de Menú.
+  final VoidCallback? onEmpezarDia;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -137,15 +141,90 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  /// Primer paso del día: elegir el menú y luego abrir la caja.
+  Widget _empezarDiaCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final boton = FilledButton.icon(
+      onPressed: widget.onEmpezarDia,
+      icon: const Icon(Icons.play_arrow_rounded),
+      label: const Text('Empezar el día'),
+    );
+    return AppCard(
+      color: scheme.primaryContainer.withValues(alpha: 0.45),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final icono = Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: scheme.primary,
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: const Icon(
+              Icons.wb_sunny_outlined,
+              color: Colors.white,
+              size: 28,
+            ),
+          );
+          final texto = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Empezar el día',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              Text(
+                'Elige el menú de hoy y después abre la caja para iniciar.',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          );
+          if (esAngosto(constraints.maxWidth, limite: 560)) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    icono,
+                    const SizedBox(width: 14),
+                    Expanded(child: texto),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                boton,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              icono,
+              const SizedBox(width: 16),
+              Expanded(child: texto),
+              const SizedBox(width: 12),
+              boton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildBody(
     BuildContext context,
     _DashboardData data,
     bool puedeReportes,
   ) {
     final scheme = Theme.of(context).colorScheme;
+    final puedeMenu = widget.usuario.puede(Permiso.menu);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (data.caja == null && puedeMenu) ...[
+          _empezarDiaCard(context),
+          const SizedBox(height: 16),
+        ],
         if (data.caja == null)
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -336,7 +415,14 @@ class _DashboardPageState extends State<DashboardPage> {
             )
           else ...[
             LabelValue(label: 'Tipo', value: menu.tipo),
-            LabelValue(label: 'Estado', value: menu.estado),
+            LabelValue(
+              label: 'Estado',
+              value: switch (menu.estado) {
+                'HABILITADO' => 'Habilitado',
+                'CERRADO' => 'Cerrado',
+                _ => 'Borrador',
+              },
+            ),
             LabelValue(label: 'Platos', value: '$items'),
             if (menu.observacion != null)
               LabelValue(label: 'Nota', value: menu.observacion!),

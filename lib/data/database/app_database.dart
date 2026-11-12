@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 9;
+  static const int schemaVersion = 10;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -89,6 +89,7 @@ class AppDatabase {
         await _migrarModosInsumo(db);
         await _migrarPrimerAcceso(db);
         await _migrarVentaDirecta(db);
+        await _migrarEstadosMenu(db);
         await _afterOpen(db);
       },
     );
@@ -278,10 +279,10 @@ class AppDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
         tipo TEXT NOT NULL CHECK (tipo IN ('ALMUERZO')),
-        estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','PUBLICADO','CERRADO')),
+        estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','HABILITADO','CERRADO')),
         usuario_id INTEGER NOT NULL,
         observacion TEXT,
-        publicado_en TEXT,
+        habilitado_en TEXT,
         creado_en TEXT NOT NULL,
         UNIQUE (fecha, tipo),
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
@@ -804,6 +805,48 @@ class AppDatabase {
       await db.execute('ALTER TABLE cajas_nueva RENAME TO cajas');
     } catch (error) {
       debugPrint('No se pudieron migrar los turnos de caja: $error');
+    }
+  }
+
+  /// Cambia el estado 'PUBLICADO' del menú por 'HABILITADO' y la columna
+  /// `publicado_en` por `habilitado_en`. La tabla se reconstruye porque SQLite
+  /// no permite cambiar el CHECK de una tabla existente. El CHECK de `tipo`
+  /// conserva los valores antiguos para no perder menús históricos.
+  Future<void> _migrarEstadosMenu(Database db) async {
+    try {
+      final rows = await db.rawQuery(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'menus_dia'",
+      );
+      final sql = rows.isEmpty ? '' : (rows.first['sql'] as String? ?? '');
+      if (!sql.contains('PUBLICADO')) return;
+      await db.execute('''
+        CREATE TABLE menus_dia_nueva (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          fecha TEXT NOT NULL,
+          tipo TEXT NOT NULL CHECK (tipo IN ('ALMUERZO','DESAYUNO')),
+          estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado IN ('BORRADOR','HABILITADO','CERRADO')),
+          usuario_id INTEGER NOT NULL,
+          observacion TEXT,
+          habilitado_en TEXT,
+          creado_en TEXT NOT NULL,
+          UNIQUE (fecha, tipo),
+          FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+        )
+      ''');
+      await db.execute('''
+        INSERT INTO menus_dia_nueva (
+          id, fecha, tipo, estado, usuario_id, observacion, habilitado_en, creado_en
+        )
+        SELECT
+          id, fecha, tipo,
+          CASE estado WHEN 'PUBLICADO' THEN 'HABILITADO' ELSE estado END,
+          usuario_id, observacion, publicado_en, creado_en
+        FROM menus_dia
+      ''');
+      await db.execute('DROP TABLE menus_dia');
+      await db.execute('ALTER TABLE menus_dia_nueva RENAME TO menus_dia');
+    } catch (error) {
+      debugPrint('No se pudo migrar el estado de los menús: $error');
     }
   }
 
