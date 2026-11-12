@@ -119,33 +119,37 @@ void main() {
     'el filtro de categoría padre incluye sus productos y subcategorías',
     (tester) async {
       final catalog = CatalogRepository();
-      await catalog.saveCategoria(
-        const CategoriaProducto(
-          nombre: 'PADRE PRUEBA',
-          color: 0xFF2563EB,
-          siempreDisponible: false,
-          orden: 10,
-          activo: true,
+      await tester.runAsync(
+        () => catalog.saveCategoria(
+          const CategoriaProducto(
+            nombre: 'PADRE PRUEBA',
+            color: 0xFF2563EB,
+            siempreDisponible: false,
+            orden: 10,
+            activo: true,
+          ),
         ),
       );
-      final categorias = await catalog.getCategorias();
-      final padre = categorias.firstWhere(
+      final categorias = await tester.runAsync(catalog.getCategorias);
+      final padre = categorias!.firstWhere(
         (categoria) => categoria.nombre == 'PADRE PRUEBA',
       );
       for (final nombre in ['HIJA UNO', 'HIJA DOS']) {
-        await catalog.saveCategoria(
-          CategoriaProducto(
-            nombre: nombre,
-            color: 0xFF2563EB,
-            siempreDisponible: false,
-            orden: 11,
-            activo: true,
-            parentId: padre.id,
+        await tester.runAsync(
+          () => catalog.saveCategoria(
+            CategoriaProducto(
+              nombre: nombre,
+              color: 0xFF2563EB,
+              siempreDisponible: false,
+              orden: 11,
+              activo: true,
+              parentId: padre.id,
+            ),
           ),
         );
       }
-      final categoriasConHijas = await catalog.getCategorias();
-      final hijaUno = categoriasConHijas.firstWhere(
+      final categoriasConHijas = await tester.runAsync(catalog.getCategorias);
+      final hijaUno = categoriasConHijas!.firstWhere(
         (categoria) => categoria.nombre == 'HIJA UNO',
       );
       final hijaDos = categoriasConHijas.firstWhere(
@@ -167,9 +171,9 @@ void main() {
               stock: 0,
             ),
           );
-      await crearProducto('Plato padre', padre);
-      await crearProducto('Plato hija uno', hijaUno);
-      await crearProducto('Plato hija dos', hijaDos);
+      await tester.runAsync(() => crearProducto('Plato padre', padre));
+      await tester.runAsync(() => crearProducto('Plato hija uno', hijaUno));
+      await tester.runAsync(() => crearProducto('Plato hija dos', hijaDos));
 
       await tester.pumpWidget(
         MaterialApp(

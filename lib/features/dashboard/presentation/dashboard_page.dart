@@ -144,11 +144,16 @@ class _DashboardPageState extends State<DashboardPage> {
   /// Primer paso del día: elegir el menú y luego abrir la caja.
   Widget _empezarDiaCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final boton = FilledButton.icon(
+      onPressed: widget.onEmpezarDia,
+      icon: const Icon(Icons.play_arrow_rounded),
+      label: const Text('Empezar el día'),
+    );
     return AppCard(
       color: scheme.primaryContainer.withValues(alpha: 0.45),
-      child: Row(
-        children: [
-          Container(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final icono = Container(
             width: 52,
             height: 52,
             decoration: BoxDecoration(
@@ -160,31 +165,48 @@ class _DashboardPageState extends State<DashboardPage> {
               color: Colors.white,
               size: 28,
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
+          );
+          final texto = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Empezar el día',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              Text(
+                'Elige el menú de hoy y después abre la caja para iniciar.',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          );
+          if (esAngosto(constraints.maxWidth, limite: 560)) {
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Empezar el día',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                Row(
+                  children: [
+                    icono,
+                    const SizedBox(width: 14),
+                    Expanded(child: texto),
+                  ],
                 ),
-                Text(
-                  'Elige el menú de hoy y después abre la caja para iniciar.',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
+                const SizedBox(height: 12),
+                boton,
               ],
-            ),
-          ),
-          FilledButton.icon(
-            onPressed: widget.onEmpezarDia,
-            icon: const Icon(Icons.play_arrow_rounded),
-            label: const Text('Empezar el día'),
-          ),
-        ],
+            );
+          }
+          return Row(
+            children: [
+              icono,
+              const SizedBox(width: 16),
+              Expanded(child: texto),
+              const SizedBox(width: 12),
+              boton,
+            ],
+          );
+        },
       ),
     );
   }

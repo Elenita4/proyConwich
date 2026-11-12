@@ -318,11 +318,21 @@ class _MenuPageState extends State<MenuPage> {
   /// caja todavía no está abierta.
   Widget _atajoCaja(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final boton = FilledButton.icon(
+      onPressed: widget.onAbrirCaja == null
+          ? null
+          : () {
+              widget.onFinalizarAtajo?.call();
+              widget.onAbrirCaja!();
+            },
+      icon: const Icon(Icons.arrow_forward),
+      label: const Text('Abrir caja'),
+    );
     return AppCard(
       color: scheme.primaryContainer.withValues(alpha: 0.45),
-      child: Row(
-        children: [
-          Container(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final icono = Container(
             width: 44,
             height: 44,
             decoration: BoxDecoration(
@@ -330,31 +340,43 @@ class _MenuPageState extends State<MenuPage> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(Icons.flag_outlined, color: scheme.primary),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(
+          );
+          const texto = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Paso 2: abre la caja para iniciar el día',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              Text('Cuando el menú esté listo, sigue a Caja.'),
+            ],
+          );
+          if (esAngosto(constraints.maxWidth, limite: 560)) {
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Paso 2: abre la caja para iniciar el día',
-                  style: TextStyle(fontWeight: FontWeight.w700),
+                Row(
+                  children: [
+                    icono,
+                    const SizedBox(width: 14),
+                    const Expanded(child: texto),
+                  ],
                 ),
-                Text('Cuando el menú esté listo, sigue a Caja.'),
+                const SizedBox(height: 12),
+                boton,
               ],
-            ),
-          ),
-          FilledButton.icon(
-            onPressed: widget.onAbrirCaja == null
-                ? null
-                : () {
-                    widget.onFinalizarAtajo?.call();
-                    widget.onAbrirCaja!();
-                  },
-            icon: const Icon(Icons.arrow_forward),
-            label: const Text('Abrir caja'),
-          ),
-        ],
+            );
+          }
+          return Row(
+            children: [
+              icono,
+              const SizedBox(width: 14),
+              const Expanded(child: texto),
+              const SizedBox(width: 12),
+              boton,
+            ],
+          );
+        },
       ),
     );
   }
