@@ -27,7 +27,7 @@ Flutter app (POS de restaurante "Sazón"). Paquete Dart: `test_code_02` — los 
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 9` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
+- `version: 10` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
   foráneas se desactivan durante la migración y se activan en `onOpen` (`PRAGMA foreign_keys = ON`).
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
@@ -41,10 +41,14 @@ Flutter app (POS de restaurante "Sazón"). Paquete Dart: `test_code_02` — los 
   en el producto.
 - `cajas` usa `numero_turno` consecutivo por día (`Turno 1, 2, 3…`), no `MAÑANA/TARDE`.
   Cerrar una caja ya no cierra el menú del día.
-- Menú del día replica el catálogo de Ventas agrupado por categoría/subcategoría. Tocar un plato
-  lo agrega o quita del menú al instante; los platos fuera del menú se muestran en gris con
-  "No disponible en el menú de hoy". La venta directa va en una sección SIEMPRE DISPONIBLES.
-  Si no hay caja abierta, Ventas muestra un botón "Ir a Caja".
+- Menú del día replica el catálogo de Ventas agrupado por categoría/subcategoría, con chips de
+  categorías (por color) para filtrar. Tocar un plato lo agrega o quita del menú al instante; los
+  platos del menú llevan borde verde con check y los agotados salen en rojo y bloqueados (se
+  reactivan con el control de la tarjeta). "Crear menú" arranca con los platos del día anterior y
+  "Limpiar" vacía el menú. La venta directa va en una sección SIEMPRE DISPONIBLES. Si no hay caja
+  abierta, Ventas muestra un botón "Ir a Caja".
+- El estado del menú se llama `HABILITADO` (antes `PUBLICADO`) en BD, código y textos; la columna
+  es `habilitado_en`. El tablero ofrece "Empezar el día" (lleva al menú y de ahí un atajo a Caja).
 - `app_meta` (fila única): `instalacion_id` (UUID estable de la instalación) y fecha del último
   respaldo. Se escribe **antes** de copiar el archivo, así la fecha viaja dentro del respaldo.
 - Import condicional de factory: `database_factory_web.dart if (dart.library.io) database_factory_io.dart`

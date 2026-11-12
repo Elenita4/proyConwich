@@ -18,7 +18,7 @@ class MenuDia {
   final String estado;
   final String? observacion;
 
-  bool get publicado => estado == 'PUBLICADO';
+  bool get habilitado => estado == 'HABILITADO';
   bool get cerrado => estado == 'CERRADO';
 }
 
@@ -241,11 +241,11 @@ class MenuRepository {
     );
   }
 
-  Future<void> publicar(int menuDiaId) async {
+  Future<void> habilitar(int menuDiaId) async {
     final db = await AppDatabase.instance.database;
     await db.update(
       'menus_dia',
-      {'estado': 'PUBLICADO', 'publicado_en': sqlNow()},
+      {'estado': 'HABILITADO', 'habilitado_en': sqlNow()},
       where: 'id = ?',
       whereArgs: [menuDiaId],
     );
@@ -261,9 +261,9 @@ class MenuRepository {
     );
   }
 
-  Future<List<MenuItem>> getMenuPublicado(DateTime fecha, String tipo) async {
+  Future<List<MenuItem>> getMenuHabilitado(DateTime fecha, String tipo) async {
     final menu = await getMenu(fecha, tipo);
-    if (menu == null || !menu.publicado) return <MenuItem>[];
+    if (menu == null || !menu.habilitado) return <MenuItem>[];
     return getItems(menu.id);
   }
 
