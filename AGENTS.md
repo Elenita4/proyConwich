@@ -25,13 +25,21 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 - `lib/core/*_repository.dart` — acceso a datos (auth, cash, catalog, menu, report, sales).
 - `lib/ui/common.dart` — widgets y helpers compartidos (parseAmount, formatMoney, AppCard, StatCard, showAppMessage, appInput).
 - `lib/main.dart` — tema Material 3 central + `StartupGate` (login vs AppShell según sesión).
+- `AppShell` construye cada sección solo al visitarla y refresca solo la sección activa
+  (cada pantalla tiene su propio token). El drawer y el `NavigationRail` muestran siempre
+  las etiquetas del menú y un pie fijo con cambiar contraseña, cambiar/ver usuario,
+  respaldo (admin) y cerrar sesión.
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 13` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
+- `version: 14` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
   foráneas se desactivan durante la migración y se activan en `onOpen` (`PRAGMA foreign_keys = ON`).
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
+- La v14 solo agrega índices (`pagos(pedido_id)`, `consumos_insumo(insumo_id)`,
+  `detalle_compra(insumo_id/producto_id)`, `detalle_pedido(producto_id)`,
+  `detalle_conteo(insumo_id)`, `faltantes_insumo(fecha/pedido_id)`); no modifica datos y
+  acelera las vistas de stock y los reportes.
 - `unidades_medida.familia`/`factor_base` permiten convertir L↔ml y kg↔g en las recetas.
 - La receta es opcional. Al vender, el consumo se limita al stock disponible (nunca deja
   negativos) y el faltante queda registrado en `faltantes_insumo` (se consulta en Reportes).
@@ -52,6 +60,8 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   respeta. "Programar días" copia la configuración a los siguientes días. El menú solo se publica
   (`HABILITADO`); no se cierra. "Limpiar" vacía platos y combos. La venta directa va en una
   sección SIEMPRE DISPONIBLES. Si no hay caja abierta, Ventas muestra un botón "Ir a Caja".
+  En Ventas, los productos activos que no están en el menú del día se agrupan en una sección
+  colapsable ("Productos fuera del menú de hoy"), oculta por defecto y no vendible.
 - Los almuerzos/combos se arman en la sección "Almuerzos y combos": se seleccionan uno o más
   productos (sin cantidades), se define nombre y precio. Desde 2 productos se sugiere
   automáticamente `suma × 0.90`, pero el usuario puede editar solo el precio. El combo se guarda
@@ -83,9 +93,10 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   `sazon_restaurante_v2.db`.
 - `excel_exporter.dart` genera una hoja por tabla; excluye `password_hash` y el BLOB `imagen`.
 - `report_exporter.dart` genera el reporte del período en PDF tamaño carta (resumen, gráfico de
-  más vendidos, productos con precio unitario, salidas detalladas y pedidos) y en Excel (hojas
-  Resumen, Productos, Salidas, Pedidos, Gráfico y Faltantes). El gráfico de Excel usa barras de
-  celdas coloreadas porque el paquete `excel` no soporta gráficos nativos.
+  ingresos, gráfico por cantidad, productos con precio unitario, salidas detalladas y pedidos) y
+  en Excel (hojas Resumen, Productos, Salidas, Pedidos, Gráfico, Gráfico cantidades y Faltantes).
+  Los gráficos de Excel usan barras de celdas coloreadas porque el paquete `excel` no soporta
+  gráficos nativos.
 - Respaldo en Google Drive: se usa el selector de carpetas de Android (SAF), no Google Cloud ni
   OAuth. `android/.../MainActivity.kt` expone un `MethodChannel` con elegir carpeta, verificar
   permiso, escribir, listar y borrar. La carpeta elegida se guarda en `app_meta`. Las copias se

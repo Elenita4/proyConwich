@@ -42,45 +42,46 @@ class RestaurantApp extends StatelessWidget {
         useMaterial3: true,
         // Identidad visual ConWich: Espresso, Nogal, Caramelo, Dorado, Crema
         // y Blanco cálido. Los colores semánticos se mantienen distinguibles.
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.light,
-        ).copyWith(
-          primary: const Color(0xFF70452D), // Nogal
-          onPrimary: const Color(0xFFFFF9F0), // Blanco cálido
-          primaryContainer: const Color(0xFFE8C995), // Dorado
-          onPrimaryContainer: const Color(0xFF2B1A12), // Texto oscuro
-          secondary: const Color(0xFF574537), // Texto
-          onSecondary: const Color(0xFFFFF9F0), // Blanco cálido
-          secondaryContainer: const Color(0xFFE8C995), // Dorado
-          onSecondaryContainer: const Color(0xFF2B1A12), // Texto oscuro
-          tertiary: const Color(0xFF3D2419), // Espresso
-          onTertiary: const Color(0xFFF3E9D9), // Crema
-          tertiaryContainer: const Color(0xFFE8C995), // Dorado
-          onTertiaryContainer: const Color(0xFF2B1A12), // Texto oscuro
-          error: const Color(0xFFA9442F), // Terracota apagado
-          onError: const Color(0xFFFFF9F0), // Blanco cálido
-          errorContainer: const Color(0xFFF3DAD3), // Terracota suave
-          onErrorContainer: const Color(0xFF3B120C), // Error oscuro
-          surface: const Color(0xFFFFF9F0), // Blanco cálido
-          onSurface: const Color(0xFF2B1A12), // Texto oscuro
-          onSurfaceVariant: const Color(0xFF574537), // Texto
-          surfaceDim: const Color(0xFFF3E9D9), // Crema
-          surfaceBright: const Color(0xFFFFF9F0), // Blanco cálido
-          surfaceContainerLowest: const Color(0xFFFFF9F0), // Blanco cálido
-          surfaceContainerLow: const Color(0xFFFFF9F0), // Blanco cálido
-          surfaceContainer: const Color(0xFFF3E9D9), // Crema
-          surfaceContainerHigh: const Color(0xFFF3E9D9), // Crema
-          surfaceContainerHighest: const Color(0xFFF3E9D9), // Crema
-          outline: const Color(0xFF70452D), // Nogal
-          outlineVariant: const Color(0xFFE8C995), // Dorado
-          inverseSurface: const Color(0xFF3D2419), // Espresso
-          onInverseSurface: const Color(0xFFF3E9D9), // Crema
-          inversePrimary: const Color(0xFFC18A55), // Caramelo
-          shadow: const Color(0xFF3D2419), // Espresso
-          scrim: const Color(0xFF3D2419), // Espresso
-          surfaceTint: const Color(0xFFC18A55), // Caramelo
-        ),
+        colorScheme:
+            ColorScheme.fromSeed(
+              seedColor: seed,
+              brightness: Brightness.light,
+            ).copyWith(
+              primary: const Color(0xFF70452D), // Nogal
+              onPrimary: const Color(0xFFFFF9F0), // Blanco cálido
+              primaryContainer: const Color(0xFFE8C995), // Dorado
+              onPrimaryContainer: const Color(0xFF2B1A12), // Texto oscuro
+              secondary: const Color(0xFF574537), // Texto
+              onSecondary: const Color(0xFFFFF9F0), // Blanco cálido
+              secondaryContainer: const Color(0xFFE8C995), // Dorado
+              onSecondaryContainer: const Color(0xFF2B1A12), // Texto oscuro
+              tertiary: const Color(0xFF3D2419), // Espresso
+              onTertiary: const Color(0xFFF3E9D9), // Crema
+              tertiaryContainer: const Color(0xFFE8C995), // Dorado
+              onTertiaryContainer: const Color(0xFF2B1A12), // Texto oscuro
+              error: const Color(0xFFA9442F), // Terracota apagado
+              onError: const Color(0xFFFFF9F0), // Blanco cálido
+              errorContainer: const Color(0xFFF3DAD3), // Terracota suave
+              onErrorContainer: const Color(0xFF3B120C), // Error oscuro
+              surface: const Color(0xFFFFF9F0), // Blanco cálido
+              onSurface: const Color(0xFF2B1A12), // Texto oscuro
+              onSurfaceVariant: const Color(0xFF574537), // Texto
+              surfaceDim: const Color(0xFFF3E9D9), // Crema
+              surfaceBright: const Color(0xFFFFF9F0), // Blanco cálido
+              surfaceContainerLowest: const Color(0xFFFFF9F0), // Blanco cálido
+              surfaceContainerLow: const Color(0xFFFFF9F0), // Blanco cálido
+              surfaceContainer: const Color(0xFFF3E9D9), // Crema
+              surfaceContainerHigh: const Color(0xFFF3E9D9), // Crema
+              surfaceContainerHighest: const Color(0xFFF3E9D9), // Crema
+              outline: const Color(0xFF70452D), // Nogal
+              outlineVariant: const Color(0xFFE8C995), // Dorado
+              inverseSurface: const Color(0xFF3D2419), // Espresso
+              onInverseSurface: const Color(0xFFF3E9D9), // Crema
+              inversePrimary: const Color(0xFFC18A55), // Caramelo
+              shadow: const Color(0xFF3D2419), // Espresso
+              scrim: const Color(0xFF3D2419), // Espresso
+              surfaceTint: const Color(0xFFC18A55), // Caramelo
+            ),
         scaffoldBackgroundColor: const Color(0xFFFFF9F0), // Blanco cálido
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF3D2419), // Espresso
@@ -147,12 +148,23 @@ class RestaurantApp extends StatelessWidget {
           ),
         ),
         navigationRailTheme: const NavigationRailThemeData(
-          labelType: NavigationRailLabelType.none,
+          // Las etiquetas se muestran siempre y usan los colores claros del
+          // menú lateral. Sin estos estilos Flutter usa `onSurface` (oscuro)
+          // sobre el fondo espresso y las letras se pierden en tablet.
+          labelType: NavigationRailLabelType.all,
           groupAlignment: -0.9,
           backgroundColor: Color(0xFF3D2419), // Espresso
           indicatorColor: Color(0xFFC18A55), // Caramelo
           selectedIconTheme: IconThemeData(color: Color(0xFFF3E9D9)),
           unselectedIconTheme: IconThemeData(color: Color(0xFFE8C995)),
+          selectedLabelTextStyle: TextStyle(
+            color: Color(0xFFF3E9D9), // Crema
+            fontWeight: FontWeight.w700,
+          ),
+          unselectedLabelTextStyle: TextStyle(
+            color: Color(0xFFE8C995), // Dorado
+            fontWeight: FontWeight.w600,
+          ),
         ),
         chipTheme: const ChipThemeData(
           backgroundColor: Color(0x55E8C995), // Dorado translúcido

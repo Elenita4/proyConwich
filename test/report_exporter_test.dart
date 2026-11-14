@@ -77,6 +77,7 @@ void main() {
     expect(libro.tables.containsKey('Salidas'), isTrue);
     expect(libro.tables.containsKey('Pedidos'), isTrue);
     expect(libro.tables.containsKey('Gráfico'), isTrue);
+    expect(libro.tables.containsKey('Gráfico cantidades'), isTrue);
     final resumen = libro.tables['Resumen']!.rows
         .map((fila) => fila.map((celda) => celda?.value.toString()).toList())
         .toList();
@@ -87,5 +88,13 @@ void main() {
       productos.rows.first.map((celda) => celda?.value.toString()).toList(),
       contains('Precio unitario'),
     );
+
+    final cantidades = libro.tables['Gráfico cantidades']!;
+    final filasCantidades = cantidades.rows
+        .map((fila) => fila.map((celda) => celda?.value.toString()).toList())
+        .toList();
+    expect(filasCantidades.first, contains('Cantidad'));
+    expect(filasCantidades[1][0], 'Refresco');
+    expect(double.tryParse(filasCantidades[1][1] ?? ''), 6);
   });
 }

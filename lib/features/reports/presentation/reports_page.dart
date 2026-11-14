@@ -29,6 +29,20 @@ class _ReportData {
   final List<FaltanteInsumoReporte> faltantes;
 }
 
+/// Porción del pastel de ingresos. Permite agrupar los productos con menos
+/// ventas en una sola porción "Otros" para que la leyenda no se sature.
+class _ProductoSlice {
+  const _ProductoSlice({
+    required this.nombre,
+    required this.valor,
+    required this.color,
+  });
+
+  final String nombre;
+  final double valor;
+  final Color color;
+}
+
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key, required this.refreshToken});
 
@@ -205,7 +219,11 @@ class _ReportsPageState extends State<ReportsPage> {
       }
     } catch (error) {
       if (!mounted) return;
-      showAppMessage(context, 'No se pudo generar el reporte: $error', error: true);
+      showAppMessage(
+        context,
+        'No se pudo generar el reporte: $error',
+        error: true,
+      );
     } finally {
       if (mounted) setState(() => _exportando = false);
     }
@@ -461,9 +479,7 @@ class _ReportsPageState extends State<ReportsPage> {
                               Text(
                                 '${salida.metodoPago} · ${salida.usuario} · ${salida.turnoLabel}',
                                 style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: scheme.onSurfaceVariant,
-                                    ),
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
                             ],
                           ),
@@ -510,16 +526,13 @@ class _ReportsPageState extends State<ReportsPage> {
           const SizedBox(height: 6),
           Text(
             formatMoney(resumen.ventas),
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: scheme.primary,
-            ),
+            style: Theme.of(context).textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w800, color: scheme.primary),
           ),
           Text(
             '${resumen.pedidos} pedido(s) · ticket promedio ${formatMoney(resumen.ticketPromedio)}',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 14),
           LayoutBuilder(
@@ -613,6 +626,9 @@ class _ReportsPageState extends State<ReportsPage> {
       0,
       (suma, producto) => suma + producto.ventas,
     );
+    final slices = _slicesIngresos(data.productos);
+    final porCantidad = [...data.productos.where((p) => p.cantidad > 0)]
+      ..sort((a, b) => b.cantidad.compareTo(a.cantidad));
     return ListView(
       padding: EdgeInsets.all(
         esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
@@ -626,12 +642,8 @@ class _ReportsPageState extends State<ReportsPage> {
                 height: 190,
                 child: CustomPaint(
                   painter: _TortaPainter(
-                    valores: data.productos
-                        .map((producto) => producto.ventas)
-                        .toList(),
-                    colores: data.productos
-                        .map((producto) => Color(producto.color))
-                        .toList(),
+                    valores: slices.map((slice) => slice.valor).toList(),
+                    colores: slices.map((slice) => slice.color).toList(),
                   ),
                 ),
               );
@@ -640,13 +652,19 @@ class _ReportsPageState extends State<ReportsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Productos vendidos',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    'Ingresos por producto',
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Participación en las ventas del período (Bs).',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                   const SizedBox(height: 10),
-                  for (final producto in data.productos)
+                  for (final slice in slices)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: Row(
@@ -655,21 +673,21 @@ class _ReportsPageState extends State<ReportsPage> {
                             width: 12,
                             height: 12,
                             decoration: BoxDecoration(
-                              color: Color(producto.color),
+                              color: slice.color,
                               shape: BoxShape.circle,
                             ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              producto.nombre,
+                              slice.nombre,
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ),
                           Text(
                             total <= 0
                                 ? ''
-                                : formatPercent(producto.ventas / total),
+                                : formatPercent(slice.valor / total),
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(fontWeight: FontWeight.w700),
                           ),
@@ -699,6 +717,8 @@ class _ReportsPageState extends State<ReportsPage> {
             },
           ),
         ),
+        const SizedBox(height: 12),
+        _graficoCantidades(context, porCantidad),
         const SizedBox(height: 12),
         AppCard(
           padding: EdgeInsets.zero,
@@ -741,6 +761,154 @@ class _ReportsPageState extends State<ReportsPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Agrupa los productos por ingresos para que el pastel y su leyenda se
+  /// mantengan legibles. Si hay más de 8, el resto se muestra como "Otros".
+  List<_ProductoSlice> _slicesIngresos(List<ProductoReporte> productos) {
+    final ordenados = [...productos.where((producto) => producto.ventas > 0)]
+      ..sort((a, b) => b.ventas.compareTo(a.ventas));
+    if (ordenados.length <= 8) {
+      return ordenados
+          .map(
+            (producto) => _ProductoSlice(
+              nombre: producto.nombre,
+              valor: producto.ventas,
+              color: Color(producto.color),
+            ),
+          )
+          .toList();
+    }
+    final top = ordenados.take(7).toList();
+    final resto = ordenados
+        .skip(7)
+        .fold<double>(0, (suma, producto) => suma + producto.ventas);
+    return [
+      ...top.map(
+        (producto) => _ProductoSlice(
+          nombre: producto.nombre,
+          valor: producto.ventas,
+          color: Color(producto.color),
+        ),
+      ),
+      _ProductoSlice(
+        nombre: 'Otros',
+        valor: resto,
+        color: const Color(0xFF9E8C7A),
+      ),
+    ];
+  }
+
+  /// Gráfico de barras horizontales con los productos más vendidos por
+  /// cantidad de unidades (no por dinero).
+  Widget _graficoCantidades(
+    BuildContext context,
+    List<ProductoReporte> productos,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final top = productos.take(10).toList();
+    final maximo = top.isEmpty ? 1.0 : top.first.cantidad;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bar_chart, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Productos más vendidos',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Por cantidad de unidades vendidas en el período.',
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 14),
+          if (top.isEmpty)
+            const Text('Sin cantidades para mostrar.')
+          else
+            ...top.map((producto) => _barraCantidad(context, producto, maximo)),
+        ],
+      ),
+    );
+  }
+
+  Widget _barraCantidad(
+    BuildContext context,
+    ProductoReporte producto,
+    double maximo,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final proporcion = maximo <= 0
+        ? 0.0
+        : (producto.cantidad / maximo).clamp(0.0, 1.0).toDouble();
+    final color = Color(producto.color);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final angosto = constraints.maxWidth < 480;
+          final nombre = Text(
+            producto.nombre,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          );
+          final valor = Text(
+            formatQty(producto.cantidad),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          );
+          final barra = ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              height: 16,
+              color: scheme.surfaceContainerLow,
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: proporcion <= 0
+                    ? 0
+                    : proporcion.clamp(0.03, 1.0).toDouble(),
+                heightFactor: 1,
+                child: ColoredBox(color: color),
+              ),
+            ),
+          );
+          if (angosto) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: nombre),
+                    const SizedBox(width: 8),
+                    valor,
+                  ],
+                ),
+                const SizedBox(height: 4),
+                barra,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              SizedBox(width: 170, child: nombre),
+              const SizedBox(width: 8),
+              Expanded(child: barra),
+              const SizedBox(width: 12),
+              SizedBox(width: 52, child: valor),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -893,14 +1061,10 @@ class _ReportsPageState extends State<ReportsPage> {
                         DataCell(Text(item.producto)),
                         DataCell(Text(item.insumo)),
                         DataCell(
-                          Text(
-                            '${formatQty(item.requerido)} ${item.unidad}',
-                          ),
+                          Text('${formatQty(item.requerido)} ${item.unidad}'),
                         ),
                         DataCell(
-                          Text(
-                            '${formatQty(item.disponible)} ${item.unidad}',
-                          ),
+                          Text('${formatQty(item.disponible)} ${item.unidad}'),
                         ),
                         DataCell(
                           Text(

@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 13;
+  static const int schemaVersion = 14;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -67,11 +67,7 @@ class AppDatabase {
   /// Actualiza columnas de la fila única de metadatos.
   Future<void> actualizarAppMeta(Map<String, Object?> values) async {
     if (values.isEmpty) return;
-    await (await database).update(
-      'app_meta',
-      values,
-      where: 'id = 1',
-    );
+    await (await database).update('app_meta', values, where: 'id = 1');
   }
 
   Future<Database> _openDatabase() async {
@@ -620,6 +616,33 @@ class AppDatabase {
     );
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_detalle_componente ON detalle_pedido(pedido_id, es_componente)',
+    );
+
+    // Índices de la v14: aceleran el cálculo de stock de las vistas y los
+    // reportes sin modificar ninguna tabla ni dato existente.
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_pagos_pedido ON pagos(pedido_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_consumos_insumo ON consumos_insumo(insumo_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_detalle_compra_insumo ON detalle_compra(insumo_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_detalle_compra_producto ON detalle_compra(producto_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_detalle_producto ON detalle_pedido(producto_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_detalle_conteo_insumo ON detalle_conteo(insumo_id)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_faltantes_fecha ON faltantes_insumo(fecha)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_faltantes_pedido ON faltantes_insumo(pedido_id)',
     );
 
     batch.execute('''

@@ -49,15 +49,23 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
-  int _refreshToken = 0;
+  final Set<int> _visitados = <int>{0};
+  final Map<String, int> _tokens = <String, int>{};
+  int _generacion = 0;
   bool _flujoInicio = false;
+
+  int _token(String label) => (_tokens[label] ?? 0) + _generacion;
 
   @override
   void initState() {
     super.initState();
     unawaited(
       Future<void>(() async {
-        await Future<void>.delayed(const Duration(seconds: 3));
+        // Se deja pasar la primera carga de la pantalla antes de intentar el
+        // respaldo automático: copiar el archivo cierra la base unos instantes
+        // y no debe competir con el inicio de sesión.
+        await Future<void>.delayed(const Duration(seconds: 10));
+        if (!mounted) return;
         try {
           await DriveBackupService().respaldarSiCorresponde(motivo: 'inicio');
         } catch (_) {
@@ -70,13 +78,25 @@ class _AppShellState extends State<AppShell> {
   @override
   void didUpdateWidget(AppShell oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.usuario.id != widget.usuario.id) _index = 0;
+    if (oldWidget.usuario.id != widget.usuario.id) {
+      _index = 0;
+      _visitados
+        ..clear()
+        ..add(0);
+      _tokens.clear();
+      // Fuerza una recarga de la primera pantalla aunque su token fuera 0.
+      _generacion++;
+    }
   }
 
   void _seleccionar(int index) {
+    final destinations = _destinations();
+    if (index < 0 || index >= destinations.length) return;
+    final label = destinations[index].label;
     setState(() {
       _index = index;
-      _refreshToken++;
+      _visitados.add(index);
+      _tokens[label] = (_tokens[label] ?? 0) + 1;
     });
   }
 
@@ -142,7 +162,6 @@ class _AppShellState extends State<AppShell> {
 
   List<_Destination> _destinations() {
     final usuario = widget.usuario;
-    final token = _refreshToken;
     final destinations = <_Destination>[];
     if (usuario.puede(Permiso.tablero)) {
       destinations.add(
@@ -152,7 +171,7 @@ class _AppShellState extends State<AppShell> {
           selectedIcon: Icons.space_dashboard,
           page: DashboardPage(
             usuario: usuario,
-            refreshToken: token,
+            refreshToken: _token('Tablero'),
             onEmpezarDia: usuario.puede(Permiso.menu) ? _empezarDia : null,
           ),
         ),
@@ -166,7 +185,7 @@ class _AppShellState extends State<AppShell> {
           selectedIcon: Icons.point_of_sale,
           page: SalesPage(
             usuario: usuario,
-            refreshToken: token,
+            refreshToken: _token('Ventas'),
             onAbrirCaja: usuario.puede(Permiso.caja) ? _irACaja : null,
           ),
         ),
@@ -178,7 +197,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Caja',
           icon: Icons.account_balance_wallet_outlined,
           selectedIcon: Icons.account_balance_wallet,
-          page: CashPage(usuario: usuario, refreshToken: token),
+          page: CashPage(usuario: usuario, refreshToken: _token('Caja')),
         ),
       );
     }
@@ -190,7 +209,7 @@ class _AppShellState extends State<AppShell> {
           selectedIcon: Icons.restaurant_menu,
           page: MenuPage(
             usuario: usuario,
-            refreshToken: token,
+            refreshToken: _token('Menú del día'),
             onAbrirCaja: usuario.puede(Permiso.caja) ? _irACaja : null,
             flujoInicioActivo: _flujoInicio,
             onFinalizarAtajo: _finalizarAtajo,
@@ -204,7 +223,10 @@ class _AppShellState extends State<AppShell> {
           label: 'Productos',
           icon: Icons.lunch_dining_outlined,
           selectedIcon: Icons.lunch_dining,
-          page: ProductsPage(usuario: usuario, refreshToken: token),
+          page: ProductsPage(
+            usuario: usuario,
+            refreshToken: _token('Productos'),
+          ),
         ),
       );
     }
@@ -214,7 +236,10 @@ class _AppShellState extends State<AppShell> {
           label: 'Insumos',
           icon: Icons.inventory_2_outlined,
           selectedIcon: Icons.inventory_2,
-          page: InventoryPage(usuario: usuario, refreshToken: token),
+          page: InventoryPage(
+            usuario: usuario,
+            refreshToken: _token('Insumos'),
+          ),
         ),
       );
     }
@@ -224,7 +249,7 @@ class _AppShellState extends State<AppShell> {
           label: 'Usuarios',
           icon: Icons.manage_accounts_outlined,
           selectedIcon: Icons.manage_accounts,
-          page: UsersPage(usuario: usuario, refreshToken: token),
+          page: UsersPage(usuario: usuario, refreshToken: _token('Usuarios')),
         ),
       );
     }
@@ -234,11 +259,107 @@ class _AppShellState extends State<AppShell> {
           label: 'Reportes',
           icon: Icons.bar_chart_outlined,
           selectedIcon: Icons.bar_chart,
-          page: ReportsPage(refreshToken: token),
+          page: ReportsPage(refreshToken: _token('Reportes')),
         ),
       );
     }
     return destinations;
+  }
+
+  /// Accesos de sesión siempre visibles al pie del drawer. Antes quedaban
+  /// debajo de todas las secciones y en un teléfono no se veían sin desplazar.
+  Widget _drawerSesion(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const dorado = Color(0xFFE8C995);
+    const crema = Color(0xFFF3E9D9);
+
+    void cerrarY(VoidCallback accion) {
+      Navigator.pop(context);
+      accion();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            dense: true,
+            leading: CircleAvatar(
+              radius: 18,
+              backgroundColor: scheme.primaryContainer,
+              child: Text(
+                widget.usuario.inicial,
+                style: TextStyle(
+                  color: scheme.onPrimaryContainer,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            title: Text(
+              widget.usuario.nombre,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: crema, fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              widget.usuario.esAdmin ? 'Administrador' : 'Cajero',
+              style: const TextStyle(color: dorado),
+            ),
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.lock_reset_outlined),
+            title: const Text('Cambiar mi contraseña'),
+            iconColor: dorado,
+            textColor: crema,
+            onTap: () => cerrarY(_cambiarPassword),
+          ),
+          if (!widget.usuario.esAdmin)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: const Text('Ver como administrador'),
+              iconColor: dorado,
+              textColor: crema,
+              onTap: () => cerrarY(_verComoAdministrador),
+            )
+          else
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.switch_account_outlined),
+              title: const Text('Cambiar de usuario'),
+              iconColor: dorado,
+              textColor: crema,
+              onTap: () => cerrarY(_cambiarUsuario),
+            ),
+          if (widget.usuario.esAdmin)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.cloud_sync_outlined),
+              title: const Text('Respaldo y restauración'),
+              iconColor: dorado,
+              textColor: crema,
+              onTap: () => cerrarY(_abrirRespaldo),
+            ),
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.logout, color: scheme.error),
+            title: Text(
+              'Cerrar sesión',
+              style: TextStyle(
+                color: scheme.error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              widget.onLogout();
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -255,7 +376,16 @@ class _AppShellState extends State<AppShell> {
         final muyAngosto = constraints.maxWidth < 560;
         final body = IndexedStack(
           index: index,
-          children: destinations.map((item) => item.page).toList(),
+          children: [
+            for (var i = 0; i < destinations.length; i++)
+              // Solo se construye la pantalla cuando se visita por primera vez.
+              // Antes se inicializaban todas (y todas consultaban la base) al
+              // entrar al sistema, lo que hacía lento el inicio de sesión.
+              if (i == index || _visitados.contains(i))
+                destinations[i].page
+              else
+                const SizedBox.shrink(),
+          ],
         );
         final userMenu = PopupMenuButton<String>(
           tooltip: 'Sesión',
@@ -377,25 +507,30 @@ class _AppShellState extends State<AppShell> {
             title: Row(
               children: [
                 if (!wide) ...[
-                  Icon(
-                    Icons.restaurant_menu,
-                    color: scheme.primaryContainer,
-                  ),
+                  Icon(Icons.restaurant_menu, color: scheme.primaryContainer),
                   const SizedBox(width: 8),
                 ],
-                Text(
-                  appNombre,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFFF3E9D9), // Crema
+                Flexible(
+                  child: Text(
+                    appNombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFF3E9D9), // Crema
+                    ),
                   ),
                 ),
                 if (wide) ...[
                   const SizedBox(width: 10),
-                  Text(
-                    '· ${current.label}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: const Color(0xFFE8C995), // Dorado
+                  Flexible(
+                    child: Text(
+                      '· ${current.label}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFFE8C995), // Dorado
+                      ),
                     ),
                   ),
                 ],
@@ -407,8 +542,7 @@ class _AppShellState extends State<AppShell> {
               ? null
               : Drawer(
                   child: SafeArea(
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
                       children: [
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -434,62 +568,32 @@ class _AppShellState extends State<AppShell> {
                             ],
                           ),
                         ),
-                        for (var i = 0; i < destinations.length; i++)
-                          ListTile(
-                            leading: Icon(
-                              i == index
-                                  ? destinations[i].selectedIcon
-                                  : destinations[i].icon,
-                            ),
-                            title: Text(destinations[i].label),
-                            selected: i == index,
-                            iconColor: const Color(0xFFE8C995), // Dorado
-                            textColor: const Color(0xFFF3E9D9), // Crema
-                            selectedColor: const Color(0xFFE8C995),
-                            onTap: () {
-                              _seleccionar(i);
-                              Navigator.pop(context);
-                            },
+                        Expanded(
+                          child: ListView(
+                            padding: EdgeInsets.zero,
+                            children: [
+                              for (var i = 0; i < destinations.length; i++)
+                                ListTile(
+                                  leading: Icon(
+                                    i == index
+                                        ? destinations[i].selectedIcon
+                                        : destinations[i].icon,
+                                  ),
+                                  title: Text(destinations[i].label),
+                                  selected: i == index,
+                                  iconColor: const Color(0xFFE8C995), // Dorado
+                                  textColor: const Color(0xFFF3E9D9), // Crema
+                                  selectedColor: const Color(0xFFE8C995),
+                                  onTap: () {
+                                    _seleccionar(i);
+                                    Navigator.pop(context);
+                                  },
+                                ),
+                            ],
                           ),
-                        const Divider(),
-                        if (!widget.usuario.esAdmin)
-                          ListTile(
-                            leading: const Icon(
-                              Icons.admin_panel_settings_outlined,
-                            ),
-                            title: const Text('Ver como administrador'),
-                            iconColor: const Color(0xFFE8C995), // Dorado
-                            textColor: const Color(0xFFF3E9D9), // Crema
-                            onTap: () {
-                              Navigator.pop(context);
-                              _verComoAdministrador();
-                            },
-                          ),
-                        if (widget.usuario.esAdmin)
-                          ListTile(
-                            leading: const Icon(Icons.switch_account_outlined),
-                            title: const Text('Cambiar de usuario'),
-                            iconColor: const Color(0xFFE8C995), // Dorado
-                            textColor: const Color(0xFFF3E9D9), // Crema
-                            onTap: () {
-                              Navigator.pop(context);
-                              _cambiarUsuario();
-                            },
-                          ),
-                        ListTile(
-                          leading: Icon(Icons.logout, color: scheme.error),
-                          title: Text(
-                            'Cerrar sesión',
-                            style: TextStyle(
-                              color: scheme.error,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          onTap: () {
-                            Navigator.pop(context);
-                            widget.onLogout();
-                          },
                         ),
+                        const Divider(),
+                        _drawerSesion(context),
                       ],
                     ),
                   ),
@@ -500,6 +604,7 @@ class _AppShellState extends State<AppShell> {
                     NavigationRail(
                       extended: extended,
                       minExtendedWidth: 210,
+                      minWidth: 92,
                       selectedIndex: index,
                       onDestinationSelected: (value) => _seleccionar(value),
                       leading: Padding(
@@ -541,6 +646,76 @@ class _AppShellState extends State<AppShell> {
                             ),
                           )
                           .toList(),
+                      // Accesos de sesión al pie del rail, visibles también en
+                      // tablet (donde no hay drawer).
+                      trailing: Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (extended) ...[
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 190,
+                                ),
+                                child: Text(
+                                  widget.usuario.nombre,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(0xFFF3E9D9),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                widget.usuario.esAdmin
+                                    ? 'Administrador'
+                                    : 'Cajero',
+                                style: const TextStyle(
+                                  color: Color(0xFFE8C995),
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                            ],
+                            IconButton(
+                              tooltip: widget.usuario.esAdmin
+                                  ? 'Cambiar de usuario'
+                                  : 'Ver como administrador',
+                              onPressed: widget.usuario.esAdmin
+                                  ? _cambiarUsuario
+                                  : _verComoAdministrador,
+                              icon: Icon(
+                                widget.usuario.esAdmin
+                                    ? Icons.switch_account_outlined
+                                    : Icons.admin_panel_settings_outlined,
+                              ),
+                              color: const Color(0xFFE8C995),
+                            ),
+                            IconButton(
+                              tooltip: 'Cambiar mi contraseña',
+                              onPressed: _cambiarPassword,
+                              icon: const Icon(Icons.lock_reset_outlined),
+                              color: const Color(0xFFE8C995),
+                            ),
+                            if (widget.usuario.esAdmin)
+                              IconButton(
+                                tooltip: 'Respaldo y restauración',
+                                onPressed: _abrirRespaldo,
+                                icon: const Icon(Icons.cloud_sync_outlined),
+                                color: const Color(0xFFE8C995),
+                              ),
+                            IconButton(
+                              tooltip: 'Cerrar sesión',
+                              onPressed: widget.onLogout,
+                              icon: const Icon(Icons.logout),
+                              color: scheme.error,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                     const VerticalDivider(width: 1),
                     Expanded(child: body),

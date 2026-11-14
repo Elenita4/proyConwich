@@ -53,10 +53,22 @@ class ReportExporter {
     final doc = pw.Document();
     final productos = [...data.productos]
       ..sort((a, b) => b.ventas.compareTo(a.ventas));
-    final top = productos.take(10).toList();
+    final topIngresos = productos.take(10).toList();
+    final topCantidad = [
+      ...data.productos.where((producto) => producto.cantidad > 0),
+    ]..sort((a, b) => b.cantidad.compareTo(a.cantidad));
+    final topCantidad10 = topCantidad.take(10).toList();
+    final maxIngresos = topIngresos.isEmpty || topIngresos.first.ventas <= 0
+        ? 1.0
+        : topIngresos.first.ventas;
+    final maxCantidad =
+        topCantidad10.isEmpty || topCantidad10.first.cantidad <= 0
+        ? 1.0
+        : topCantidad10.first.cantidad;
     final resumen = data.resumen;
     final scheme = PdfColor.fromHex('#70452D');
     final acento = PdfColor.fromHex('#C18A55');
+    final verde = PdfColor.fromHex('#16A34A');
     final suave = PdfColor.fromHex('#F3E9D9');
     final gris = PdfColor.fromHex('#574537');
     final blanco = PdfColor.fromHex('#FFF9F0');
@@ -83,8 +95,15 @@ class ReportExporter {
       ),
     );
 
-    pw.Widget barra(ProductoReporte producto, double maximo) {
-      final proporcion = maximo <= 0 ? 0.0 : producto.ventas / maximo;
+    pw.Widget barra({
+      required ProductoReporte producto,
+      required double valor,
+      required double maximo,
+      required String textoValor,
+      required String textoExtra,
+      required PdfColor color,
+    }) {
+      final proporcion = maximo <= 0 ? 0.0 : valor / maximo;
       return pw.Padding(
         padding: const pw.EdgeInsets.only(bottom: 5),
         child: pw.Row(
@@ -107,7 +126,7 @@ class ReportExporter {
                     width: 250 * proporcion,
                     height: 9,
                     decoration: pw.BoxDecoration(
-                      color: acento,
+                      color: color,
                       borderRadius: pw.BorderRadius.circular(4),
                     ),
                   ),
@@ -115,15 +134,9 @@ class ReportExporter {
               ),
             ),
             pw.SizedBox(width: 8),
-            pw.Text(
-              formatMoney(producto.ventas),
-              style: const pw.TextStyle(fontSize: 8),
-            ),
+            pw.Text(textoValor, style: const pw.TextStyle(fontSize: 8)),
             pw.SizedBox(width: 6),
-            pw.Text(
-              '(${_qty(producto.cantidad)})',
-              style: pw.TextStyle(fontSize: 8, color: gris),
-            ),
+            pw.Text(textoExtra, style: pw.TextStyle(fontSize: 8, color: gris)),
           ],
         ),
       );
@@ -185,7 +198,10 @@ class ReportExporter {
               pw.Expanded(child: dato('Pedidos', '${resumen.pedidos}')),
               pw.SizedBox(width: 8),
               pw.Expanded(
-                child: dato('Ticket promedio', formatMoney(resumen.ticketPromedio)),
+                child: dato(
+                  'Ticket promedio',
+                  formatMoney(resumen.ticketPromedio),
+                ),
               ),
             ],
           ),
@@ -193,17 +209,24 @@ class ReportExporter {
           pw.Row(
             children: [
               pw.Expanded(
-                child: dato('Cobros en efectivo', formatMoney(resumen.cobrosEfectivo)),
+                child: dato(
+                  'Cobros en efectivo',
+                  formatMoney(resumen.cobrosEfectivo),
+                ),
               ),
               pw.SizedBox(width: 8),
-              pw.Expanded(child: dato('Cobros QR', formatMoney(resumen.cobrosQr))),
+              pw.Expanded(
+                child: dato('Cobros QR', formatMoney(resumen.cobrosQr)),
+              ),
               pw.SizedBox(width: 8),
-              pw.Expanded(child: dato('Ganancia', formatMoney(resumen.ganancia))),
+              pw.Expanded(
+                child: dato('Ganancia', formatMoney(resumen.ganancia)),
+              ),
             ],
           ),
           pw.SizedBox(height: 18),
           pw.Text(
-            'Productos más vendidos',
+            'Productos con más ingresos',
             style: pw.TextStyle(
               fontSize: 13,
               fontWeight: pw.FontWeight.bold,
@@ -211,13 +234,46 @@ class ReportExporter {
             ),
           ),
           pw.SizedBox(height: 8),
-          if (top.isEmpty)
-            pw.Text('Sin ventas en el período.', style: const pw.TextStyle(fontSize: 9))
+          if (topIngresos.isEmpty)
+            pw.Text(
+              'Sin ventas en el período.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
           else
-            ...top.map(
+            ...topIngresos.map(
               (producto) => barra(
-                producto,
-                top.first.ventas <= 0 ? 1 : top.first.ventas,
+                producto: producto,
+                valor: producto.ventas,
+                maximo: maxIngresos,
+                textoValor: formatMoney(producto.ventas),
+                textoExtra: '(${_qty(producto.cantidad)})',
+                color: acento,
+              ),
+            ),
+          pw.SizedBox(height: 16),
+          pw.Text(
+            'Productos más vendidos por cantidad',
+            style: pw.TextStyle(
+              fontSize: 13,
+              fontWeight: pw.FontWeight.bold,
+              color: scheme,
+            ),
+          ),
+          pw.SizedBox(height: 8),
+          if (topCantidad10.isEmpty)
+            pw.Text(
+              'Sin cantidades en el período.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
+          else
+            ...topCantidad10.map(
+              (producto) => barra(
+                producto: producto,
+                valor: producto.cantidad,
+                maximo: maxCantidad,
+                textoValor: '${_qty(producto.cantidad)} unid.',
+                textoExtra: formatMoney(producto.ventas),
+                color: verde,
               ),
             ),
           pw.SizedBox(height: 16),
@@ -278,10 +334,20 @@ class ReportExporter {
           ),
           pw.SizedBox(height: 8),
           if (data.salidas.isEmpty)
-            pw.Text('Sin salidas registradas.', style: const pw.TextStyle(fontSize: 9))
+            pw.Text(
+              'Sin salidas registradas.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
           else
             pw.TableHelper.fromTextArray(
-              headers: const ['Fecha', 'Detalle', 'Método', 'Cajero', 'Turno', 'Monto'],
+              headers: const [
+                'Fecha',
+                'Detalle',
+                'Método',
+                'Cajero',
+                'Turno',
+                'Monto',
+              ],
               data: data.salidas
                   .map(
                     (salida) => [
@@ -314,7 +380,10 @@ class ReportExporter {
           ),
           pw.SizedBox(height: 8),
           if (data.pedidos.isEmpty)
-            pw.Text('Sin pedidos en el período.', style: const pw.TextStyle(fontSize: 9))
+            pw.Text(
+              'Sin pedidos en el período.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
           else
             pw.TableHelper.fromTextArray(
               headers: const [
@@ -507,6 +576,13 @@ class ReportExporter {
       pedidos.setColumnWidth(i, 20);
     }
 
+    final estiloBarra = CellStyle(
+      backgroundColorHex: ExcelColor.fromHexString('FFC18A55'),
+    );
+    final estiloBarraCantidad = CellStyle(
+      backgroundColorHex: ExcelColor.fromHexString('FF16A34A'),
+    );
+
     final grafico = excel['Gráfico'];
     grafico.appendRow([
       TextCellValue('Producto'),
@@ -517,9 +593,6 @@ class ReportExporter {
     final top = [...data.productos]
       ..sort((a, b) => b.ventas.compareTo(a.ventas));
     final maximo = top.isEmpty ? 1.0 : top.first.ventas;
-    final estiloBarra = CellStyle(
-      backgroundColorHex: ExcelColor.fromHexString('FFC18A55'),
-    );
     for (final producto in top.take(10)) {
       final fila = grafico.maxRows;
       final bloques = maximo <= 0
@@ -542,6 +615,42 @@ class ReportExporter {
     grafico.setColumnWidth(0, 28);
     grafico.setColumnWidth(1, 14);
     grafico.setColumnWidth(2, 12);
+
+    final graficoCantidades = excel['Gráfico cantidades'];
+    graficoCantidades.appendRow([
+      TextCellValue('Producto'),
+      TextCellValue('Cantidad'),
+      TextCellValue('Ventas'),
+      TextCellValue(''),
+    ]);
+    final topCantidad = [
+      ...data.productos.where((producto) => producto.cantidad > 0),
+    ]..sort((a, b) => b.cantidad.compareTo(a.cantidad));
+    final maximoCantidad = topCantidad.isEmpty
+        ? 1.0
+        : topCantidad.first.cantidad;
+    for (final producto in topCantidad.take(10)) {
+      final fila = graficoCantidades.maxRows;
+      final bloques = maximoCantidad <= 0
+          ? 0
+          : ((producto.cantidad / maximoCantidad) * 20).round();
+      graficoCantidades.appendRow([
+        TextCellValue(producto.nombre),
+        DoubleCellValue(producto.cantidad),
+        DoubleCellValue(producto.ventas),
+        TextCellValue(''),
+      ]);
+      for (var i = 0; i < bloques; i++) {
+        graficoCantidades.updateCell(
+          CellIndex.indexByColumnRow(columnIndex: 3 + i, rowIndex: fila),
+          TextCellValue(' '),
+          cellStyle: estiloBarraCantidad,
+        );
+      }
+    }
+    graficoCantidades.setColumnWidth(0, 28);
+    graficoCantidades.setColumnWidth(1, 12);
+    graficoCantidades.setColumnWidth(2, 14);
 
     final faltantes = excel['Faltantes'];
     faltantes.appendRow([
@@ -588,10 +697,7 @@ class ReportExporter {
     return uri != null;
   }
 
-  Future<void> compartirExcel(
-    Uint8List bytes, {
-    required String nombre,
-  }) async {
+  Future<void> compartirExcel(Uint8List bytes, {required String nombre}) async {
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile.fromData(bytes, mimeType: _excelMime, name: nombre)],

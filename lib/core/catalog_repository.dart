@@ -766,23 +766,27 @@ class CatalogRepository {
     return rows.isEmpty ? 0 : (rows.first['stock'] as num).toDouble();
   }
 
-  Future<String?> motivoNoDisponible(int productoId, double cantidad) =>
-      _motivoNoDisponible(productoId, cantidad, <int>{});
+  Future<String?> motivoNoDisponible(
+    int productoId,
+    double cantidad, {
+    Producto? producto,
+  }) => _motivoNoDisponible(productoId, cantidad, <int>{}, producto: producto);
 
   Future<String?> _motivoNoDisponible(
     int productoId,
     double cantidad,
-    Set<int> visitados,
-  ) async {
+    Set<int> visitados, {
+    Producto? producto,
+  }) async {
     if (!visitados.add(productoId)) return null;
-    final producto = await getProducto(productoId);
-    if (producto == null || !producto.activo) return 'Producto inactivo';
-    if (producto.esDirecto) {
-      if (producto.stock < cantidad) {
-        return 'Sin stock (quedan ${producto.stock.toStringAsFixed(0)})';
+    final actual = producto ?? await getProducto(productoId);
+    if (actual == null || !actual.activo) return 'Producto inactivo';
+    if (actual.esDirecto) {
+      if (actual.stock < cantidad) {
+        return 'Sin stock (quedan ${actual.stock.toStringAsFixed(0)})';
       }
     }
-    if (producto.esCompuesto) {
+    if (actual.esCompuesto) {
       for (final componente in await getComponentes(productoId)) {
         final motivo = await _motivoNoDisponible(
           componente.componenteId,
@@ -799,10 +803,15 @@ class CatalogRepository {
 
   /// Aviso no bloqueante cuando un producto con receta no tiene insumos
   /// suficientes. Los productos sin receta no generan advertencias.
-  Future<String?> advertenciaInsumos(int productoId, double cantidad) async {
-    final producto = await getProducto(productoId);
-    if (producto == null) return null;
-    if (producto.esCompuesto) {
+  /// Se puede pasar el producto ya cargado para evitar otra consulta.
+  Future<String?> advertenciaInsumos(
+    int productoId,
+    double cantidad, {
+    Producto? producto,
+  }) async {
+    final actual = producto ?? await getProducto(productoId);
+    if (actual == null) return null;
+    if (actual.esCompuesto) {
       final faltantes = <String>[];
       for (final componente in await getComponentes(productoId)) {
         final aviso = await advertenciaInsumos(

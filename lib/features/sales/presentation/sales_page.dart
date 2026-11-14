@@ -107,6 +107,7 @@ class _SalesPageState extends State<SalesPage> {
   String? _categoria;
   int? _pedidoEditandoId;
   bool _saving = false;
+  bool _mostrarFueraMenu = false;
 
   @override
   void initState() {
@@ -145,8 +146,16 @@ class _SalesPageState extends State<SalesPage> {
         : <MenuCombo>[];
 
     final productos = <int, _SaleProduct>{};
+    // Se carga una sola vez el catálogo activo y se reutiliza para los combos,
+    // los platos del menú y los productos fuera del menú. Antes se hacía una
+    // consulta individual por cada producto.
+    final activos = await _catalogRepository.getProductos(soloActivos: true);
+    final productoPorId = <int, Producto>{
+      for (final producto in activos)
+        if (producto.id != null) producto.id!: producto,
+    };
     for (final combo in combos) {
-      final producto = await _catalogRepository.getProducto(combo.productoId);
+      final producto = productoPorId[combo.productoId];
       productos[combo.productoId] = _SaleProduct(
         productoId: combo.productoId,
         menuDiaComboId: combo.id,
@@ -163,10 +172,11 @@ class _SalesPageState extends State<SalesPage> {
       );
     }
     for (final item in menuItems) {
-      final producto = await _catalogRepository.getProducto(item.productoId);
+      final producto = productoPorId[item.productoId];
       final advertencia = await _catalogRepository.advertenciaInsumos(
         item.productoId,
         1,
+        producto: producto,
       );
       productos[item.productoId] = _SaleProduct(
         productoId: item.productoId,
@@ -188,21 +198,27 @@ class _SalesPageState extends State<SalesPage> {
     // Productos activos que no están en el menú: se muestran al final, en gris.
     // Los de categorías "siempre disponibles" (venta directa) se pueden vender
     // aunque no estén en el menú del día.
-    final activos = await _catalogRepository.getProductos(soloActivos: true);
     for (final producto in activos) {
       if (productos.containsKey(producto.id)) continue;
+      // Los combos de días anteriores no se venden sueltos.
+      if (producto.esCompuesto) continue;
       final siempre =
           producto.categoriaSiempreDisponible || producto.esVentaDirecta;
       String? motivo;
       String? advertencia;
       var disponible = false;
       if (siempre) {
-        motivo = await _catalogRepository.motivoNoDisponible(producto.id!, 1);
+        motivo = await _catalogRepository.motivoNoDisponible(
+          producto.id!,
+          1,
+          producto: producto,
+        );
         disponible = motivo == null;
         if (disponible) {
           advertencia = await _catalogRepository.advertenciaInsumos(
             producto.id!,
             1,
+            producto: producto,
           );
         }
       }
@@ -530,7 +546,11 @@ class _SalesPageState extends State<SalesPage> {
     if (comboId != null) {
       await _menuRepository.setComboDisponible(comboId, false);
     } else {
-      await _menuRepository.setDisponible(menuItemId!, false, motivo: 'Agotado');
+      await _menuRepository.setDisponible(
+        menuItemId!,
+        false,
+        motivo: 'Agotado',
+      );
     }
     if (!mounted) return;
     setState(_reload);
@@ -657,11 +677,12 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   Widget _filtros(BuildContext context, _SalesData data) {
-    final categorias = data.productos
-        .map((producto) => producto.categoriaNombre)
-        .toSet()
-        .toList()
-      ..sort();
+    final categorias =
+        data.productos
+            .map((producto) => producto.categoriaNombre)
+            .toSet()
+            .toList()
+          ..sort();
     return AppCard(
       padding: const EdgeInsets.all(12),
       child: Wrap(
@@ -711,6 +732,22 @@ class _SalesPageState extends State<SalesPage> {
         message: 'Crea productos activos en Productos y publícalos en el Menú del día.',
       );
     }
+
+    final enMenu = filtrados.where((producto) => producto.enMenu).toList();
+    final fueraMenu = filtrados.where((producto) => !producto.enMenu).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (enMenu.isNotEmpty) _gridProductos(context, enMenu),
+        if (fueraMenu.isNotEmpty) ...[
+          if (enMenu.isNotEmpty) const SizedBox(height: 16),
+          _fueraDelMenu(context, fueraMenu),
+        ],
+      ],
+    );
+  }
+
+  Widget _gridProductos(BuildContext context, List<_SaleProduct> productos) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = constraints.maxWidth >= 900
@@ -722,7 +759,7 @@ class _SalesPageState extends State<SalesPage> {
         return Wrap(
           spacing: 12,
           runSpacing: 12,
-          children: filtrados.map((producto) {
+          children: productos.map((producto) {
             final cantidad = _cart[producto.productoId]?.cantidad.round() ?? 0;
             return SizedBox(
               width: width,
@@ -758,6 +795,46 @@ class _SalesPageState extends State<SalesPage> {
           }).toList(),
         );
       },
+    );
+  }
+
+  /// Sección colapsable con los productos activos que no se eligieron para el
+  /// menú de hoy. No se pueden vender y quedan ocultos por defecto.
+  Widget _fueraDelMenu(BuildContext context, List<_SaleProduct> productos) {
+    final scheme = Theme.of(context).colorScheme;
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            leading: Icon(
+              Icons.visibility_off_outlined,
+              color: scheme.onSurfaceVariant,
+            ),
+            title: const Text(
+              'Productos fuera del menú de hoy',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${productos.length} producto(s) no seleccionado(s). No se pueden vender.',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+            trailing: Icon(
+              _mostrarFueraMenu ? Icons.expand_less : Icons.expand_more,
+            ),
+            onTap: () => setState(() => _mostrarFueraMenu = !_mostrarFueraMenu),
+          ),
+          if (_mostrarFueraMenu)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: _gridProductos(context, productos),
+            ),
+        ],
+      ),
     );
   }
 
@@ -1323,21 +1400,23 @@ class _PedidoDetalleDialog extends StatelessWidget {
                     ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
-              ...detalle.lineas.where((linea) => !linea.esComponente).map(
-                (linea) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${formatQty(linea.cantidad)} × ${linea.nombre}',
-                        ),
+              ...detalle.lineas
+                  .where((linea) => !linea.esComponente)
+                  .map(
+                    (linea) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${formatQty(linea.cantidad)} × ${linea.nombre}',
+                            ),
+                          ),
+                          Text(formatMoney(linea.subtotal)),
+                        ],
                       ),
-                      Text(formatMoney(linea.subtotal)),
-                    ],
+                    ),
                   ),
-                ),
-              ),
               const Divider(height: 22),
               Text(
                 'Pagos',
