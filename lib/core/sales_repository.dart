@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 import '../data/database/app_database.dart';
 import 'catalog_repository.dart';
 import 'date_utils.dart';
+import 'menu_repository.dart';
 
 class PagoInput {
   const PagoInput({required this.metodo, required this.monto, this.referencia});
@@ -23,6 +24,13 @@ class CartLine {
     this.observacion,
     this.tipo = 'PREPARADO',
     this.costoUnitario = 0,
+    this.modalidadVenta = 'NORMAL',
+    this.productoSopaId,
+    this.menuDiaSopaItemId,
+    this.nombreSopa,
+    this.precioSopaUnitario = 0,
+    this.costoSopaUnitario = 0,
+    this.tipoSopa,
   });
 
   final int productoId;
@@ -34,8 +42,16 @@ class CartLine {
   final String? observacion;
   final String tipo;
   final double costoUnitario;
+  final String modalidadVenta;
+  final int? productoSopaId;
+  final int? menuDiaSopaItemId;
+  final String? nombreSopa;
+  final double precioSopaUnitario;
+  final double costoSopaUnitario;
+  final String? tipoSopa;
 
   double get subtotal => precio * cantidad;
+  String get key => '${productoId}_${modalidadVenta}_${productoSopaId ?? 0}';
 
   CartLine copyWith({double? cantidad, String? observacion}) => CartLine(
     productoId: productoId,
@@ -47,6 +63,13 @@ class CartLine {
     observacion: observacion ?? this.observacion,
     tipo: tipo,
     costoUnitario: costoUnitario,
+    modalidadVenta: modalidadVenta,
+    productoSopaId: productoSopaId,
+    menuDiaSopaItemId: menuDiaSopaItemId,
+    nombreSopa: nombreSopa,
+    precioSopaUnitario: precioSopaUnitario,
+    costoSopaUnitario: costoSopaUnitario,
+    tipoSopa: tipoSopa,
   );
 }
 
@@ -93,6 +116,9 @@ class PedidoLinea {
     required this.subtotal,
     this.observacion,
     this.esComponente = false,
+    this.modalidadVenta = 'NORMAL',
+    this.nombreSopa,
+    this.precioSopaUnitario = 0,
   });
 
   final int id;
@@ -104,6 +130,13 @@ class PedidoLinea {
   final double subtotal;
   final String? observacion;
   final bool esComponente;
+  final String modalidadVenta;
+  final String? nombreSopa;
+  final double precioSopaUnitario;
+
+  String get nombreParaMostrar => modalidadVenta == 'COMPLETO'
+      ? '$nombre completo · incluye ${nombreSopa ?? 'sopa'}'
+      : nombre;
 }
 
 class Pago {
@@ -210,10 +243,14 @@ class SalesRepository {
               nombre: row['nombre_producto']! as String,
               cantidad: (row['cantidad'] as num).toDouble(),
               precioUnitario: (row['precio_unitario'] as num).toDouble(),
-               subtotal: (row['subtotal'] as num).toDouble(),
-               observacion: row['observacion'] as String?,
-               esComponente: (row['es_componente'] as num?)?.toInt() == 1,
-             ),
+              subtotal: (row['subtotal'] as num).toDouble(),
+              observacion: row['observacion'] as String?,
+              esComponente: (row['es_componente'] as num?)?.toInt() == 1,
+              modalidadVenta: (row['modalidad_venta'] as String?) ?? 'NORMAL',
+              nombreSopa: row['nombre_sopa'] as String?,
+              precioSopaUnitario:
+                  (row['precio_sopa_unitario'] as num?)?.toDouble() ?? 0,
+            ),
           )
           .toList(),
       pagos: pagos
@@ -274,28 +311,12 @@ class SalesRepository {
         'total': total,
         'observacion': _limpiar(observacion),
       });
-      for (final linea in resueltas) {
-        final detalleId = await txn.insert('detalle_pedido', {
-          'pedido_id': pedidoId,
-          'producto_id': linea.productoId,
-          'menu_dia_item_id': linea.menuDiaItemId,
-          'nombre_producto': linea.nombre,
-          'cantidad': linea.cantidad,
-          'precio_unitario': linea.precio,
-          'subtotal': linea.subtotal,
-          'costo_unitario': linea.costoUnitario,
-          'es_componente': 0,
-          'observacion': _limpiar(linea.observacion),
-        });
-        await _consumirProducto(
-          txn,
-          productoId: linea.productoId,
-          cantidad: linea.cantidad,
-          pedidoId: pedidoId,
-          detalleId: detalleId,
-          fecha: ahora,
-        );
-      }
+      await _insertarLineasYConsumir(
+        txn,
+        pedidoId: pedidoId,
+        lineas: resueltas,
+        fecha: ahora,
+      );
       for (final pago in pagosValidos) {
         await txn.insert('pagos', {
           'pedido_id': pedidoId,
@@ -310,6 +331,67 @@ class SalesRepository {
       }
       return pedidoId;
     });
+  }
+
+  Future<void> _insertarLineasYConsumir(
+    DatabaseExecutor txn, {
+    required int pedidoId,
+    required List<CartLine> lineas,
+    required String fecha,
+  }) async {
+    for (final linea in lineas) {
+      final detalleId = await txn.insert('detalle_pedido', {
+        'pedido_id': pedidoId,
+        'producto_id': linea.productoId,
+        'menu_dia_item_id': linea.menuDiaItemId,
+        'nombre_producto': linea.nombre,
+        'cantidad': linea.cantidad,
+        'precio_unitario': linea.precio,
+        'subtotal': linea.subtotal,
+        'costo_unitario': linea.costoUnitario,
+        'es_componente': 0,
+        'modalidad_venta': linea.modalidadVenta,
+        'producto_sopa_id': linea.productoSopaId,
+        'menu_dia_sopa_item_id': linea.menuDiaSopaItemId,
+        'nombre_sopa': linea.nombreSopa,
+        'precio_sopa_unitario': linea.precioSopaUnitario,
+        'costo_sopa_unitario': linea.costoSopaUnitario,
+        'observacion': _limpiar(linea.observacion),
+      });
+      await _consumirProducto(
+        txn,
+        productoId: linea.productoId,
+        cantidad: linea.cantidad,
+        pedidoId: pedidoId,
+        detalleId: detalleId,
+        fecha: fecha,
+      );
+      if (linea.modalidadVenta != 'COMPLETO' ||
+          linea.productoSopaId == null ||
+          linea.nombreSopa == null) {
+        continue;
+      }
+      final detalleSopaId = await txn.insert('detalle_pedido', {
+        'pedido_id': pedidoId,
+        'producto_id': linea.productoSopaId,
+        'menu_dia_item_id': linea.menuDiaSopaItemId,
+        'nombre_producto': linea.nombreSopa,
+        'cantidad': linea.cantidad,
+        'precio_unitario': 0,
+        'subtotal': 0,
+        'costo_unitario': linea.costoSopaUnitario,
+        'es_componente': 1,
+        'modalidad_venta': 'SOPA_INCLUIDA',
+      });
+      await _consumirProducto(
+        txn,
+        productoId: linea.productoSopaId!,
+        cantidad: linea.cantidad,
+        pedidoId: pedidoId,
+        detalleId: detalleSopaId,
+        fecha: fecha,
+      );
+    }
   }
 
   Future<void> agregarLineas(
@@ -330,28 +412,12 @@ class SalesRepository {
     );
     final ahora = sqlNow();
     await db.transaction((txn) async {
-      for (final linea in resueltas) {
-        final detalleId = await txn.insert('detalle_pedido', {
-          'pedido_id': pedidoId,
-          'producto_id': linea.productoId,
-          'menu_dia_item_id': linea.menuDiaItemId,
-          'nombre_producto': linea.nombre,
-          'cantidad': linea.cantidad,
-          'precio_unitario': linea.precio,
-          'subtotal': linea.subtotal,
-          'costo_unitario': linea.costoUnitario,
-          'es_componente': 0,
-          'observacion': _limpiar(linea.observacion),
-        });
-        await _consumirProducto(
-          txn,
-          productoId: linea.productoId,
-          cantidad: linea.cantidad,
-          pedidoId: pedidoId,
-          detalleId: detalleId,
-          fecha: ahora,
-        );
-      }
+      await _insertarLineasYConsumir(
+        txn,
+        pedidoId: pedidoId,
+        lineas: resueltas,
+        fecha: ahora,
+      );
       final nuevoTotal = pedido.total + adicional;
       await txn.update(
         'pedidos',
@@ -497,6 +563,83 @@ class SalesRepository {
         );
         continue;
       }
+      if (linea.modalidadVenta == 'COMPLETO') {
+        if (linea.menuDiaItemId == null ||
+            linea.menuDiaSopaItemId == null ||
+            linea.productoSopaId == null) {
+          throw StateError(
+            'El completo debe incluir el plato y la sopa de hoy.',
+          );
+        }
+        final platoRows = await db.rawQuery(
+          '''
+          SELECT mi.menu_dia_id, mi.disponible,
+                 p.nombre, p.precio, p.tipo, p.costo_unitario, p.activo,
+                 c.nombre AS categoria_nombre
+          FROM menu_dia_items mi
+          INNER JOIN productos p ON p.id = mi.producto_id
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE mi.id = ? AND mi.producto_id = ?
+          LIMIT 1
+          ''',
+          [linea.menuDiaItemId, linea.productoId],
+        );
+        if (platoRows.isEmpty ||
+            (platoRows.first['disponible'] as num).toInt() != 1 ||
+            (platoRows.first['activo'] as num).toInt() != 1) {
+          throw StateError('El plato ya no está disponible en el menú de hoy.');
+        }
+        if (!MenuRepository.esCategoriaPlatoSuelto(
+          platoRows.first['categoria_nombre'] as String,
+        )) {
+          throw StateError(
+            'Solo los platos de PLATOS SUELTOS pueden venderse como completos.',
+          );
+        }
+        final sopaRows = await db.rawQuery(
+          '''
+          SELECT mi.menu_dia_id, mi.disponible,
+                 p.nombre, p.precio, p.tipo, p.costo_unitario, p.activo
+          FROM menu_dia_items mi
+          INNER JOIN productos p ON p.id = mi.producto_id
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE mi.id = ? AND mi.producto_id = ?
+            AND UPPER(TRIM(c.nombre)) = 'SOPAS'
+          LIMIT 1
+          ''',
+          [linea.menuDiaSopaItemId, linea.productoSopaId],
+        );
+        if (sopaRows.isEmpty ||
+            sopaRows.first['menu_dia_id'] != platoRows.first['menu_dia_id'] ||
+            (sopaRows.first['disponible'] as num).toInt() != 1 ||
+            (sopaRows.first['activo'] as num).toInt() != 1) {
+          throw StateError('La sopa del completo ya no está disponible hoy.');
+        }
+        final plato = platoRows.first;
+        final sopa = sopaRows.first;
+        final precioPlato = (plato['precio'] as num).toDouble();
+        final precioSopa = (sopa['precio'] as num).toDouble();
+        result.add(
+          CartLine(
+            productoId: linea.productoId,
+            menuDiaItemId: linea.menuDiaItemId,
+            nombre: plato['nombre']! as String,
+            precio: precioPlato + precioSopa,
+            cantidad: linea.cantidad,
+            observacion: linea.observacion,
+            tipo: plato['tipo']! as String,
+            costoUnitario: (plato['costo_unitario'] as num).toDouble(),
+            modalidadVenta: 'COMPLETO',
+            productoSopaId: linea.productoSopaId,
+            menuDiaSopaItemId: linea.menuDiaSopaItemId,
+            nombreSopa: sopa['nombre']! as String,
+            precioSopaUnitario: precioSopa,
+            costoSopaUnitario: (sopa['costo_unitario'] as num).toDouble(),
+            tipoSopa: sopa['tipo']! as String,
+          ),
+        );
+        continue;
+      }
       final rows = await db.query(
         'productos',
         columns: ['nombre', 'precio', 'tipo', 'costo_unitario', 'activo'],
@@ -534,6 +677,7 @@ class SalesRepository {
           observacion: linea.observacion,
           tipo: row['tipo']! as String,
           costoUnitario: (row['costo_unitario'] as num).toDouble(),
+          modalidadVenta: linea.modalidadVenta,
         ),
       );
     }
@@ -548,14 +692,26 @@ class SalesRepository {
         (value) => value + linea.cantidad,
         ifAbsent: () => linea.cantidad,
       );
+      if (linea.modalidadVenta == 'COMPLETO' && linea.productoSopaId != null) {
+        cantidades.update(
+          linea.productoSopaId!,
+          (value) => value + linea.cantidad,
+          ifAbsent: () => linea.cantidad,
+        );
+      }
     }
     final catalog = CatalogRepository();
     for (final entry in cantidades.entries) {
       final motivo = await catalog.motivoNoDisponible(entry.key, entry.value);
       if (motivo != null) {
-        final nombre = lineas
-            .firstWhere((linea) => linea.productoId == entry.key)
-            .nombre;
+        final lineaAfectada = lineas.firstWhere(
+          (linea) =>
+              linea.productoId == entry.key ||
+              linea.productoSopaId == entry.key,
+        );
+        final nombre = lineaAfectada.productoId == entry.key
+            ? lineaAfectada.nombre
+            : lineaAfectada.nombreSopa ?? lineaAfectada.nombre;
         throw StateError('$nombre: $motivo');
       }
     }

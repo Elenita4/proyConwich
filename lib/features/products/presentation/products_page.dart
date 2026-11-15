@@ -274,8 +274,7 @@ class _ProductsPageState extends State<ProductsPage> {
                     child: _ProductRow(
                       producto: producto,
                       onEdit: () => _openForm(producto),
-                      onRecipe:
-                          producto.esVentaDirecta || producto.esCompuesto
+                      onRecipe: producto.esVentaDirecta || producto.esCompuesto
                           ? null
                           : () => _openRecipe(producto),
                       onAjustarStock: producto.esDirecto
@@ -811,6 +810,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                     Expanded(
                       child: TextFormField(
                         controller: _precio,
+                        inputFormatters: [decimalAmountInputFormatter],
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
@@ -818,12 +818,11 @@ class _ProductDialogState extends State<_ProductDialog> {
                           label: 'Precio de venta (Bs)',
                           icon: Icons.sell_outlined,
                         ),
-                        validator: (value) {
-                          if (parseAmount(value ?? '') < 0) {
-                            return 'Precio inválido';
-                          }
-                          return null;
-                        },
+                        validator: (value) => validateDecimalAmount(
+                          value,
+                          allowZero: false,
+                          label: 'El precio de venta',
+                        ),
                       ),
                     ),
                     if (directo) ...[
@@ -831,12 +830,17 @@ class _ProductDialogState extends State<_ProductDialog> {
                       Expanded(
                         child: TextFormField(
                           controller: _stockMinimo,
+                          inputFormatters: [decimalAmountInputFormatter],
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
                           decoration: appInput(
                             label: 'Stock mínimo',
                             icon: Icons.warning_amber_outlined,
+                          ),
+                          validator: (value) => validateDecimalAmount(
+                            value,
+                            label: 'El stock mínimo',
                           ),
                         ),
                       ),
@@ -850,6 +854,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                       Expanded(
                         child: TextFormField(
                           controller: _stockActual,
+                          inputFormatters: [decimalAmountInputFormatter],
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
@@ -857,18 +862,27 @@ class _ProductDialogState extends State<_ProductDialog> {
                             label: 'Stock actual',
                             icon: Icons.inventory_2_outlined,
                           ),
+                          validator: (value) => validateDecimalAmount(
+                            value,
+                            label: 'El stock actual',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: TextFormField(
                           controller: _costo,
+                          inputFormatters: [decimalAmountInputFormatter],
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
                           decoration: appInput(
                             label: 'Costo unitario (Bs)',
                             icon: Icons.price_check,
+                          ),
+                          validator: (value) => validateDecimalAmount(
+                            value,
+                            label: 'El costo unitario',
                           ),
                         ),
                       ),
@@ -958,6 +972,7 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
             children: [
               TextFormField(
                 controller: _controller,
+                inputFormatters: [decimalAmountInputFormatter],
                 autofocus: true,
                 textCapitalization: TextCapitalization.characters,
                 decoration: appInput(
@@ -1046,10 +1061,8 @@ class _StockDialogState extends State<_StockDialog> {
                   label: 'Stock real',
                   icon: Icons.inventory_2_outlined,
                 ),
-                validator: (value) {
-                  if (parseAmount(value ?? '') < 0) return 'Cantidad inválida';
-                  return null;
-                },
+                validator: (value) =>
+                    validateDecimalAmount(value, label: 'El stock real'),
               ),
             ],
           ),

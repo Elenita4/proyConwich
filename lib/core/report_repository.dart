@@ -35,6 +35,9 @@ class ProductoReporte {
     required this.costo,
     required this.color,
     this.precioUnitario = 0,
+    this.completos = 0,
+    this.sueltos = 0,
+    this.categoriaNombre = '',
   });
 
   final String nombre;
@@ -43,6 +46,9 @@ class ProductoReporte {
   final double costo;
   final int color;
   final double precioUnitario;
+  final double completos;
+  final double sueltos;
+  final String categoriaNombre;
 
   double get ganancia => ventas - costo;
 }
@@ -220,28 +226,84 @@ class ReportRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery(
       '''
-      SELECT dp.nombre_producto AS nombre,
-             SUM(dp.cantidad) AS cantidad,
-             SUM(dp.subtotal) AS ventas,
-             SUM(
-               COALESCE(NULLIF(dp.costo_unitario, 0), COALESCE(pr.costo_unitario, 0))
-               * dp.cantidad
-             ) AS costo,
-             CASE WHEN SUM(dp.cantidad) > 0
-                  THEN SUM(dp.subtotal) / SUM(dp.cantidad) ELSE 0 END AS precio_unitario,
-             COALESCE(c.color, 4280391418) AS categoria_color
-      FROM detalle_pedido dp
-      INNER JOIN pedidos p ON p.id = dp.pedido_id
-      LEFT JOIN productos pr ON pr.id = dp.producto_id
-      LEFT JOIN categorias_producto c ON c.id = pr.categoria_id
-      WHERE p.estado_pago <> 'ANULADO'
-        AND p.estado_entrega <> 'ANULADO'
-        AND dp.es_componente = 0
-        AND p.fecha >= ? AND p.fecha < ?
-      GROUP BY dp.nombre_producto, c.color
+      WITH ventas_producto AS (
+        SELECT dp.nombre_producto AS nombre,
+               SUM(dp.cantidad) AS cantidad,
+               SUM(dp.subtotal - CASE
+                 WHEN dp.modalidad_venta = 'COMPLETO'
+                   AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS'
+                 THEN dp.precio_sopa_unitario * dp.cantidad
+                 ELSE 0 END) AS ventas,
+               SUM(
+                 COALESCE(NULLIF(dp.costo_unitario, 0), COALESCE(pr.costo_unitario, 0))
+                 * dp.cantidad
+               ) AS costo,
+               SUM(CASE WHEN dp.modalidad_venta = 'COMPLETO'
+                   AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS'
+                   THEN dp.cantidad ELSE 0 END) AS completos,
+               SUM(CASE
+                 WHEN UPPER(TRIM(c.nombre)) IN ('PLATOS SUELTOS', 'SOPAS')
+                   AND NOT (dp.modalidad_venta = 'COMPLETO'
+                     AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS')
+                 THEN dp.cantidad ELSE 0 END) AS sueltos,
+               COALESCE(c.nombre, '') AS categoria_nombre,
+               COALESCE(c.color, 4280391418) AS categoria_color
+        FROM detalle_pedido dp
+        INNER JOIN pedidos p ON p.id = dp.pedido_id
+        LEFT JOIN productos pr ON pr.id = dp.producto_id
+        LEFT JOIN categorias_producto c ON c.id = pr.categoria_id
+        WHERE p.estado_pago <> 'ANULADO'
+          AND p.estado_entrega <> 'ANULADO'
+          AND dp.es_componente = 0
+          AND p.fecha >= ? AND p.fecha < ?
+        GROUP BY dp.nombre_producto, c.nombre, c.color
+
+        UNION ALL
+
+        SELECT dp.nombre_sopa AS nombre,
+               SUM(dp.cantidad) AS cantidad,
+               SUM(dp.precio_sopa_unitario * dp.cantidad) AS ventas,
+               SUM(dp.costo_sopa_unitario * dp.cantidad) AS costo,
+               SUM(dp.cantidad) AS completos,
+               0 AS sueltos,
+               'SOPAS' AS categoria_nombre,
+               COALESCE(cs.color, 4280391418) AS categoria_color
+        FROM detalle_pedido dp
+        INNER JOIN pedidos p ON p.id = dp.pedido_id
+        LEFT JOIN productos plato ON plato.id = dp.producto_id
+        LEFT JOIN categorias_producto cp ON cp.id = plato.categoria_id
+        LEFT JOIN productos sopa ON sopa.id = dp.producto_sopa_id
+        LEFT JOIN categorias_producto cs ON cs.id = sopa.categoria_id
+        WHERE p.estado_pago <> 'ANULADO'
+          AND p.estado_entrega <> 'ANULADO'
+          AND dp.es_componente = 0
+          AND dp.modalidad_venta = 'COMPLETO'
+          AND dp.nombre_sopa IS NOT NULL
+          AND UPPER(TRIM(cp.nombre)) = 'PLATOS SUELTOS'
+          AND UPPER(TRIM(cs.nombre)) = 'SOPAS'
+          AND p.fecha >= ? AND p.fecha < ?
+        GROUP BY dp.nombre_sopa, cs.color
+      )
+      SELECT nombre,
+             SUM(cantidad) AS cantidad,
+             SUM(ventas) AS ventas,
+             SUM(costo) AS costo,
+             CASE WHEN SUM(cantidad) > 0
+                  THEN SUM(ventas) / SUM(cantidad) ELSE 0 END AS precio_unitario,
+             SUM(completos) AS completos,
+             SUM(sueltos) AS sueltos,
+             categoria_nombre,
+             categoria_color
+      FROM ventas_producto
+      GROUP BY nombre, categoria_nombre, categoria_color
       ORDER BY ventas DESC
     ''',
-      [sqlDateTime(desde), sqlDateTime(hasta)],
+      [
+        sqlDateTime(desde),
+        sqlDateTime(hasta),
+        sqlDateTime(desde),
+        sqlDateTime(hasta),
+      ],
     );
     return rows
         .map(
@@ -252,13 +314,25 @@ class ReportRepository {
             costo: (row['costo'] as num).toDouble(),
             color: (row['categoria_color'] as num).toInt(),
             precioUnitario: (row['precio_unitario'] as num?)?.toDouble() ?? 0,
+            completos: (row['completos'] as num?)?.toDouble() ?? 0,
+            sueltos: (row['sueltos'] as num?)?.toDouble() ?? 0,
+            categoriaNombre: (row['categoria_nombre'] as String?) ?? '',
           ),
         )
         .toList();
   }
 
-  Future<List<PedidoReporte>> getPedidos(DateTime desde, DateTime hasta) async {
+  Future<List<PedidoReporte>> getPedidos(
+    DateTime desde,
+    DateTime hasta, {
+    int? usuarioId,
+    bool incluirAnulados = false,
+  }) async {
     final db = await AppDatabase.instance.database;
+    final filtroUsuario = usuarioId == null ? '' : 'AND p.usuario_id = ?';
+    final filtroAnulados = incluirAnulados
+        ? ''
+        : "AND p.estado_pago <> 'ANULADO' AND p.estado_entrega <> 'ANULADO'";
     final rows = await db.rawQuery(
       '''
       SELECT p.id, p.fecha, p.referencia, p.total, p.estado_pago,
@@ -275,12 +349,12 @@ class ReportRepository {
       LEFT JOIN cajas c ON c.id = p.caja_id
       LEFT JOIN pagos pg ON pg.pedido_id = p.id
       WHERE p.fecha >= ? AND p.fecha < ?
-        AND p.estado_pago <> 'ANULADO'
-        AND p.estado_entrega <> 'ANULADO'
+        $filtroAnulados
+        $filtroUsuario
       GROUP BY p.id
       ORDER BY p.fecha DESC
     ''',
-      [sqlDateTime(desde), sqlDateTime(hasta)],
+      [sqlDateTime(desde), sqlDateTime(hasta), ?usuarioId],
     );
     return rows
         .map(
@@ -350,8 +424,7 @@ class ReportRepository {
     return rows
         .map(
           (row) => SalidaReporte(
-            fecha:
-                DateTime.tryParse(row['fecha']! as String) ?? DateTime.now(),
+            fecha: DateTime.tryParse(row['fecha']! as String) ?? DateTime.now(),
             detalle: row['detalle']! as String,
             metodoPago: row['metodo_pago']! as String,
             monto: (row['monto'] as num).toDouble(),
@@ -445,8 +518,7 @@ class ReportRepository {
     return rows
         .map(
           (row) => FaltanteInsumoReporte(
-            fecha:
-                DateTime.tryParse(row['fecha']! as String) ?? DateTime.now(),
+            fecha: DateTime.tryParse(row['fecha']! as String) ?? DateTime.now(),
             referencia: row['referencia'] as String?,
             producto: row['producto']! as String,
             insumo: row['insumo']! as String,

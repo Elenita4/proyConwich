@@ -470,6 +470,17 @@ void main() {
     final columnas = await db.rawQuery('PRAGMA table_info(usuarios)');
     expect(columnas.any((c) => c['name'] == 'perfil'), isTrue);
     expect(columnas.any((c) => c['name'] == 'debe_cambiar_password'), isTrue);
+    final detalleColumnas = await db.rawQuery(
+      'PRAGMA table_info(detalle_pedido)',
+    );
+    expect(
+      detalleColumnas.any((columna) => columna['name'] == 'modalidad_venta'),
+      isTrue,
+    );
+    expect(
+      detalleColumnas.any((columna) => columna['name'] == 'producto_sopa_id'),
+      isTrue,
+    );
     final meta = await AppDatabase.instance.leerAppMeta();
     expect(meta, isNotNull);
     expect((meta!['instalacion_id'] as String).length, 36);
@@ -1101,6 +1112,52 @@ void main() {
     expect(categorias.every((categoria) => categoria.parentId == null), isTrue);
   });
 
+  test(
+    'la v16 restaura PLATOS SUELTOS sin mover ni borrar sus productos',
+    () async {
+      final admin = (await AuthRepository().login('admin', '1234'))!;
+      final catalog = CatalogRepository();
+      final categoria = (await catalog.getCategorias()).firstWhere(
+        (item) => item.nombre == 'PLATOS SUELTOS',
+      );
+      final productoId = await catalog.saveProducto(
+        Producto(
+          nombre: 'Producto antes de migrar',
+          categoriaId: categoria.id!,
+          categoriaNombre: categoria.nombre,
+          categoriaColor: categoria.color,
+          precio: 10,
+          tipo: 'PREPARADO',
+          stockMinimo: 0,
+          costoUnitario: 0,
+          activo: true,
+          stock: 0,
+        ),
+      );
+      final db = await AppDatabase.instance.database;
+      await db.update(
+        'categorias_producto',
+        {'nombre': 'PLATOS'},
+        where: 'id = ?',
+        whereArgs: [categoria.id],
+      );
+      await db.execute('PRAGMA user_version = 15');
+      await AppDatabase.instance.close();
+
+      final migrada = await AppDatabase.instance.database;
+      final producto = await catalog.getProducto(productoId);
+      expect(producto, isNotNull);
+      expect(producto!.categoriaId, categoria.id);
+      expect(producto.categoriaNombre, 'PLATOS SUELTOS');
+      final nombres = (await migrada.query('categorias_producto'))
+          .map((row) => row['nombre'])
+          .toSet();
+      expect(nombres, contains('PLATOS SUELTOS'));
+      expect(nombres, isNot(contains('PLATOS')));
+      expect(admin.id, greaterThan(0));
+    },
+  );
+
   test('un admin puede elevar la sesión con su contraseña', () async {
     final auth = AuthRepository();
     final admin = (await auth.login('admin', '1234'))!;
@@ -1448,7 +1505,7 @@ void main() {
     expect(productos.first.ganancia, 24); // Bs 30 de ventas − Bs 6 de costo
   });
 
-  test('las categorías del almuerzo se migran a ALMUERZO COMPLETO', () async {
+  test('las categorías antiguas del almuerzo pasan a PLATOS SUELTOS', () async {
     final path = join(await getDatabasesPath(), 'sazon_restaurante_v2.db');
     // Base vieja: ALMUERZO con las subcategorías PLATO SUELTO y COMPLETO.
     final legacy = await databaseFactory.openDatabase(
@@ -1758,135 +1815,297 @@ void main() {
     expect(await db.query('faltantes_insumo'), isEmpty);
   });
 
-  test('un almuerzo armado se vende y consume solo las recetas existentes', () async {
+  test(
+    'un almuerzo armado se vende y consume solo las recetas existentes',
+    () async {
+      final admin = (await AuthRepository().login('admin', '1234'))!;
+      final catalog = CatalogRepository();
+      final categorias = await catalog.getCategorias();
+      final sopas = categorias.firstWhere(
+        (categoria) => categoria.nombre == 'SOPAS',
+      );
+      final platos = categorias.firstWhere(
+        (categoria) => categoria.nombre == 'PLATOS SUELTOS',
+      );
+      final unidad = (await catalog.getUnidades()).firstWhere(
+        (item) => item.abreviatura == 'und',
+      );
+      final insumoId = await catalog.saveInsumo(
+        Insumo(
+          nombre: 'Insumo de sopa',
+          unidadId: unidad.id,
+          unidadAbreviatura: unidad.abreviatura,
+          stockMinimo: 0,
+          costoPromedio: 2,
+          activo: true,
+          stock: 0,
+        ),
+      );
+      await catalog.ajustarStockInsumo(
+        insumoId: insumoId,
+        nuevoStock: 10,
+        usuarioId: admin.id,
+        motivo: 'Carga inicial',
+      );
+
+      Producto producto(
+        String nombre,
+        CategoriaProducto categoria,
+        double precio,
+      ) => Producto(
+        nombre: nombre,
+        categoriaId: categoria.id!,
+        categoriaNombre: categoria.nombre,
+        categoriaColor: categoria.color,
+        precio: precio,
+        tipo: 'PREPARADO',
+        stockMinimo: 0,
+        costoUnitario: 0,
+        activo: true,
+        stock: 0,
+      );
+
+      final sopaId = await catalog.saveProducto(
+        producto('Sopa del día', sopas, 8),
+      );
+      await catalog.saveRecetaCantidades(sopaId, {insumoId: 2});
+      final segundoId = await catalog.saveProducto(
+        producto('Segundo del día', platos, 12),
+      );
+
+      final comboId = await catalog.crearProductoCompuesto(
+        nombre: 'Almuerzo armado',
+        categoriaId: platos.id!,
+        precio: 18,
+        componenteIds: [sopaId, segundoId],
+      );
+      final combo = (await catalog.getProducto(comboId))!;
+      expect(combo.esCompuesto, isTrue);
+      expect((await catalog.getComponentes(comboId)).length, 2);
+
+      final menuRepo = MenuRepository();
+      final fecha = DateTime.now();
+      final menu = await menuRepo.crearMenu(fecha, 'ALMUERZO', admin.id);
+      await menuRepo.agregarCombo(
+        menuDiaId: menu.id,
+        productoId: comboId,
+        nombre: 'Almuerzo armado',
+        precio: 18,
+      );
+      await menuRepo.habilitar(menu.id);
+
+      final combos = await menuRepo.getCombos(menu.id);
+      expect(combos.length, 1);
+      expect(combos.first.sumaComponentes, 20);
+
+      final cash = CashRepository();
+      final caja = await cash.abrirCaja(
+        fecha: fecha,
+        fondoInicial: 0,
+        usuarioId: admin.id,
+      );
+      final venta = await SalesRepository().crearPedido(
+        usuarioId: admin.id,
+        cajaId: caja.id,
+        menuDiaId: menu.id,
+        lineas: [
+          CartLine(
+            productoId: comboId,
+            menuDiaComboId: combos.first.id,
+            nombre: 'Nombre enviado por el cliente',
+            precio: 999,
+            cantidad: 1,
+          ),
+        ],
+        pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 18)],
+      );
+
+      final detalle = await SalesRepository().getPedido(venta);
+      final principales = detalle.lineas.where((linea) => !linea.esComponente);
+      final componentes = detalle.lineas.where((linea) => linea.esComponente);
+      expect(detalle.pedido.total, 18);
+      expect(principales.length, 1);
+      expect(principales.first.nombre, 'Almuerzo armado');
+      expect(componentes.length, 2);
+
+      final db = await AppDatabase.instance.database;
+      final consumos = await db.query('consumos_insumo');
+      expect(consumos.length, 1);
+      expect((consumos.first['cantidad'] as num).toDouble(), 2);
+
+      final productos = await ReportRepository().getProductos(
+        DateTime(fecha.year, fecha.month, fecha.day),
+        DateTime(fecha.year, fecha.month, fecha.day + 1),
+      );
+      expect(productos.length, 1);
+      expect(productos.first.nombre, 'Almuerzo armado');
+      expect(productos.first.cantidad, 1);
+      expect(productos.first.ventas, 18);
+
+      final siguiente = await menuRepo.duplicarAnterior(
+        fecha.add(const Duration(days: 1)),
+        MenuRepository.tipoMenu,
+        admin.id,
+      );
+      expect(siguiente, isNotNull);
+      expect(siguiente!.habilitado, isTrue);
+      expect((await menuRepo.getCombos(siguiente.id)), isEmpty);
+    },
+  );
+
+  test('completo calcula sopa y plato, reporta el desglose y permite reemplazar el menú', () async {
     final admin = (await AuthRepository().login('admin', '1234'))!;
     final catalog = CatalogRepository();
     final categorias = await catalog.getCategorias();
-    final sopas = categorias.firstWhere(
-      (categoria) => categoria.nombre == 'SOPAS',
-    );
+    final sopas = categorias.firstWhere((item) => item.nombre == 'SOPAS');
     final platos = categorias.firstWhere(
-      (categoria) => categoria.nombre == 'PLATOS SUELTOS',
+      (item) => item.nombre == 'PLATOS SUELTOS',
     );
-    final unidad = (await catalog.getUnidades()).firstWhere(
-      (item) => item.abreviatura == 'und',
-    );
-    final insumoId = await catalog.saveInsumo(
-      Insumo(
-        nombre: 'Insumo de sopa',
-        unidadId: unidad.id,
-        unidadAbreviatura: unidad.abreviatura,
-        stockMinimo: 0,
-        costoPromedio: 2,
-        activo: true,
-        stock: 0,
-      ),
-    );
-    await catalog.ajustarStockInsumo(
-      insumoId: insumoId,
-      nuevoStock: 10,
-      usuarioId: admin.id,
-      motivo: 'Carga inicial',
+    final frappes = categorias.firstWhere((item) => item.nombre == 'FRAPPES');
+
+    Producto producto(
+      String nombre,
+      CategoriaProducto categoria,
+      double precio,
+    ) => Producto(
+      nombre: nombre,
+      categoriaId: categoria.id!,
+      categoriaNombre: categoria.nombre,
+      categoriaColor: categoria.color,
+      precio: precio,
+      tipo: 'PREPARADO',
+      stockMinimo: 0,
+      costoUnitario: 0,
+      activo: true,
+      stock: 0,
     );
 
-    Producto producto(String nombre, CategoriaProducto categoria, double precio) =>
-        Producto(
-          nombre: nombre,
-          categoriaId: categoria.id!,
-          categoriaNombre: categoria.nombre,
-          categoriaColor: categoria.color,
-          precio: precio,
-          tipo: 'PREPARADO',
-          stockMinimo: 0,
-          costoUnitario: 0,
-          activo: true,
-          stock: 0,
-        );
-
+    final sopaAnterior = await catalog.saveProducto(
+      producto('Sopa alternativa', sopas, 5),
+    );
     final sopaId = await catalog.saveProducto(
-      producto('Sopa del día', sopas, 8),
+      producto('Sopa de maní', sopas, 4),
     );
-    await catalog.saveRecetaCantidades(sopaId, {insumoId: 2});
-    final segundoId = await catalog.saveProducto(
-      producto('Segundo del día', platos, 12),
+    final milanesaId = await catalog.saveProducto(
+      producto('Milaneza', platos, 12),
+    );
+    final silpanchoId = await catalog.saveProducto(
+      producto('Silpancho', platos, 10),
+    );
+    final frappeId = await catalog.saveProducto(
+      producto('Frappe de frutilla', frappes, 14),
     );
 
-    final comboId = await catalog.crearProductoCompuesto(
-      nombre: 'Almuerzo armado',
-      categoriaId: platos.id!,
-      precio: 18,
-      componenteIds: [sopaId, segundoId],
-    );
-    final combo = (await catalog.getProducto(comboId))!;
-    expect(combo.esCompuesto, isTrue);
-    expect((await catalog.getComponentes(comboId)).length, 2);
-
-    final menuRepo = MenuRepository();
     final fecha = DateTime.now();
-    final menu = await menuRepo.crearMenu(fecha, 'ALMUERZO', admin.id);
-    await menuRepo.agregarCombo(
-      menuDiaId: menu.id,
-      productoId: comboId,
-      nombre: 'Almuerzo armado',
-      precio: 18,
+    final menuRepo = MenuRepository();
+    final menu = await menuRepo.crearMenu(
+      fecha,
+      MenuRepository.tipoMenu,
+      admin.id,
     );
+    await menuRepo.agregarProducto(menu.id, sopaAnterior);
+    await menuRepo.agregarProducto(menu.id, milanesaId);
+    await menuRepo.agregarProducto(menu.id, silpanchoId);
+    await menuRepo.agregarProducto(menu.id, frappeId);
+    await menuRepo.agregarProducto(menu.id, sopaId);
+    var items = await menuRepo.getItems(menu.id);
+    expect(items.where((item) => item.esSopa).length, 1);
+    expect(items.where((item) => item.esSopa).single.productoId, sopaId);
     await menuRepo.habilitar(menu.id);
 
-    final combos = await menuRepo.getCombos(menu.id);
-    expect(combos.length, 1);
-    expect(combos.first.sumaComponentes, 20);
-
-    final cash = CashRepository();
-    final caja = await cash.abrirCaja(
+    final caja = await CashRepository().abrirCaja(
       fecha: fecha,
       fondoInicial: 0,
       usuarioId: admin.id,
     );
-    final venta = await SalesRepository().crearPedido(
+    final sopaItem = items.singleWhere((item) => item.esSopa);
+    final milanesaItem = items.singleWhere(
+      (item) => item.productoId == milanesaId,
+    );
+    final frappeItem = items.singleWhere((item) => item.productoId == frappeId);
+    await expectLater(
+      SalesRepository().crearPedido(
+        usuarioId: admin.id,
+        cajaId: caja.id,
+        menuDiaId: menu.id,
+        lineas: [
+          CartLine(
+            productoId: frappeId,
+            menuDiaItemId: frappeItem.id,
+            nombre: 'Frappe de frutilla',
+            precio: 14,
+            cantidad: 1,
+            modalidadVenta: 'COMPLETO',
+            productoSopaId: sopaId,
+            menuDiaSopaItemId: sopaItem.id,
+          ),
+        ],
+        pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 18)],
+      ),
+      throwsA(isA<StateError>()),
+    );
+    final pedidoId = await SalesRepository().crearPedido(
       usuarioId: admin.id,
       cajaId: caja.id,
       menuDiaId: menu.id,
       lineas: [
         CartLine(
-          productoId: comboId,
-          menuDiaComboId: combos.first.id,
-          nombre: 'Nombre enviado por el cliente',
+          productoId: milanesaId,
+          menuDiaItemId: milanesaItem.id,
+          nombre: 'Milaneza',
           precio: 999,
           cantidad: 1,
+          modalidadVenta: 'COMPLETO',
+          productoSopaId: sopaId,
+          menuDiaSopaItemId: sopaItem.id,
+        ),
+        CartLine(
+          productoId: silpanchoId,
+          menuDiaItemId: items
+              .singleWhere((item) => item.productoId == silpanchoId)
+              .id,
+          nombre: 'Silpancho',
+          precio: 10,
+          cantidad: 1,
+          modalidadVenta: 'SUELTO',
         ),
       ],
-      pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 18)],
+      pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 26)],
     );
 
-    final detalle = await SalesRepository().getPedido(venta);
-    final principales = detalle.lineas.where((linea) => !linea.esComponente);
-    final componentes = detalle.lineas.where((linea) => linea.esComponente);
-    expect(detalle.pedido.total, 18);
-    expect(principales.length, 1);
-    expect(principales.first.nombre, 'Almuerzo armado');
-    expect(componentes.length, 2);
+    final detalle = await SalesRepository().getPedido(pedidoId);
+    expect(detalle.pedido.total, 26);
+    final completo = detalle.lineas.singleWhere(
+      (item) => item.modalidadVenta == 'COMPLETO',
+    );
+    expect(completo.precioUnitario, 16);
+    expect(completo.nombreSopa, 'Sopa de maní');
+    expect(completo.precioSopaUnitario, 4);
+    expect(detalle.lineas.where((item) => item.esComponente).length, 1);
 
-    final db = await AppDatabase.instance.database;
-    final consumos = await db.query('consumos_insumo');
-    expect(consumos.length, 1);
-    expect((consumos.first['cantidad'] as num).toDouble(), 2);
-
-    final productos = await ReportRepository().getProductos(
+    final reporte = await ReportRepository().getProductos(
       DateTime(fecha.year, fecha.month, fecha.day),
       DateTime(fecha.year, fecha.month, fecha.day + 1),
     );
-    expect(productos.length, 1);
-    expect(productos.first.nombre, 'Almuerzo armado');
-    expect(productos.first.cantidad, 1);
-    expect(productos.first.ventas, 18);
+    final ventasPorNombre = {for (final item in reporte) item.nombre: item};
+    expect(ventasPorNombre['Milaneza']!.ventas, 12);
+    expect(ventasPorNombre['Milaneza']!.completos, 1);
+    expect(ventasPorNombre['Silpancho']!.ventas, 10);
+    expect(ventasPorNombre['Silpancho']!.sueltos, 1);
+    expect(ventasPorNombre['Sopa de maní']!.ventas, 4);
+    expect(ventasPorNombre['Sopa de maní']!.completos, 1);
+    expect(reporte.fold<double>(0, (suma, item) => suma + item.ventas), 26);
 
-    final siguiente = await menuRepo.duplicarAnterior(
-      fecha.add(const Duration(days: 1)),
-      MenuRepository.tipoMenu,
-      admin.id,
+    await menuRepo.limpiarMenu(menu.id);
+    expect(await menuRepo.getItems(menu.id), isEmpty);
+    expect((await SalesRepository().getPedido(pedidoId)).pedido.total, 26);
+    final churrascoId = await catalog.saveProducto(
+      producto('Churrasco', platos, 15),
     );
-    expect(siguiente, isNotNull);
-    expect(siguiente!.habilitado, isTrue);
-    expect((await menuRepo.getCombos(siguiente.id)).length, 1);
+    await menuRepo.agregarProducto(menu.id, churrascoId);
+    items = await menuRepo.getItems(menu.id);
+    expect(items.length, 1);
+    expect(items.single.nombre, 'Churrasco');
+    expect(items.where((item) => item.esSopa), isEmpty);
   });
 }

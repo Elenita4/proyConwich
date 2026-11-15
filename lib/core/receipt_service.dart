@@ -72,24 +72,26 @@ class ReceiptService {
           fila('Cajero', cajero),
           if (pedido.referencia != null) fila('Referencia', pedido.referencia!),
           pw.Divider(),
-          ...detalle.lineas.where((linea) => !linea.esComponente).map(
-            (linea) => pw.Padding(
-              padding: const pw.EdgeInsets.only(bottom: 2),
-              child: pw.Row(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Expanded(
-                    child: pw.Text(
-                      '${_cantidad(linea.cantidad)} x ${linea.nombre}',
-                      style: pequeno,
-                    ),
+          ...detalle.lineas
+              .where((linea) => !linea.esComponente)
+              .map(
+                (linea) => pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 2),
+                  child: pw.Row(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Expanded(
+                        child: pw.Text(
+                          '${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}',
+                          style: pequeno,
+                        ),
+                      ),
+                      pw.SizedBox(width: 6),
+                      pw.Text(formatMoney(linea.subtotal), style: pequeno),
+                    ],
                   ),
-                  pw.SizedBox(width: 6),
-                  pw.Text(formatMoney(linea.subtotal), style: pequeno),
-                ],
+                ),
               ),
-            ),
-          ),
           pw.Divider(),
           fila('TOTAL', formatMoney(pedido.total)),
           pw.SizedBox(height: 3),

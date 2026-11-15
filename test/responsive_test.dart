@@ -87,9 +87,7 @@ void main() {
     String nombre,
     Widget page,
   ) async {
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: page)),
-    );
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: page)));
     for (var i = 0; i < 10; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)),
@@ -115,78 +113,79 @@ void main() {
     );
   }
 
-  testWidgets('el filtro de categoría muestra solo los productos de esa categoría', (
-    tester,
-  ) async {
-    final catalog = CatalogRepository();
-    for (final nombre in ['CATEGORIA A', 'CATEGORIA B']) {
-      await tester.runAsync(
-        () => catalog.saveCategoria(
-          CategoriaProducto(
-            nombre: nombre,
-            color: 0xFF2563EB,
-            siempreDisponible: false,
-            orden: 10,
-            activo: true,
-          ),
-        ),
-      );
-    }
-    final categorias = await tester.runAsync(catalog.getCategorias);
-    final categoriaA = categorias!.firstWhere(
-      (categoria) => categoria.nombre == 'CATEGORIA A',
-    );
-    final categoriaB = categorias.firstWhere(
-      (categoria) => categoria.nombre == 'CATEGORIA B',
-    );
-
-    Future<void> crearProducto(String nombre, CategoriaProducto categoria) =>
-        catalog.saveProducto(
-          Producto(
-            nombre: nombre,
-            categoriaId: categoria.id!,
-            categoriaNombre: categoria.nombre,
-            categoriaColor: categoria.color,
-            precio: 10,
-            tipo: 'PREPARADO',
-            stockMinimo: 0,
-            costoUnitario: 0,
-            activo: true,
-            stock: 0,
+  testWidgets(
+    'el filtro de categoría muestra solo los productos de esa categoría',
+    (tester) async {
+      final catalog = CatalogRepository();
+      for (final nombre in ['CATEGORIA A', 'CATEGORIA B']) {
+        await tester.runAsync(
+          () => catalog.saveCategoria(
+            CategoriaProducto(
+              nombre: nombre,
+              color: 0xFF2563EB,
+              siempreDisponible: false,
+              orden: 10,
+              activo: true,
+            ),
           ),
         );
-    await tester.runAsync(() => crearProducto('Plato A', categoriaA));
-    await tester.runAsync(() => crearProducto('Plato B', categoriaB));
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: ProductsPage(usuario: admin, refreshToken: 0)),
-      ),
-    );
-    for (var i = 0; i < 10; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      }
+      final categorias = await tester.runAsync(catalog.getCategorias);
+      final categoriaA = categorias!.firstWhere(
+        (categoria) => categoria.nombre == 'CATEGORIA A',
       );
+      final categoriaB = categorias.firstWhere(
+        (categoria) => categoria.nombre == 'CATEGORIA B',
+      );
+
+      Future<void> crearProducto(String nombre, CategoriaProducto categoria) =>
+          catalog.saveProducto(
+            Producto(
+              nombre: nombre,
+              categoriaId: categoria.id!,
+              categoriaNombre: categoria.nombre,
+              categoriaColor: categoria.color,
+              precio: 10,
+              tipo: 'PREPARADO',
+              stockMinimo: 0,
+              costoUnitario: 0,
+              activo: true,
+              stock: 0,
+            ),
+          );
+      await tester.runAsync(() => crearProducto('Plato A', categoriaA));
+      await tester.runAsync(() => crearProducto('Plato B', categoriaB));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ProductsPage(usuario: admin, refreshToken: 0)),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+
+      final filtro = tester.widget<DropdownButtonFormField<int?>>(
+        find.byType(DropdownButtonFormField<int?>),
+      );
+      filtro.onChanged!(categoriaA.id);
       await tester.pump();
-    }
+      expect(find.text('Plato A'), findsOneWidget);
+      expect(find.text('Plato B'), findsNothing);
+      expect(find.text('Almuerzo del día'), findsNothing);
 
-    final filtro = tester.widget<DropdownButtonFormField<int?>>(
-      find.byType(DropdownButtonFormField<int?>),
-    );
-    filtro.onChanged!(categoriaA.id);
-    await tester.pump();
-    expect(find.text('Plato A'), findsOneWidget);
-    expect(find.text('Plato B'), findsNothing);
-    expect(find.text('Almuerzo del día'), findsNothing);
-
-    final filtroB = tester.widget<DropdownButtonFormField<int?>>(
-      find.byType(DropdownButtonFormField<int?>),
-    );
-    filtroB.onChanged!(categoriaB.id);
-    await tester.pump();
-    expect(find.text('Plato B'), findsOneWidget);
-    expect(find.text('Plato A'), findsNothing);
-  });
+      final filtroB = tester.widget<DropdownButtonFormField<int?>>(
+        find.byType(DropdownButtonFormField<int?>),
+      );
+      filtroB.onChanged!(categoriaB.id);
+      await tester.pump();
+      expect(find.text('Plato B'), findsOneWidget);
+      expect(find.text('Plato A'), findsNothing);
+    },
+  );
 
   testWidgets('pantallas operativas no desbordan en 360x640', (tester) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -265,19 +264,14 @@ void main() {
     // Producto.
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ProductsPage(usuario: admin, refreshToken: 0),
-        ),
+        home: Scaffold(body: ProductsPage(usuario: admin, refreshToken: 0)),
       ),
     );
     await asentar();
     await tester.tap(find.text('Nuevo producto').first);
     await asentar();
     expect(find.widgetWithText(FilledButton, 'Guardar'), findsOneWidget);
-    await tester.enterText(
-      find.byType(TextFormField).first,
-      'Producto móvil',
-    );
+    await tester.enterText(find.byType(TextFormField).first, 'Producto móvil');
     await tester.pump();
     // La categoría ya no viene por defecto: hay que elegirla.
     final categorias = await tester.runAsync(repository.getCategorias);
@@ -292,6 +286,7 @@ void main() {
       find.byType(DropdownButtonFormField<int>),
     );
     campo.didChange(categoria.id);
+    await tester.enterText(find.byType(TextFormField).at(2), '1');
     await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
     await asentar();
@@ -318,35 +313,24 @@ void main() {
     // Insumo.
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: InventoryPage(usuario: admin, refreshToken: 0),
-        ),
+        home: Scaffold(body: InventoryPage(usuario: admin, refreshToken: 0)),
       ),
     );
     await asentar();
     await tester.tap(find.text('Nuevo insumo').first);
     await asentar();
     expect(find.widgetWithText(FilledButton, 'Guardar'), findsOneWidget);
-    await tester.enterText(
-      find.byType(TextFormField).first,
-      'Insumo móvil',
-    );
+    await tester.enterText(find.byType(TextFormField).first, 'Insumo móvil');
     await tester.enterText(find.byType(TextFormField).at(1), '2');
     await tester.enterText(find.byType(TextFormField).at(2), '5');
     await tester.pump();
     expect(find.textContaining('quedará en alerta'), findsOneWidget);
 
     await tester.ensureVisible(
-      find.widgetWithText(
-        SwitchListTile,
-        'Disponible para venta directa',
-      ),
+      find.widgetWithText(SwitchListTile, 'Disponible para venta directa'),
     );
     await tester.tap(
-      find.widgetWithText(
-        SwitchListTile,
-        'Disponible para venta directa',
-      ),
+      find.widgetWithText(SwitchListTile, 'Disponible para venta directa'),
     );
     await asentar();
     expect(
@@ -354,10 +338,7 @@ void main() {
           find.text('Buscar imagen').evaluate().isNotEmpty,
       isTrue,
     );
-    expect(
-      find.widgetWithText(OutlinedButton, 'Nueva'),
-      findsOneWidget,
-    );
+    expect(find.widgetWithText(OutlinedButton, 'Nueva'), findsOneWidget);
     await tester.ensureVisible(find.byType(TextFormField).last);
     await tester.enterText(find.byType(TextFormField).last, '7');
     await tester.pump();

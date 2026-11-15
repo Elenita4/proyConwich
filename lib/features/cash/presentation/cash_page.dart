@@ -104,6 +104,11 @@ class _CashPageState extends State<CashPage> {
   }
 
   Future<void> _abrir() async {
+    final error = validateDecimalAmount(_fondo.text, label: 'El fondo inicial');
+    if (error != null) {
+      showAppMessage(context, error, error: true);
+      return;
+    }
     setState(() => _saving = true);
     try {
       final caja = await _repository.abrirCaja(
@@ -128,6 +133,15 @@ class _CashPageState extends State<CashPage> {
     final caja = data.caja;
     final resumen = data.resumen;
     if (caja == null || resumen == null) return;
+    final errorEfectivo = validateDecimalAmount(
+      _efectivo.text,
+      label: 'El efectivo contado',
+    );
+    final errorQr = validateDecimalAmount(_qr.text, label: 'El QR verificado');
+    if (errorEfectivo != null || errorQr != null) {
+      showAppMessage(context, errorEfectivo ?? errorQr!, error: true);
+      return;
+    }
     final confirmado = await confirmAction(
       context,
       title: 'Cerrar caja',
@@ -343,6 +357,7 @@ class _CashPageState extends State<CashPage> {
                 width: 190,
                 child: TextField(
                   controller: _fondo,
+                  inputFormatters: [decimalAmountInputFormatter],
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -574,6 +589,7 @@ class _CashPageState extends State<CashPage> {
           const SizedBox(height: 10),
           TextField(
             controller: _efectivo,
+            inputFormatters: [decimalAmountInputFormatter],
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: appInput(
               label: 'Efectivo contado (Bs)',
@@ -588,6 +604,7 @@ class _CashPageState extends State<CashPage> {
           const SizedBox(height: 12),
           TextField(
             controller: _qr,
+            inputFormatters: [decimalAmountInputFormatter],
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: appInput(
               label: 'QR verificado (Bs)',
@@ -679,6 +696,7 @@ class _SalidaDialogState extends State<_SalidaDialog> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: _monto,
+                inputFormatters: [decimalAmountInputFormatter],
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
@@ -687,9 +705,11 @@ class _SalidaDialogState extends State<_SalidaDialog> {
                   label: 'Monto (Bs)',
                   icon: Icons.money_outlined,
                 ),
-                validator: (value) => parseAmount(value ?? '') <= 0
-                    ? 'Ingresa un monto mayor a cero'
-                    : null,
+                validator: (value) => validateDecimalAmount(
+                  value,
+                  allowZero: false,
+                  label: 'El monto',
+                ),
               ),
               const SizedBox(height: 12),
               TextFormField(

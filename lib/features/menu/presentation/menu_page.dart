@@ -13,6 +13,7 @@ class _MenuData {
     required this.menu,
     required this.items,
     required this.combos,
+    required this.hayCombosLegacy,
     required this.productos,
     required this.categorias,
     required this.cajaAbierta,
@@ -21,6 +22,7 @@ class _MenuData {
   final MenuDia? menu;
   final List<MenuItem> items;
   final List<MenuCombo> combos;
+  final bool hayCombosLegacy;
   final List<Producto> productos;
   final List<CategoriaProducto> categorias;
   final bool cajaAbierta;
@@ -110,9 +112,12 @@ class _MenuPageState extends State<MenuPage> {
     final items = menu == null
         ? <MenuItem>[]
         : await _repository.getItems(menu.id);
-    final combos = menu == null
-        ? <MenuCombo>[]
-        : await _repository.getCombos(menu.id);
+    // Los combos de versiones anteriores se conservan como historial, pero
+    // no forman parte del nuevo flujo del menú.
+    const combos = <MenuCombo>[];
+    final hayCombosLegacy = menu != null
+        ? await _repository.tieneCombosLegacy(menu.id)
+        : false;
     final productos = await _catalog.getProductos(soloActivos: true);
     final categorias = await _catalog.getCategorias();
     final caja = await _cash.getCajaAbierta();
@@ -120,6 +125,7 @@ class _MenuPageState extends State<MenuPage> {
       menu: menu,
       items: items,
       combos: combos,
+      hayCombosLegacy: hayCombosLegacy,
       productos: productos,
       categorias: categorias,
       cajaAbierta: caja != null,
@@ -147,10 +153,7 @@ class _MenuPageState extends State<MenuPage> {
 
   Future<void> _crearMenu() async {
     try {
-      final previos = await _repository.getProductosMenuAnterior(
-        _fecha,
-        _tipo,
-      );
+      final previos = await _repository.getProductosMenuAnterior(_fecha, _tipo);
       await _crearConAnterior();
       if (!mounted) return;
       setState(() {
@@ -160,8 +163,8 @@ class _MenuPageState extends State<MenuPage> {
       showAppMessage(
         context,
         previos.isEmpty
-            ? 'Menú creado vacío. Elige los platos del día.'
-            : 'Menú creado con ${previos.length} plato(s) del día anterior. '
+            ? 'Menú creado vacío. Elige la sopa y los platos del día.'
+            : 'Menú creado con ${previos.length} producto(s) del día anterior. '
                   'Ajusta lo que haga falta o usa "Limpiar".',
       );
     } catch (error) {
@@ -176,8 +179,7 @@ class _MenuPageState extends State<MenuPage> {
     final confirmado = await confirmAction(
       context,
       title: 'Limpiar menú',
-      message:
-          'Se quitarán todos los platos del menú de hoy y podrás armarlo desde cero.',
+      message: 'Se quitarán la sopa y los productos del menú de hoy. Las ventas anteriores no se borran.',
       confirmLabel: 'Limpiar',
       destructive: true,
     );
@@ -185,7 +187,7 @@ class _MenuPageState extends State<MenuPage> {
     await _repository.limpiarMenu(menu.id);
     if (!mounted) return;
     setState(_reload);
-    showAppMessage(context, 'Menú limpiado. Elige los platos del día.');
+    showAppMessage(context, 'Menú limpiado. Elige la sopa y los productos.');
   }
 
   Future<void> _toggleProducto(_MenuData data, Producto producto) async {
@@ -209,13 +211,23 @@ class _MenuPageState extends State<MenuPage> {
           '${producto.nombre} ya no está en el menú de hoy.',
         );
       } else {
+        final sopasAnteriores =
+            producto.categoriaNombre.trim().toUpperCase() == 'SOPAS'
+            ? items.where((menuItem) => menuItem.esSopa).toList()
+            : <MenuItem>[];
+        final reemplazaSopa = sopasAnteriores.isNotEmpty;
         await _repository.agregarProducto(menu.id, producto.id!);
         if (!mounted) return;
         setState(() {
           _guardando = false;
           _reload();
         });
-        showAppMessage(context, '${producto.nombre} agregado al menú de hoy.');
+        showAppMessage(
+          context,
+          !reemplazaSopa
+              ? '${producto.nombre} agregado al menú de hoy.'
+              : 'Sopa cambiada a ${producto.nombre}.',
+        );
       }
     } catch (error) {
       if (!mounted) return;
@@ -223,6 +235,80 @@ class _MenuPageState extends State<MenuPage> {
       showAppMessage(
         context,
         'No se pudo actualizar el menú: $error',
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _seleccionarSopa(_MenuData data, int productoId) async {
+    if (!_esAdmin || !_editando || _guardando) return;
+    setState(() => _guardando = true);
+    try {
+      final menu = data.menu ?? await _crearConAnterior();
+      final actuales = (await _repository.getItems(menu.id))
+          .where((item) => item.esSopa)
+          .toList();
+      if (productoId == -1) {
+        for (final sopa in actuales) {
+          await _repository.quitarItem(sopa.id);
+        }
+      } else if (actuales.length != 1 ||
+          actuales.single.productoId != productoId) {
+        await _repository.agregarProducto(menu.id, productoId);
+      }
+      if (!mounted) return;
+      setState(() {
+        _guardando = false;
+        _reload();
+      });
+      showAppMessage(
+        context,
+        productoId == -1
+            ? 'El menú de hoy no tendrá sopa.'
+            : 'Sopa del día actualizada.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      showAppMessage(
+        context,
+        'No se pudo cambiar la sopa: $error',
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _toggleCategoria(
+    _MenuData data,
+    List<Producto> productos, {
+    required bool seleccionar,
+  }) async {
+    if (!_esAdmin || !_editando || _guardando || productos.isEmpty) return;
+    setState(() => _guardando = true);
+    try {
+      final menu = data.menu ?? await _crearConAnterior();
+      await _repository.seleccionarCategoria(
+        menuDiaId: menu.id,
+        productoIds: productos.map((producto) => producto.id!).toList(),
+        seleccionado: seleccionar,
+      );
+      if (!mounted) return;
+      setState(() {
+        _guardando = false;
+        _reload();
+      });
+      showAppMessage(
+        context,
+        seleccionar
+            ? 'Todos los productos de la categoría fueron seleccionados.'
+            : 'Se quitó la selección de la categoría.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      showAppMessage(
+        context,
+        'No se pudo actualizar la categoría: $error',
         error: true,
       );
     }
@@ -241,10 +327,10 @@ class _MenuPageState extends State<MenuPage> {
   Future<void> _habilitar(_MenuData data) async {
     final menu = data.menu;
     if (menu == null) return;
-    if (data.items.isEmpty && data.combos.isEmpty) {
+    if (data.items.isEmpty) {
       showAppMessage(
         context,
-        'Agrega al menos un plato o almuerzo antes de publicar.',
+        'Agrega al menos una sopa o un plato antes de publicar.',
         error: true,
       );
       return;
@@ -292,8 +378,7 @@ class _MenuPageState extends State<MenuPage> {
             children: [
               PageHeader(
                 title: 'Menú del día',
-                subtitle:
-                    'Pulsa "Editar" para elegir los platos del menú de hoy con un toque.',
+                subtitle: 'Pulsa "Editar" para elegir los platos del menú de hoy con un toque.',
                 actions: [
                   if (_esAdmin)
                     OutlinedButton.icon(
@@ -328,7 +413,7 @@ class _MenuPageState extends State<MenuPage> {
                 ],
                 _estadoCard(context, data),
                 const SizedBox(height: 16),
-                _combosSection(context, data),
+                _sopaDelDia(context, data),
                 const SizedBox(height: 16),
                 _filtros(context, data),
                 const SizedBox(height: 16),
@@ -440,23 +525,136 @@ class _MenuPageState extends State<MenuPage> {
     }
   }
 
+  Widget _sopaDelDia(BuildContext context, _MenuData data) {
+    final scheme = Theme.of(context).colorScheme;
+    final sopas =
+        data.productos
+            .where(
+              (producto) =>
+                  !producto.esCompuesto &&
+                  MenuRepository.esCategoriaSopa(producto.categoriaNombre),
+            )
+            .toList()
+          ..sort(_compararProductos);
+    final seleccionadas = data.items.where((item) => item.esSopa).toList();
+    final sopaActual = seleccionadas.isEmpty ? null : seleccionadas.first;
+    final opciones = sopas.map((producto) => producto.id!).toSet();
+    final valorActual =
+        sopaActual != null && opciones.contains(sopaActual.productoId)
+        ? sopaActual.productoId
+        : -1;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.soup_kitchen_outlined, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Sopa del día',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (sopaActual != null)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_esAdmin && _editando)
+                      IconButton(
+                        tooltip: sopaActual.disponible
+                            ? 'Marcar sopa agotada'
+                            : 'Marcar sopa disponible',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _toggleDisponible(
+                          sopaActual,
+                          !sopaActual.disponible,
+                        ),
+                        icon: Icon(
+                          sopaActual.disponible
+                              ? Icons.block
+                              : Icons.check_circle_outline,
+                          size: 18,
+                        ),
+                      ),
+                    Text(
+                      formatMoney(sopaActual.precio),
+                      style: TextStyle(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (sopas.isEmpty)
+            Text(
+              'No hay sopas activas en Productos.',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            )
+          else
+            DropdownButtonFormField<int>(
+              initialValue: valorActual,
+              isExpanded: true,
+              decoration: appInput(label: 'Elige una sopa (opcional)'),
+              items: [
+                const DropdownMenuItem<int>(
+                  value: -1,
+                  child: Text('Hoy no habrá sopa'),
+                ),
+                for (final sopa in sopas)
+                  DropdownMenuItem<int>(
+                    value: sopa.id!,
+                    child: Text('${sopa.nombre} · ${formatMoney(sopa.precio)}'),
+                  ),
+              ],
+              onChanged: _esAdmin && _editando && !_guardando
+                  ? (value) {
+                      if (value != null) _seleccionarSopa(data, value);
+                    }
+                  : null,
+            ),
+          if (_editando)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Solo se puede elegir una. Los completos usarán esta sopa.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Buscador + chips de categorías (con su color) para filtrar el catálogo.
   Widget _filtros(BuildContext context, _MenuData data) {
     final relevantes = <int>{};
     for (final producto in data.productos) {
-      if (producto.esCompuesto) continue;
+      if (producto.esCompuesto ||
+          MenuRepository.esCategoriaSopa(producto.categoriaNombre) ||
+          producto.categoriaSiempreDisponible ||
+          producto.esVentaDirecta) {
+        continue;
+      }
       relevantes.add(producto.categoriaId);
     }
-    final categorias = data.categorias
-        .where(
-          (categoria) =>
-              categoria.id != null && relevantes.contains(categoria.id),
-        )
-        .toList()
-      ..sort((a, b) {
-        if (a.orden != b.orden) return a.orden.compareTo(b.orden);
-        return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
-      });
+    final categorias =
+        data.categorias
+            .where(
+              (categoria) =>
+                  categoria.id != null && relevantes.contains(categoria.id),
+            )
+            .toList()
+          ..sort((a, b) {
+            if (a.orden != b.orden) return a.orden.compareTo(b.orden);
+            return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+          });
     return AppCard(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -505,6 +703,13 @@ class _MenuPageState extends State<MenuPage> {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
     final habilitado = menu?.habilitado == true;
+    final cantidadSopas = data.items.where((item) => item.esSopa).length;
+    final cantidadPlatos = data.items
+        .where(
+          (item) => MenuRepository.esCategoriaPlatoSuelto(item.categoriaNombre),
+        )
+        .length;
+    final cantidadOtros = data.items.length - cantidadSopas - cantidadPlatos;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -524,11 +729,10 @@ class _MenuPageState extends State<MenuPage> {
                 side: BorderSide.none,
               ),
               Chip(
-                label: Text('${data.items.length} plato(s)'),
-                side: BorderSide.none,
-              ),
-              Chip(
-                label: Text('${data.combos.length} combo(s)'),
+                label: Text(
+                  'Sopa $cantidadSopas/1 · $cantidadPlatos almuerzo(s) · '
+                  '$cantidadOtros otro(s)',
+                ),
                 side: BorderSide.none,
               ),
             ],
@@ -536,8 +740,8 @@ class _MenuPageState extends State<MenuPage> {
           const SizedBox(height: 10),
           Text(
             _editando
-                ? 'Modo edición: toca un plato para agregarlo o quitarlo del menú de hoy.'
-                : 'Pulsa "Editar" para agregar o quitar platos. Los platos con check verde están en el menú de hoy; los rojos están agotados.',
+                ? 'Elige una sopa y marca los productos de hoy individualmente o con “Todos” en cada categoría. Solo PLATOS SUELTOS puede ser completo.'
+                : 'Pulsa "Editar" para cambiar la sopa y los productos. Los seleccionados están en el menú de hoy; los rojos están agotados.',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
           if (_esAdmin) ...[
@@ -550,7 +754,7 @@ class _MenuPageState extends State<MenuPage> {
                   FilledButton.icon(
                     onPressed: _crearMenu,
                     icon: const Icon(Icons.history),
-                    label: const Text('Crear menú con los platos de ayer'),
+                    label: const Text('Crear menú con lo de ayer'),
                   ),
                 if (menu != null && !_editando)
                   OutlinedButton.icon(
@@ -565,7 +769,7 @@ class _MenuPageState extends State<MenuPage> {
                     label: const Text('Listo'),
                   ),
                 if (_editando &&
-                    (data.items.isNotEmpty || data.combos.isNotEmpty))
+                    (data.items.isNotEmpty || data.hayCombosLegacy))
                   OutlinedButton.icon(
                     onPressed: () => _limpiar(data),
                     icon: const Icon(Icons.delete_sweep_outlined),
@@ -591,6 +795,9 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
+  // Vista antigua de combos: se conserva solo como referencia al migrar datos,
+  // pero el flujo nuevo no la muestra ni crea productos compuestos.
+  // ignore: unused_element
   Widget _combosSection(BuildContext context, _MenuData data) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
@@ -611,9 +818,8 @@ class _MenuPageState extends State<MenuPage> {
                     child: Text(
                       'Almuerzos y combos',
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800),
                     ),
                   ),
                 ],
@@ -629,9 +835,8 @@ class _MenuPageState extends State<MenuPage> {
           const SizedBox(height: 6),
           Text(
             'Selecciona uno o más productos. El precio sugerido baja un 10% desde el segundo producto, pero puedes cambiarlo.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
           if (data.combos.isEmpty)
@@ -650,12 +855,8 @@ class _MenuPageState extends State<MenuPage> {
                   runSpacing: 12,
                   children: data.combos
                       .map(
-                        (combo) => _comboCard(
-                          context,
-                          data,
-                          combo,
-                          ancho: ancho,
-                        ),
+                        (combo) =>
+                            _comboCard(context, data, combo, ancho: ancho),
                       )
                       .toList(),
                 );
@@ -711,9 +912,8 @@ class _MenuPageState extends State<MenuPage> {
                 .join(' + '),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           Row(
@@ -770,16 +970,28 @@ class _MenuPageState extends State<MenuPage> {
 
   Widget _catalogo(BuildContext context, _MenuData data) {
     final term = _search.trim().toLowerCase();
-    final filtrados = data.productos
-        .where((producto) {
-          if (producto.esCompuesto) return false;
-          if (_categoriaId != null && producto.categoriaId != _categoriaId) {
-            return false;
-          }
-          return term.isEmpty || producto.nombre.toLowerCase().contains(term);
-        })
-        .toList();
-    if (filtrados.isEmpty) {
+    final productosMenu = data.productos.where((producto) {
+      return !producto.esCompuesto &&
+          !producto.categoriaSiempreDisponible &&
+          !producto.esVentaDirecta &&
+          !MenuRepository.esCategoriaSopa(producto.categoriaNombre);
+    }).toList();
+    final filtrados = productosMenu.where((producto) {
+      if (_categoriaId != null && producto.categoriaId != _categoriaId) {
+        return false;
+      }
+      return term.isEmpty || producto.nombre.toLowerCase().contains(term);
+    }).toList();
+    final directos = data.productos.where((producto) {
+      if (!producto.categoriaSiempreDisponible && !producto.esVentaDirecta) {
+        return false;
+      }
+      if (_categoriaId != null && producto.categoriaId != _categoriaId) {
+        return false;
+      }
+      return term.isEmpty || producto.nombre.toLowerCase().contains(term);
+    }).toList()..sort(_compararProductos);
+    if (filtrados.isEmpty && directos.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
         title: 'Sin productos',
@@ -787,55 +999,74 @@ class _MenuPageState extends State<MenuPage> {
       );
     }
 
-    final directos =
-        filtrados
-            .where(
-              (producto) =>
-                  producto.categoriaSiempreDisponible ||
-                  producto.esVentaDirecta,
-            )
-            .toList()
-          ..sort(_compararProductos);
-    final menu = filtrados
-        .where(
-          (producto) =>
-              !producto.categoriaSiempreDisponible && !producto.esVentaDirecta,
-        )
-        .toList();
-
-    final grupos = <String, List<Producto>>{};
-    for (final producto in menu) {
-      grupos.putIfAbsent(producto.categoriaNombre.toUpperCase(), () => []).add(
-        producto,
-      );
+    final grupos = <int, List<Producto>>{};
+    for (final producto in filtrados) {
+      grupos.putIfAbsent(producto.categoriaId, () => []).add(producto);
     }
     final ordenCategorias = {
-      for (final categoria in data.categorias) categoria.nombre: categoria.orden,
+      for (final categoria in data.categorias)
+        if (categoria.id != null) categoria.id!: categoria,
     };
     final categorias = grupos.keys.toList()
       ..sort((a, b) {
-        final ordenA = ordenCategorias[a] ?? 999;
-        final ordenB = ordenCategorias[b] ?? 999;
+        final ordenA = ordenCategorias[a]?.orden ?? 999;
+        final ordenB = ordenCategorias[b]?.orden ?? 999;
         if (ordenA != ordenB) return ordenA.compareTo(ordenB);
-        return a.compareTo(b);
+        return (ordenCategorias[a]?.nombre ?? '').compareTo(
+          ordenCategorias[b]?.nombre ?? '',
+        );
       });
 
     final children = <Widget>[];
-    for (final categoria in categorias) {
+    final idsEnMenu = data.items.map((item) => item.productoId).toSet();
+    for (final categoriaId in categorias) {
+      final categoria = ordenCategorias[categoriaId];
+      final productosVisibles = grupos[categoriaId]!..sort(_compararProductos);
+      final todosCategoria =
+          productosMenu
+              .where((producto) => producto.categoriaId == categoriaId)
+              .toList()
+            ..sort(_compararProductos);
+      final todoSeleccionado =
+          todosCategoria.isNotEmpty &&
+          todosCategoria.every((producto) => idsEnMenu.contains(producto.id));
       children.add(
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            categoria,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  categoria?.nombre.toUpperCase() ?? 'PRODUCTOS',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+              if (_esAdmin && _editando)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Todos'),
+                    Checkbox(
+                      key: ValueKey('seleccionar-categoria-$categoriaId'),
+                      value: todoSeleccionado,
+                      onChanged: _guardando
+                          ? null
+                          : (valor) => _toggleCategoria(
+                              data,
+                              todosCategoria,
+                              seleccionar: valor ?? false,
+                            ),
+                    ),
+                  ],
+                ),
+            ],
           ),
         ),
       );
-      final productos = grupos[categoria]!..sort(_compararProductos);
-      children.add(_gridProductos(context, data, productos));
+      children.add(_gridProductos(context, data, productosVisibles));
       children.add(const SizedBox(height: 16));
     }
 
@@ -870,6 +1101,8 @@ class _MenuPageState extends State<MenuPage> {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
     final habilitado = menu?.habilitado == true;
+    final sopasDelMenu = data.items.where((item) => item.esSopa).toList();
+    final precioSopa = sopasDelMenu.isEmpty ? null : sopasDelMenu.first.precio;
     final productosPorId = {
       for (final producto in data.productos) producto.id: producto,
     };
@@ -891,7 +1124,7 @@ class _MenuPageState extends State<MenuPage> {
                 ),
               ),
               Text(
-                '${data.items.length + data.combos.length}',
+                '${data.items.length} producto(s)',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: scheme.primary,
@@ -904,7 +1137,7 @@ class _MenuPageState extends State<MenuPage> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
-                'Aún no has elegido platos.\nToca un plato o arma un almuerzo.',
+                'Aún no has elegido el menú.\nSelecciona una sopa y los productos de hoy.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: scheme.onSurfaceVariant),
               ),
@@ -935,6 +1168,22 @@ class _MenuPageState extends State<MenuPage> {
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
+                          Text(
+                            item.esSopa
+                                ? 'Sopa del día'
+                                : MenuRepository.esCategoriaPlatoSuelto(
+                                    item.categoriaNombre,
+                                  )
+                                ? precioSopa == null
+                                      ? 'Suelto · ${formatMoney(item.precio)}'
+                                      : 'Suelto ${formatMoney(item.precio)} · '
+                                            'Completo ${formatMoney(item.precio + precioSopa)}'
+                                : 'Disponible hoy',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
                           if (!item.disponible)
                             Text(
                               item.motivoAgotado ?? 'Agotado',
@@ -947,9 +1196,8 @@ class _MenuPageState extends State<MenuPage> {
                     const SizedBox(width: 8),
                     Text(
                       formatMoney(item.precio),
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
@@ -971,9 +1219,8 @@ class _MenuPageState extends State<MenuPage> {
                               gaplessPlayback: true,
                             )
                           : Container(
-                              color: Color(
-                                combo.categoriaColor,
-                              ).withValues(alpha: 0.15),
+                              color: Color(combo.categoriaColor)
+                                  .withValues(alpha: 0.15),
                               child: Icon(
                                 Icons.dinner_dining,
                                 size: 20,
@@ -1015,9 +1262,8 @@ class _MenuPageState extends State<MenuPage> {
                   const SizedBox(width: 8),
                   Text(
                     formatMoney(combo.precio),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: Theme.of(context).textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -1027,7 +1273,7 @@ class _MenuPageState extends State<MenuPage> {
             FilledButton.icon(
               onPressed: () => _crearMenu(),
               icon: const Icon(Icons.history),
-              label: const Text('Crear menú con los platos de ayer'),
+              label: const Text('Crear menú con lo de ayer'),
             )
           else if (!habilitado)
             FilledButton.icon(
@@ -1116,10 +1362,7 @@ class _MenuPageState extends State<MenuPage> {
         .toList();
     final resultado = await showDialog<_ComboInput>(
       context: context,
-      builder: (_) => _ComboBuilderDialog(
-        productos: disponibles,
-        combo: combo,
-      ),
+      builder: (_) => _ComboBuilderDialog(productos: disponibles, combo: combo),
     );
     if (resultado == null || resultado.componenteIds.isEmpty) return;
     try {
@@ -1465,18 +1708,19 @@ class _ComboBuilderDialogState extends State<_ComboBuilderDialog> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final termino = _buscar.text.trim().toLowerCase();
-    final productos = widget.productos
-        .where(
-          (producto) =>
-              termino.isEmpty ||
-              producto.nombre.toLowerCase().contains(termino),
-        )
-        .toList()
-      ..sort((a, b) {
-        final prioridad = _prioridad(a).compareTo(_prioridad(b));
-        if (prioridad != 0) return prioridad;
-        return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
-      });
+    final productos =
+        widget.productos
+            .where(
+              (producto) =>
+                  termino.isEmpty ||
+                  producto.nombre.toLowerCase().contains(termino),
+            )
+            .toList()
+          ..sort((a, b) {
+            final prioridad = _prioridad(a).compareTo(_prioridad(b));
+            if (prioridad != 0) return prioridad;
+            return a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase());
+          });
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
       title: Text(
@@ -1521,9 +1765,8 @@ class _ComboBuilderDialogState extends State<_ComboBuilderDialog> {
                     child: Text(
                       'Suma: ${formatMoney(_base)} · '
                       'Sugerido: ${formatMoney(_sugerido)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ),
                   TextButton(

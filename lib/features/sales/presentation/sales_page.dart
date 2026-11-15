@@ -16,7 +16,6 @@ class _SaleProduct {
   const _SaleProduct({
     required this.productoId,
     this.menuDiaItemId,
-    this.menuDiaComboId,
     required this.nombre,
     required this.precio,
     required this.categoriaNombre,
@@ -28,12 +27,12 @@ class _SaleProduct {
     this.advertencia,
     required this.stock,
     required this.enMenu,
+    this.costoUnitario = 0,
     this.imagen,
   });
 
   final int productoId;
   final int? menuDiaItemId;
-  final int? menuDiaComboId;
   final String nombre;
   final double precio;
   final String categoriaNombre;
@@ -44,10 +43,14 @@ class _SaleProduct {
   final String? motivo;
   final String? advertencia;
   final double stock;
+  final double costoUnitario;
   final bool enMenu;
   final Uint8List? imagen;
 
   bool get esDirecto => tipo == 'DIRECTO';
+  bool get esSopa => MenuRepository.esCategoriaSopa(categoriaNombre);
+  bool get esPlatoSuelto =>
+      MenuRepository.esCategoriaPlatoSuelto(categoriaNombre);
 
   String get categoriaEtiqueta => categoriaPadreNombre == null
       ? categoriaNombre
@@ -70,12 +73,14 @@ class _SalesData {
     required this.menu,
     required this.productos,
     required this.pedidosAbiertos,
+    required this.sopaDelDia,
   });
 
   final Caja? caja;
   final MenuDia? menu;
   final List<_SaleProduct> productos;
   final List<Pedido> pedidosAbiertos;
+  final _SaleProduct? sopaDelDia;
 }
 
 class SalesPage extends StatefulWidget {
@@ -100,7 +105,7 @@ class _SalesPageState extends State<SalesPage> {
   final _menuRepository = MenuRepository();
   final _salesRepository = SalesRepository();
   late Future<_SalesData> _future;
-  final _cart = <int, CartLine>{};
+  final _cart = <String, CartLine>{};
   final _referencia = TextEditingController();
   final _observacion = TextEditingController();
   String _search = '';
@@ -141,10 +146,6 @@ class _SalesPageState extends State<SalesPage> {
     final menuItems = menu != null && menu.habilitado
         ? await _menuRepository.getItems(menu.id)
         : <MenuItem>[];
-    final combos = menu != null && menu.habilitado
-        ? await _menuRepository.getCombos(menu.id)
-        : <MenuCombo>[];
-
     final productos = <int, _SaleProduct>{};
     // Se carga una sola vez el catálogo activo y se reutiliza para los combos,
     // los platos del menú y los productos fuera del menú. Antes se hacía una
@@ -154,23 +155,6 @@ class _SalesPageState extends State<SalesPage> {
       for (final producto in activos)
         if (producto.id != null) producto.id!: producto,
     };
-    for (final combo in combos) {
-      final producto = productoPorId[combo.productoId];
-      productos[combo.productoId] = _SaleProduct(
-        productoId: combo.productoId,
-        menuDiaComboId: combo.id,
-        nombre: combo.nombre,
-        precio: combo.precio,
-        categoriaNombre: 'ALMUERZOS Y COMBOS',
-        categoriaColor: combo.categoriaColor,
-        tipo: 'PREPARADO',
-        disponible: combo.disponible,
-        motivo: combo.disponible ? null : 'Combo agotado',
-        stock: producto?.stock ?? 0,
-        enMenu: true,
-        imagen: combo.imagen,
-      );
-    }
     for (final item in menuItems) {
       final producto = productoPorId[item.productoId];
       final advertencia = await _catalogRepository.advertenciaInsumos(
@@ -192,6 +176,7 @@ class _SalesPageState extends State<SalesPage> {
         advertencia: advertencia,
         stock: producto?.stock ?? 0,
         enMenu: true,
+        costoUnitario: producto?.costoUnitario ?? 0,
         imagen: producto?.imagen,
       );
     }
@@ -235,15 +220,20 @@ class _SalesPageState extends State<SalesPage> {
         advertencia: advertencia,
         stock: producto.stock,
         enMenu: siempre,
+        costoUnitario: producto.costoUnitario,
         imagen: producto.imagen,
       );
     }
     final abiertos = await _salesRepository.getPedidosAbiertos();
+    final sopas = productos.values
+        .where((producto) => producto.esSopa)
+        .toList();
     return _SalesData(
       caja: caja,
       menu: menu,
       productos: productos.values.toList(),
       pedidosAbiertos: abiertos,
+      sopaDelDia: sopas.isEmpty ? null : sopas.first,
     );
   }
 
@@ -253,7 +243,11 @@ class _SalesPageState extends State<SalesPage> {
   int get _unidades =>
       _cart.values.fold<int>(0, (sum, line) => sum + line.cantidad.round());
 
-  void _add(_SaleProduct producto) {
+  void _add(
+    _SaleProduct producto, {
+    bool completo = false,
+    _SaleProduct? sopa,
+  }) {
     if (!producto.vendible) {
       showAppMessage(
         context,
@@ -262,39 +256,62 @@ class _SalesPageState extends State<SalesPage> {
       );
       return;
     }
+    if (completo &&
+        (sopa == null || !sopa.vendible || !producto.esPlatoSuelto)) {
+      showAppMessage(
+        context,
+        'La sopa del día no está disponible.',
+        error: true,
+      );
+      return;
+    }
+    final modalidad = completo
+        ? 'COMPLETO'
+        : producto.esSopa
+        ? 'SOPA'
+        : producto.esPlatoSuelto
+        ? 'SUELTO'
+        : 'NORMAL';
+    final nuevaLinea = CartLine(
+      productoId: producto.productoId,
+      menuDiaItemId: producto.menuDiaItemId,
+      nombre: producto.nombre,
+      precio: producto.precio + (completo ? sopa!.precio : 0),
+      cantidad: 1,
+      tipo: producto.tipo,
+      modalidadVenta: modalidad,
+      productoSopaId: completo ? sopa!.productoId : null,
+      menuDiaSopaItemId: completo ? sopa!.menuDiaItemId : null,
+      nombreSopa: completo ? sopa!.nombre : null,
+      precioSopaUnitario: completo ? sopa!.precio : 0,
+      costoSopaUnitario: completo ? sopa!.costoUnitario : 0,
+      tipoSopa: completo ? sopa!.tipo : null,
+    );
     setState(() {
-      final line = _cart[producto.productoId];
+      final line = _cart[nuevaLinea.key];
       if (line == null) {
-        _cart[producto.productoId] = CartLine(
-          productoId: producto.productoId,
-          menuDiaItemId: producto.menuDiaItemId,
-          menuDiaComboId: producto.menuDiaComboId,
-          nombre: producto.nombre,
-          precio: producto.precio,
-          cantidad: 1,
-          tipo: producto.tipo,
-        );
+        _cart[nuevaLinea.key] = nuevaLinea;
       } else {
-        _cart[producto.productoId] = line.copyWith(cantidad: line.cantidad + 1);
+        _cart[nuevaLinea.key] = line.copyWith(cantidad: line.cantidad + 1);
       }
     });
   }
 
-  void _changeQty(int productoId, double delta) {
+  void _changeQty(String key, double delta) {
     setState(() {
-      final line = _cart[productoId];
+      final line = _cart[key];
       if (line == null) return;
       final nueva = line.cantidad + delta;
       if (nueva <= 0) {
-        _cart.remove(productoId);
+        _cart.remove(key);
       } else {
-        _cart[productoId] = line.copyWith(cantidad: nueva);
+        _cart[key] = line.copyWith(cantidad: nueva);
       }
     });
   }
 
-  void _remove(int productoId) {
-    setState(() => _cart.remove(productoId));
+  void _remove(String key) {
+    setState(() => _cart.remove(key));
   }
 
   void _limpiarCarrito() {
@@ -532,8 +549,7 @@ class _SalesPageState extends State<SalesPage> {
 
   Future<void> _agotar(_SaleProduct producto) async {
     final menuItemId = producto.menuDiaItemId;
-    final comboId = producto.menuDiaComboId;
-    if (menuItemId == null && comboId == null) return;
+    if (menuItemId == null) return;
     final confirmado = await confirmAction(
       context,
       title: 'Reportar agotamiento',
@@ -543,15 +559,7 @@ class _SalesPageState extends State<SalesPage> {
       destructive: true,
     );
     if (!confirmado) return;
-    if (comboId != null) {
-      await _menuRepository.setComboDisponible(comboId, false);
-    } else {
-      await _menuRepository.setDisponible(
-        menuItemId!,
-        false,
-        motivo: 'Agotado',
-      );
-    }
+    await _menuRepository.setDisponible(menuItemId, false, motivo: 'Agotado');
     if (!mounted) return;
     setState(_reload);
     showAppMessage(context, '${producto.nombre} marcado como agotado.');
@@ -738,16 +746,20 @@ class _SalesPageState extends State<SalesPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (enMenu.isNotEmpty) _gridProductos(context, enMenu),
+        if (enMenu.isNotEmpty) _gridProductos(context, data, enMenu),
         if (fueraMenu.isNotEmpty) ...[
           if (enMenu.isNotEmpty) const SizedBox(height: 16),
-          _fueraDelMenu(context, fueraMenu),
+          _fueraDelMenu(context, data, fueraMenu),
         ],
       ],
     );
   }
 
-  Widget _gridProductos(BuildContext context, List<_SaleProduct> productos) {
+  Widget _gridProductos(
+    BuildContext context,
+    _SalesData data,
+    List<_SaleProduct> productos,
+  ) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = constraints.maxWidth >= 900
@@ -760,7 +772,42 @@ class _SalesPageState extends State<SalesPage> {
           spacing: 12,
           runSpacing: 12,
           children: productos.map((producto) {
-            final cantidad = _cart[producto.productoId]?.cantidad.round() ?? 0;
+            final cantidad = _cart.values
+                .where((linea) => linea.productoId == producto.productoId)
+                .fold<double>(0, (suma, linea) => suma + linea.cantidad)
+                .round();
+            final sopa = data.sopaDelDia;
+            final ofreceModalidad =
+                producto.menuDiaItemId != null &&
+                producto.esPlatoSuelto &&
+                sopa != null;
+            final pie = ofreceModalidad
+                ? Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: producto.vendible
+                              ? () => _add(producto)
+                              : null,
+                          child: Text(
+                            'Suelto · ${formatMoney(producto.precio)}',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: producto.vendible && sopa.vendible
+                              ? () => _add(producto, completo: true, sopa: sopa)
+                              : null,
+                          child: Text(
+                            'Completo · ${formatMoney(producto.precio + sopa.precio)}',
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : null;
             return SizedBox(
               width: width,
               child: ProductoCatalogoCard(
@@ -773,15 +820,23 @@ class _SalesPageState extends State<SalesPage> {
                 stock: producto.stock,
                 habilitado: producto.vendible,
                 mensaje: producto.vendible
-                    ? (cantidad > 0
-                          ? 'Toca para agregar · $cantidad en el pedido'
-                          : 'Toca para agregar')
+                    ? (ofreceModalidad
+                          ? (cantidad > 0
+                                ? '$cantidad en el pedido'
+                                : 'Elige cómo se sirve')
+                          : (cantidad > 0
+                                ? 'Toca para agregar · $cantidad en el pedido'
+                                : 'Toca para agregar'))
                     : producto.razon,
-                onTap: producto.vendible ? () => _add(producto) : null,
+                onTap: ofreceModalidad
+                    ? null
+                    : producto.vendible
+                    ? () => _add(producto)
+                    : null,
+                pie: pie,
                 advertencia: producto.vendible ? producto.advertencia : null,
                 accion:
-                    (producto.menuDiaItemId != null ||
-                            producto.menuDiaComboId != null) &&
+                    producto.menuDiaItemId != null &&
                         widget.usuario.puede(Permiso.agotamiento)
                     ? IconButton(
                         tooltip: 'Reportar agotado',
@@ -800,7 +855,11 @@ class _SalesPageState extends State<SalesPage> {
 
   /// Sección colapsable con los productos activos que no se eligieron para el
   /// menú de hoy. No se pueden vender y quedan ocultos por defecto.
-  Widget _fueraDelMenu(BuildContext context, List<_SaleProduct> productos) {
+  Widget _fueraDelMenu(
+    BuildContext context,
+    _SalesData data,
+    List<_SaleProduct> productos,
+  ) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
       padding: EdgeInsets.zero,
@@ -831,7 +890,7 @@ class _SalesPageState extends State<SalesPage> {
           if (_mostrarFueraMenu)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: _gridProductos(context, productos),
+              child: _gridProductos(context, data, productos),
             ),
         ],
       ),
@@ -904,9 +963,19 @@ class _SalesPageState extends State<SalesPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          line.nombre,
+                          line.modalidadVenta == 'COMPLETO'
+                              ? '${line.nombre} completo'
+                              : line.nombre,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
+                        if (line.modalidadVenta == 'COMPLETO' &&
+                            line.nombreSopa != null)
+                          Text(
+                            'Incluye ${line.nombreSopa} · '
+                            '${formatMoney(line.precioSopaUnitario)}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
                         Text(
                           '${formatMoney(line.precio)} c/u',
                           style: Theme.of(context).textTheme.bodySmall
@@ -919,7 +988,7 @@ class _SalesPageState extends State<SalesPage> {
                       children: [
                         IconButton(
                           visualDensity: VisualDensity.compact,
-                          onPressed: () => _changeQty(line.productoId, -1),
+                          onPressed: () => _changeQty(line.key, -1),
                           icon: const Icon(Icons.remove_circle_outline),
                         ),
                         Text(
@@ -928,7 +997,7 @@ class _SalesPageState extends State<SalesPage> {
                         ),
                         IconButton(
                           visualDensity: VisualDensity.compact,
-                          onPressed: () => _changeQty(line.productoId, 1),
+                          onPressed: () => _changeQty(line.key, 1),
                           icon: const Icon(Icons.add_circle_outline),
                         ),
                       ],
@@ -941,7 +1010,7 @@ class _SalesPageState extends State<SalesPage> {
                     final quitar = IconButton(
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Quitar',
-                      onPressed: () => _remove(line.productoId),
+                      onPressed: () => _remove(line.key),
                       icon: const Icon(Icons.close, size: 18),
                     );
                     if (angosto) {
@@ -1200,7 +1269,12 @@ class _PaymentDialogState extends State<_PaymentDialog> {
 
   double get _restante => widget.total - _suma;
 
-  bool get _completo => _suma > 0 && _restante.abs() <= 0.05;
+  bool get _montosValidos =>
+      (_efectivo.text.trim().isEmpty ||
+          validateDecimalAmount(_efectivo.text) == null) &&
+      (_qr.text.trim().isEmpty || validateDecimalAmount(_qr.text) == null);
+
+  bool get _completo => _montosValidos && _suma > 0 && _restante.abs() <= 0.05;
 
   bool get _excede => _restante < -0.05;
 
@@ -1274,6 +1348,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _efectivo,
+              inputFormatters: [decimalAmountInputFormatter],
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -1286,6 +1361,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
             const SizedBox(height: 10),
             TextField(
               controller: _qr,
+              inputFormatters: [decimalAmountInputFormatter],
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -1293,6 +1369,14 @@ class _PaymentDialogState extends State<_PaymentDialog> {
               onChanged: (value) => _actualizar('QR', value),
             ),
             const SizedBox(height: 8),
+            if (!_montosValidos)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Ingresa montos numéricos válidos, sin negativos.',
+                  style: TextStyle(color: scheme.error),
+                ),
+              ),
             Align(
               alignment: Alignment.centerLeft,
               child: Wrap(
@@ -1409,7 +1493,7 @@ class _PedidoDetalleDialog extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              '${formatQty(linea.cantidad)} × ${linea.nombre}',
+                              '${formatQty(linea.cantidad)} × ${linea.nombreParaMostrar}',
                             ),
                           ),
                           Text(formatMoney(linea.subtotal)),

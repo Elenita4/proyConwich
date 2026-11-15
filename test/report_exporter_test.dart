@@ -26,6 +26,9 @@ void main() {
         costo: 20,
         color: 0xFF0F766E,
         precioUnitario: 20,
+        categoriaNombre: 'PLATOS SUELTOS',
+        completos: 2,
+        sueltos: 1,
       ),
       ProductoReporte(
         nombre: 'Refresco',
@@ -34,6 +37,18 @@ void main() {
         costo: 18,
         color: 0xFF16A34A,
         precioUnitario: 10,
+        categoriaNombre: 'REFRESCOS',
+      ),
+      ProductoReporte(
+        nombre: 'Sopa de maní',
+        cantidad: 4,
+        ventas: 16,
+        costo: 5,
+        color: 0xFF2563EB,
+        precioUnitario: 4,
+        categoriaNombre: 'SOPAS',
+        completos: 2,
+        sueltos: 2,
       ),
     ],
     salidas: [
@@ -78,6 +93,8 @@ void main() {
     expect(libro.tables.containsKey('Pedidos'), isTrue);
     expect(libro.tables.containsKey('Gráfico'), isTrue);
     expect(libro.tables.containsKey('Gráfico cantidades'), isTrue);
+    expect(libro.tables.containsKey('Almuerzos'), isTrue);
+    expect(libro.tables.containsKey('Sopas'), isTrue);
     final resumen = libro.tables['Resumen']!.rows
         .map((fila) => fila.map((celda) => celda?.value.toString()).toList())
         .toList();
@@ -87,6 +104,10 @@ void main() {
     expect(
       productos.rows.first.map((celda) => celda?.value.toString()).toList(),
       contains('Precio unitario'),
+    );
+    expect(
+      productos.rows.first.map((celda) => celda?.value.toString()).toList(),
+      isNot(contains('En completos')),
     );
 
     final cantidades = libro.tables['Gráfico cantidades']!;

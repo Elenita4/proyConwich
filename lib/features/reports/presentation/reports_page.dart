@@ -7,6 +7,7 @@ import '../../../core/receipt_service.dart';
 import '../../../core/report_exporter.dart';
 import '../../../core/report_repository.dart';
 import '../../../core/sales_repository.dart';
+import '../../../core/session.dart';
 import '../../../ui/common.dart';
 
 class _ReportData {
@@ -44,9 +45,10 @@ class _ProductoSlice {
 }
 
 class ReportsPage extends StatefulWidget {
-  const ReportsPage({super.key, required this.refreshToken});
+  const ReportsPage({super.key, required this.refreshToken, this.usuario});
 
   final int refreshToken;
+  final Usuario? usuario;
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
@@ -56,9 +58,14 @@ class _ReportsPageState extends State<ReportsPage> {
   static const _periodos = ['DIA', 'SEMANA', 'MES', 'TRIMESTRE', 'ANIO'];
   final _repository = ReportRepository();
   late Future<_ReportData> _future;
+  late Future<List<PedidoReporte>> _misPedidosFuture;
   String _periodo = 'DIA';
   DateTime _anchor = DateTime.now();
+  DateTimeRange? _rangoPersonalizado;
   bool _exportando = false;
+
+  bool get _soloMisPedidos =>
+      widget.usuario != null && !widget.usuario!.esAdmin;
 
   @override
   void initState() {
@@ -69,12 +76,26 @@ class _ReportsPageState extends State<ReportsPage> {
   @override
   void didUpdateWidget(ReportsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.refreshToken != widget.refreshToken) _reload();
+    if (oldWidget.refreshToken != widget.refreshToken ||
+        oldWidget.usuario?.id != widget.usuario?.id ||
+        oldWidget.usuario?.esAdmin != widget.usuario?.esAdmin) {
+      _reload();
+    }
   }
 
   // Debe devolver void: si devolviera el Future, setState lanzaría error y la
   // pantalla no se refrescaría.
   void _reload() {
+    if (_soloMisPedidos) {
+      final range = _range;
+      _misPedidosFuture = _repository.getPedidos(
+        range.start,
+        range.end,
+        usuarioId: widget.usuario!.id,
+        incluirAnulados: true,
+      );
+      return;
+    }
     _future = _load();
   }
 
@@ -83,6 +104,7 @@ class _ReportsPageState extends State<ReportsPage> {
     'SEMANA' => 'Semana',
     'MES' => 'Mes',
     'TRIMESTRE' => 'Trimestre',
+    'RANGO' => 'Personalizado',
     _ => 'Año',
   };
 
@@ -115,6 +137,16 @@ class _ReportsPageState extends State<ReportsPage> {
           start: DateTime(anchor.year, 1, 1),
           end: DateTime(anchor.year + 1, 1, 1),
         );
+      case 'RANGO':
+        return _rangoPersonalizado ??
+            DateTimeRange(
+              start: DateTime(
+                anchor.year,
+                anchor.month,
+                anchor.day,
+              ).subtract(const Duration(days: 6)),
+              end: DateTime(anchor.year, anchor.month, anchor.day + 1),
+            );
       default:
         final start = DateTime(anchor.year, anchor.month, anchor.day);
         return DateTimeRange(
@@ -139,9 +171,45 @@ class _ReportsPageState extends State<ReportsPage> {
         case 'ANIO':
           _anchor = DateTime(_anchor.year + delta, 1, 1);
           break;
+        case 'RANGO':
+          final rango = _range;
+          final duracion = rango.end.difference(rango.start);
+          _rangoPersonalizado = DateTimeRange(
+            start: rango.start.add(Duration(days: duracion.inDays * delta)),
+            end: rango.end.add(Duration(days: duracion.inDays * delta)),
+          );
+          _anchor = _rangoPersonalizado!.end.subtract(const Duration(days: 1));
+          break;
         default:
           _anchor = _anchor.add(Duration(days: delta));
       }
+      _reload();
+    });
+  }
+
+  Future<void> _seleccionarRango() async {
+    final actual = _range;
+    final elegido = await showDateRangePicker(
+      context: context,
+      initialDateRange: DateTimeRange(
+        start: actual.start,
+        end: actual.end.subtract(const Duration(days: 1)),
+      ),
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (elegido == null || !mounted) return;
+    setState(() {
+      _periodo = 'RANGO';
+      _rangoPersonalizado = DateTimeRange(
+        start: DateTime(
+          elegido.start.year,
+          elegido.start.month,
+          elegido.start.day,
+        ),
+        end: DateTime(elegido.end.year, elegido.end.month, elegido.end.day + 1),
+      );
+      _anchor = elegido.end;
       _reload();
     });
   }
@@ -182,6 +250,140 @@ class _ReportsPageState extends State<ReportsPage> {
         pedidos: data.pedidos,
         faltantes: data.faltantes,
       );
+
+  Widget _misPedidosPage(BuildContext context) {
+    return FutureBuilder<List<PedidoReporte>>(
+      future: _misPedidosFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingView();
+        }
+        if (snapshot.hasError) {
+          return ErrorView(
+            message: '${snapshot.error}',
+            onRetry: () => setState(_reload),
+          );
+        }
+        final pedidos = snapshot.data ?? const <PedidoReporte>[];
+        final range = _range;
+        final finMostrar = range.end.subtract(const Duration(days: 1));
+        return ListView(
+          padding: EdgeInsets.all(
+            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+          ),
+          children: [
+            PageHeader(
+              title: 'Mis pedidos',
+              subtitle: 'Historial de tus pedidos. Solo lectura.',
+              actions: [
+                OutlinedButton.icon(
+                  onPressed: () => setState(_reload),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Actualizar'),
+                ),
+              ],
+            ),
+            AppCard(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  ChoiceChipRow<String>(
+                    values: [..._periodos, 'RANGO'],
+                    labelBuilder: _labelPeriodo,
+                    selected: _periodo,
+                    onSelected: (value) {
+                      if (value == 'RANGO' && _rangoPersonalizado == null) {
+                        _seleccionarRango();
+                        return;
+                      }
+                      setState(() {
+                        _periodo = value;
+                        if (value != 'RANGO') _anchor = DateTime.now();
+                        _reload();
+                      });
+                    },
+                  ),
+                  IconButton(
+                    tooltip: 'Período anterior',
+                    onPressed: () => _mover(-1),
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Text(
+                    '${formatDateShort(range.start)} — ${formatDateShort(finMostrar)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  IconButton(
+                    tooltip: 'Período siguiente',
+                    onPressed: () => _mover(1),
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _seleccionarRango,
+                    icon: const Icon(Icons.date_range_outlined),
+                    label: const Text('Elegir fechas'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (pedidos.isEmpty)
+              const EmptyState(
+                icon: Icons.receipt_long_outlined,
+                title: 'Sin pedidos en el período',
+                message: 'No registraste pedidos en estas fechas.',
+              )
+            else
+              ...pedidos.map(
+                (pedido) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: AppCard(
+                    padding: EdgeInsets.zero,
+                    child: ListTile(
+                      leading: CircleAvatar(child: Text('${pedido.id}')),
+                      title: Text(
+                        pedido.referencia == null
+                            ? 'Pedido #${pedido.id}'
+                            : '${pedido.referencia} · #${pedido.id}',
+                      ),
+                      subtitle: Text(
+                        '${formatDateTimeText(pedido.fecha)} · '
+                        '${pedido.estadoPago} · ${pedido.estadoEntrega}',
+                      ),
+                      trailing: Text(
+                        formatMoney(pedido.total),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      onTap: () => _verPedidoPropio(pedido),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _verPedidoPropio(PedidoReporte pedido) async {
+    try {
+      final detalle = await SalesRepository().getPedido(pedido.id);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _PedidoSoloLecturaDialog(detalle: detalle),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo abrir el pedido: $error',
+        error: true,
+      );
+    }
+  }
 
   Future<void> _exportar({required bool pdf, required bool compartir}) async {
     if (_exportando) return;
@@ -231,6 +433,7 @@ class _ReportsPageState extends State<ReportsPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_soloMisPedidos) return _misPedidosPage(context);
     final range = _range;
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
@@ -760,7 +963,95 @@ class _ReportsPageState extends State<ReportsPage> {
             ),
           ),
         ),
+        const SizedBox(height: 12),
+        _desgloseModalidades(context, data.productos),
       ],
+    );
+  }
+
+  Widget _desgloseModalidades(
+    BuildContext context,
+    List<ProductoReporte> productos,
+  ) {
+    final platos = productos
+        .where(
+          (producto) =>
+              producto.categoriaNombre.trim().toUpperCase() == 'PLATOS SUELTOS',
+        )
+        .toList();
+    final sopas = productos
+        .where(
+          (producto) =>
+              producto.categoriaNombre.trim().toUpperCase() == 'SOPAS',
+        )
+        .toList();
+    if (platos.isEmpty && sopas.isEmpty) return const SizedBox.shrink();
+
+    String cantidad(double valor) => valor <= 0 ? '—' : formatQty(valor);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Desglose del menú de almuerzo',
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          if (platos.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Platos sueltos',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Plato')),
+                  DataColumn(label: Text('Sueltos'), numeric: true),
+                  DataColumn(label: Text('Completos'), numeric: true),
+                ],
+                rows: platos
+                    .map(
+                      (producto) => DataRow(
+                        cells: [
+                          DataCell(Text(producto.nombre)),
+                          DataCell(Text(cantidad(producto.sueltos))),
+                          DataCell(Text(cantidad(producto.completos))),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ],
+          if (sopas.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text('Sopas', style: Theme.of(context).textTheme.titleSmall),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Sopa')),
+                  DataColumn(label: Text('Solas'), numeric: true),
+                  DataColumn(label: Text('Incluidas'), numeric: true),
+                ],
+                rows: sopas
+                    .map(
+                      (producto) => DataRow(
+                        cells: [
+                          DataCell(Text(producto.nombre)),
+                          DataCell(Text(cantidad(producto.sueltos))),
+                          DataCell(Text(cantidad(producto.completos))),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -1195,6 +1486,93 @@ class _TabBarHeader extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant _TabBarHeader oldDelegate) =>
       oldDelegate.tabBar != tabBar || oldDelegate.color != color;
+}
+
+class _PedidoSoloLecturaDialog extends StatelessWidget {
+  const _PedidoSoloLecturaDialog({required this.detalle});
+
+  final PedidoDetalle detalle;
+
+  @override
+  Widget build(BuildContext context) {
+    final pedido = detalle.pedido;
+    final lineas = detalle.lineas.where((linea) => !linea.esComponente);
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Pedido #${pedido.id}'),
+      content: DialogSurface(
+        maxWidth: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LabelValue(
+                label: 'Fecha',
+                value: formatDateTimeText(pedido.fecha),
+              ),
+              LabelValue(label: 'Pago', value: pedido.estadoPago),
+              LabelValue(label: 'Entrega', value: pedido.estadoEntrega),
+              if (pedido.referencia != null)
+                LabelValue(label: 'Referencia', value: pedido.referencia!),
+              const Divider(height: 22),
+              Text(
+                'Productos',
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              for (final linea in lineas)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${formatQty(linea.cantidad)} × ${linea.nombreParaMostrar}',
+                        ),
+                      ),
+                      Text(formatMoney(linea.subtotal)),
+                    ],
+                  ),
+                ),
+              const Divider(height: 22),
+              LabelValue(label: 'Total', value: formatMoney(pedido.total)),
+              LabelValue(label: 'Pagado', value: formatMoney(pedido.pagado)),
+              LabelValue(label: 'Saldo', value: formatMoney(pedido.saldo)),
+              const Divider(height: 22),
+              Text(
+                'Pagos',
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              if (detalle.pagos.isEmpty)
+                const Text('Sin pagos registrados.')
+              else
+                for (final pago in detalle.pagos)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('${pago.metodo} · ${pago.estado}'),
+                        ),
+                        Text(formatMoney(pago.monto)),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
 }
 
 /// Gráfico de torta de los productos vendidos (por ventas en Bs).
