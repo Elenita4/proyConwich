@@ -27,6 +27,24 @@ void main() {
     expect(formatQty(0.125), '0.125');
   });
 
+  test('amount validation accepts decimal separators and checks bounds', () {
+    expect(validateDecimalAmount('12,50', allowZero: false), isNull);
+    expect(validateDecimalAmount('12.50', allowZero: false), isNull);
+    expect(validateDecimalAmount('0', allowZero: false), isNotNull);
+    expect(validateDecimalAmount('-1,25'), isNotNull);
+    expect(validateDecimalAmount('texto'), isNotNull);
+    expect(validateDecimalAmount('0'), isNull);
+  });
+
+  test('amount validation accepts decimals and rejects invalid ranges', () {
+    expect(validateDecimalAmount('12,50', allowZero: false), isNull);
+    expect(validateDecimalAmount('12.50', allowZero: false), isNull);
+    expect(validateDecimalAmount('0', allowZero: false), isNotNull);
+    expect(validateDecimalAmount('-1,25'), isNotNull);
+    expect(validateDecimalAmount('abc'), isNotNull);
+    expect(validateDecimalAmount('0'), isNull);
+  });
+
   testWidgets('login validates empty fields without touching the database', (
     tester,
   ) async {

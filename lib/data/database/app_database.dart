@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 14;
+  static const int schemaVersion = 16;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -97,7 +97,9 @@ class AppDatabase {
         await _migrarVentaDirecta(db);
         await _migrarEstadosMenu(db);
         await _migrarCategoriasAlmuerzo(db);
+        if (oldVersion == 15) await _migrarV16(db);
         await _migrarV13(db);
+        await _migrarV15(db);
         await _afterOpen(db);
       },
     );
@@ -111,8 +113,8 @@ class AppDatabase {
     await _seedAppMeta(db);
   }
 
-  /// Categorías base del catálogo. Son planas: los almuerzos completos ya no
-  /// son una categoría sino productos compuestos que se arman desde el menú.
+  /// Categorías base del catálogo. Solo los productos de PLATOS SUELTOS pueden
+  /// venderse como completo junto con la sopa del día.
   Future<void> _seedCategorias(Database db) async {
     const categorias = [
       {'nombre': 'PLATOS SUELTOS', 'color': 0xFFEA580C, 'orden': 1},
@@ -392,10 +394,18 @@ class AppDatabase {
         subtotal REAL NOT NULL,
         costo_unitario REAL NOT NULL DEFAULT 0,
         es_componente INTEGER NOT NULL DEFAULT 0,
+        modalidad_venta TEXT NOT NULL DEFAULT 'NORMAL',
+        producto_sopa_id INTEGER,
+        menu_dia_sopa_item_id INTEGER,
+        nombre_sopa TEXT,
+        precio_sopa_unitario REAL NOT NULL DEFAULT 0,
+        costo_sopa_unitario REAL NOT NULL DEFAULT 0,
         observacion TEXT,
         FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
         FOREIGN KEY (producto_id) REFERENCES productos(id),
-        FOREIGN KEY (menu_dia_item_id) REFERENCES menu_dia_items(id)
+        FOREIGN KEY (menu_dia_item_id) REFERENCES menu_dia_items(id),
+        FOREIGN KEY (producto_sopa_id) REFERENCES productos(id),
+        FOREIGN KEY (menu_dia_sopa_item_id) REFERENCES menu_dia_items(id)
       )
     ''');
 
@@ -1112,6 +1122,90 @@ class AppDatabase {
       }
     } catch (error) {
       debugPrint('No se pudo migrar el esquema v13: $error');
+    }
+  }
+
+  /// Agrega modalidad de venta y snapshots de sopa a las líneas del pedido.
+  Future<void> _migrarV15(Database db) async {
+    try {
+      const columnas = <String, String>{
+        'modalidad_venta': "TEXT NOT NULL DEFAULT 'NORMAL'",
+        'producto_sopa_id': 'INTEGER REFERENCES productos(id)',
+        'menu_dia_sopa_item_id': 'INTEGER REFERENCES menu_dia_items(id)',
+        'nombre_sopa': 'TEXT',
+        'precio_sopa_unitario': 'REAL NOT NULL DEFAULT 0',
+        'costo_sopa_unitario': 'REAL NOT NULL DEFAULT 0',
+      };
+      for (final columna in columnas.entries) {
+        if (!await _tieneColumna(db, 'detalle_pedido', columna.key)) {
+          await db.execute(
+            'ALTER TABLE detalle_pedido ADD COLUMN ${columna.key} ${columna.value}',
+          );
+        }
+      }
+
+      // Menús existentes podían tener varias sopas seleccionadas. Conserva
+      // como opción activa la primera disponible y oculta las demás sin
+      // borrar las filas que puedan estar ligadas a ventas antiguas.
+      await db.execute('''
+        UPDATE menu_dia_items
+        SET disponible = 0, motivo_agotado = 'MENU_REEMPLAZADO'
+        WHERE id IN (
+          SELECT mi.id
+          FROM menu_dia_items mi
+          INNER JOIN productos p ON p.id = mi.producto_id
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE UPPER(TRIM(c.nombre)) = 'SOPAS'
+            AND mi.id <> (
+              SELECT mi2.id
+              FROM menu_dia_items mi2
+              INNER JOIN productos p2 ON p2.id = mi2.producto_id
+              INNER JOIN categorias_producto c2 ON c2.id = p2.categoria_id
+              WHERE mi2.menu_dia_id = mi.menu_dia_id
+                AND UPPER(TRIM(c2.nombre)) = 'SOPAS'
+                AND COALESCE(mi2.motivo_agotado, '') <> 'MENU_REEMPLAZADO'
+              ORDER BY mi2.disponible DESC, mi2.orden, mi2.id
+              LIMIT 1
+            )
+        )
+      ''');
+      // Los completos antiguos eran productos compuestos con precio fijo; se
+      // conservan para el historial, pero ya no deben ofrecerse como catálogo.
+      await db.update('productos', {'activo': 0}, where: 'es_compuesto = 1');
+    } catch (error) {
+      debugPrint('No se pudo migrar el esquema v15: $error');
+    }
+  }
+
+  /// Revierte la etiqueta agregada por v15 sin fusionar categorías ni tocar
+  /// productos o ventas. Solo aplica al esquema v15, donde PLATOS fue la
+  /// categoría base sembrada por esa versión.
+  Future<void> _migrarV16(Database db) async {
+    try {
+      final platosSueltos = await db.query(
+        'categorias_producto',
+        columns: ['id'],
+        where: 'nombre = ? COLLATE NOCASE',
+        whereArgs: ['PLATOS SUELTOS'],
+        limit: 1,
+      );
+      if (platosSueltos.isNotEmpty) return;
+      final platos = await db.query(
+        'categorias_producto',
+        columns: ['id'],
+        where: 'nombre = ? COLLATE NOCASE',
+        whereArgs: ['PLATOS'],
+        limit: 1,
+      );
+      if (platos.isEmpty) return;
+      await db.update(
+        'categorias_producto',
+        {'nombre': 'PLATOS SUELTOS'},
+        where: 'id = ?',
+        whereArgs: [platos.first['id']],
+      );
+    } catch (error) {
+      debugPrint('No se pudo restaurar PLATOS SUELTOS: $error');
     }
   }
 

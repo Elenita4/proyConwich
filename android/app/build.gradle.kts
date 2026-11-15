@@ -30,6 +30,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Solo la arquitectura del dispositivo conectado: builds de
+            // desarrollo mucho más rápidos.
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.

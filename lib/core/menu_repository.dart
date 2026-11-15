@@ -51,6 +51,8 @@ class MenuItem {
   final bool disponible;
   final String? motivoAgotado;
   final int orden;
+
+  bool get esSopa => MenuRepository.esCategoriaSopa(categoriaNombre);
 }
 
 class MenuCombo {
@@ -88,6 +90,12 @@ class MenuCombo {
 
 class MenuRepository {
   static const String tipoMenu = 'ALMUERZO';
+
+  static bool esCategoriaSopa(String nombre) =>
+      nombre.trim().toUpperCase() == 'SOPAS';
+
+  static bool esCategoriaPlatoSuelto(String nombre) =>
+      nombre.trim().toUpperCase() == 'PLATOS SUELTOS';
 
   Future<MenuDia?> getMenu(DateTime fecha, String tipo) async {
     final db = await AppDatabase.instance.database;
@@ -143,13 +151,23 @@ class MenuRepository {
     if (anteriores.isEmpty) return null;
     final anterior = _fromRow(anteriores.first);
     final nuevo = await crearMenu(fecha, tipo, usuarioId);
-    final items = await db.query(
-      'menu_dia_items',
-      where: 'menu_dia_id = ?',
-      whereArgs: [anterior.id],
-      orderBy: 'orden',
+    final items = await db.rawQuery(
+      '''
+      SELECT mi.*, c.nombre AS categoria_nombre
+      FROM menu_dia_items mi
+      INNER JOIN productos p ON p.id = mi.producto_id
+      INNER JOIN categorias_producto c ON c.id = p.categoria_id
+      WHERE mi.menu_dia_id = ?
+        AND COALESCE(mi.motivo_agotado, '') <> 'MENU_REEMPLAZADO'
+      ORDER BY mi.orden, mi.id
+      ''',
+      [anterior.id],
     );
+    var yaCopioSopa = false;
     for (final item in items) {
+      final esSopa = esCategoriaSopa(item['categoria_nombre'] as String);
+      if (esSopa && yaCopioSopa) continue;
+      if (esSopa) yaCopioSopa = true;
       await db.insert('menu_dia_items', {
         'menu_dia_id': nuevo.id,
         'producto_id': item['producto_id'],
@@ -157,23 +175,8 @@ class MenuRepository {
         'orden': item['orden'],
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
-    final combos = await db.query(
-      'menu_dia_combos',
-      where: 'menu_dia_id = ?',
-      whereArgs: [anterior.id],
-      orderBy: 'orden',
-    );
-    for (final combo in combos) {
-      await db.insert('menu_dia_combos', {
-        'menu_dia_id': nuevo.id,
-        'producto_id': combo['producto_id'],
-        'nombre': combo['nombre'],
-        'precio': combo['precio'],
-        'descuento_porcentaje': 0,
-        'disponible': 1,
-        'orden': combo['orden'],
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
-    }
+    // Los combos antiguos quedan como historial, pero no se copian: el
+    // completo ahora se calcula al vender a partir del plato y la sopa del día.
     // El menú del día siguiente conserva la publicación anterior para que se
     // pueda vender sin volver a publicarlo. Un borrador sigue siendo borrador.
     if (anterior.habilitado) {
@@ -204,6 +207,7 @@ class MenuRepository {
       INNER JOIN productos p ON p.id = mi.producto_id
       INNER JOIN categorias_producto c ON c.id = p.categoria_id
       WHERE mi.menu_dia_id = ?
+        AND COALESCE(mi.motivo_agotado, '') <> 'MENU_REEMPLAZADO'
       ORDER BY mi.orden, p.nombre COLLATE NOCASE
     ''',
       [menuDiaId],
@@ -264,6 +268,17 @@ class MenuRepository {
     return combos;
   }
 
+  Future<bool> tieneCombosLegacy(int menuDiaId) async {
+    final db = await AppDatabase.instance.database;
+    final count = Sqflite.firstIntValue(
+      await db.rawQuery(
+        'SELECT COUNT(*) FROM menu_dia_combos WHERE menu_dia_id = ?',
+        [menuDiaId],
+      ),
+    );
+    return (count ?? 0) > 0;
+  }
+
   Future<int> agregarCombo({
     required int menuDiaId,
     required int productoId,
@@ -318,31 +333,134 @@ class MenuRepository {
 
   Future<void> agregarProducto(int menuDiaId, int productoId) async {
     final db = await AppDatabase.instance.database;
-    final maxRows = await db.rawQuery(
-      'SELECT COALESCE(MAX(orden), 0) AS maximo FROM menu_dia_items WHERE menu_dia_id = ?',
-      [menuDiaId],
-    );
-    final orden = ((maxRows.first['maximo'] as num?)?.toInt() ?? 0) + 1;
-    await db.insert('menu_dia_items', {
-      'menu_dia_id': menuDiaId,
-      'producto_id': productoId,
-      'disponible': 1,
-      'orden': orden,
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await db.transaction((txn) async {
+      final productoRows = await txn.rawQuery(
+        '''
+        SELECT c.nombre AS categoria_nombre
+        FROM productos p
+        INNER JOIN categorias_producto c ON c.id = p.categoria_id
+        WHERE p.id = ?
+        LIMIT 1
+        ''',
+        [productoId],
+      );
+      if (productoRows.isEmpty) {
+        throw StateError('El producto no existe.');
+      }
+      final esSopa = esCategoriaSopa(
+        productoRows.first['categoria_nombre'] as String,
+      );
+      if (esSopa) {
+        // Solo puede quedar una sopa seleccionada para este día. Al cambiarla,
+        // las ventas ya registradas conservan la sopa original.
+        final sopasEnMenu = await txn.rawQuery(
+          '''
+          SELECT mi.id, mi.producto_id
+          FROM menu_dia_items mi
+          INNER JOIN productos p ON p.id = mi.producto_id
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE mi.menu_dia_id = ?
+            AND UPPER(TRIM(c.nombre)) = 'SOPAS'
+            AND mi.producto_id <> ?
+          ''',
+          [menuDiaId, productoId],
+        );
+        for (final sopa in sopasEnMenu) {
+          await _quitarItemEnTxn(txn, sopa['id']! as int);
+        }
+      }
+      final existente = await txn.query(
+        'menu_dia_items',
+        columns: ['id'],
+        where: 'menu_dia_id = ? AND producto_id = ?',
+        whereArgs: [menuDiaId, productoId],
+        limit: 1,
+      );
+      if (existente.isNotEmpty) {
+        await txn.update(
+          'menu_dia_items',
+          {'disponible': 1, 'motivo_agotado': null},
+          where: 'id = ?',
+          whereArgs: [existente.first['id']],
+        );
+        return;
+      }
+      final maxRows = await txn.rawQuery(
+        'SELECT COALESCE(MAX(orden), 0) AS maximo FROM menu_dia_items WHERE menu_dia_id = ?',
+        [menuDiaId],
+      );
+      final orden = ((maxRows.first['maximo'] as num?)?.toInt() ?? 0) + 1;
+      await txn.insert('menu_dia_items', {
+        'menu_dia_id': menuDiaId,
+        'producto_id': productoId,
+        'disponible': 1,
+        'orden': orden,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    });
   }
 
-  /// Deja el menú exactamente con los productos indicados, en ese orden.
-  Future<void> reemplazarItems(int menuDiaId, List<int> productoIds) async {
+  /// Selecciona o quita todos los productos de una categoría del menú.
+  /// No agrega SOPAS ni productos de categorías siempre disponibles.
+  Future<void> seleccionarCategoria({
+    required int menuDiaId,
+    required List<int> productoIds,
+    required bool seleccionado,
+  }) async {
+    if (productoIds.isEmpty) return;
     final db = await AppDatabase.instance.database;
     await db.transaction((txn) async {
-      await txn.delete(
-        'menu_dia_items',
-        where: 'menu_dia_id = ?',
-        whereArgs: [menuDiaId],
-      );
-      var orden = 0;
       for (final productoId in productoIds.toSet()) {
-        orden++;
+        final rows = await txn.rawQuery(
+          '''
+          SELECT c.nombre AS categoria_nombre,
+                 c.siempre_disponible,
+                 p.tipo,
+                 p.activo
+          FROM productos p
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE p.id = ?
+          LIMIT 1
+          ''',
+          [productoId],
+        );
+        if (rows.isEmpty) continue;
+        final row = rows.first;
+        if (esCategoriaSopa(row['categoria_nombre'] as String) ||
+            (row['siempre_disponible'] as num).toInt() == 1 ||
+            (row['tipo'] as String) == 'DIRECTO' ||
+            (row['activo'] as num).toInt() != 1) {
+          continue;
+        }
+        final existentes = await txn.query(
+          'menu_dia_items',
+          columns: ['id', 'motivo_agotado'],
+          where: 'menu_dia_id = ? AND producto_id = ?',
+          whereArgs: [menuDiaId, productoId],
+          limit: 1,
+        );
+        if (!seleccionado) {
+          if (existentes.isNotEmpty) {
+            await _quitarItemEnTxn(txn, existentes.first['id']! as int);
+          }
+          continue;
+        }
+        if (existentes.isNotEmpty) {
+          if (existentes.first['motivo_agotado'] != 'MENU_REEMPLAZADO') {
+            continue;
+          }
+          await txn.update(
+            'menu_dia_items',
+            {'disponible': 1, 'motivo_agotado': null},
+            where: 'id = ?',
+            whereArgs: [existentes.first['id']],
+          );
+          continue;
+        }
+        final maxRows = await txn.rawQuery(
+          'SELECT COALESCE(MAX(orden), 0) AS maximo FROM menu_dia_items WHERE menu_dia_id = ?',
+          [menuDiaId],
+        );
+        final orden = ((maxRows.first['maximo'] as num?)?.toInt() ?? 0) + 1;
         await txn.insert('menu_dia_items', {
           'menu_dia_id': menuDiaId,
           'producto_id': productoId,
@@ -353,15 +471,103 @@ class MenuRepository {
     });
   }
 
-  /// Deja el menú sin platos ni combos.
-  Future<void> limpiarMenu(int menuDiaId) async {
+  Future<void> _quitarItemEnTxn(DatabaseExecutor txn, int itemId) async {
+    final referencias =
+        Sqflite.firstIntValue(
+          await txn.rawQuery(
+            '''
+        SELECT COUNT(*) FROM detalle_pedido
+        WHERE menu_dia_item_id = ? OR menu_dia_sopa_item_id = ?
+        ''',
+            [itemId, itemId],
+          ),
+        ) ??
+        0;
+    if (referencias > 0) {
+      await txn.update(
+        'menu_dia_items',
+        {'disponible': 0, 'motivo_agotado': 'MENU_REEMPLAZADO'},
+        where: 'id = ?',
+        whereArgs: [itemId],
+      );
+    } else {
+      await txn.delete('menu_dia_items', where: 'id = ?', whereArgs: [itemId]);
+    }
+  }
+
+  /// Deja el menú exactamente con los productos indicados, en ese orden.
+  Future<void> reemplazarItems(int menuDiaId, List<int> productoIds) async {
     final db = await AppDatabase.instance.database;
     await db.transaction((txn) async {
-      await txn.delete(
+      final existentes = await txn.query(
         'menu_dia_items',
+        columns: ['id'],
         where: 'menu_dia_id = ?',
         whereArgs: [menuDiaId],
       );
+      for (final item in existentes) {
+        await _quitarItemEnTxn(txn, item['id']! as int);
+      }
+      var orden = 0;
+      var yaSeleccionoSopa = false;
+      for (final productoId in productoIds.toSet()) {
+        final categorias = await txn.rawQuery(
+          '''
+          SELECT c.nombre AS categoria_nombre
+          FROM productos p
+          INNER JOIN categorias_producto c ON c.id = p.categoria_id
+          WHERE p.id = ?
+          LIMIT 1
+          ''',
+          [productoId],
+        );
+        if (categorias.isEmpty) continue;
+        final esSopa = esCategoriaSopa(
+          categorias.first['categoria_nombre'] as String,
+        );
+        if (esSopa && yaSeleccionoSopa) continue;
+        if (esSopa) yaSeleccionoSopa = true;
+        orden++;
+        final itemExistente = await txn.query(
+          'menu_dia_items',
+          columns: ['id'],
+          where: 'menu_dia_id = ? AND producto_id = ?',
+          whereArgs: [menuDiaId, productoId],
+          limit: 1,
+        );
+        if (itemExistente.isNotEmpty) {
+          await txn.update(
+            'menu_dia_items',
+            {'disponible': 1, 'motivo_agotado': null, 'orden': orden},
+            where: 'id = ?',
+            whereArgs: [itemExistente.first['id']],
+          );
+        } else {
+          await txn.insert('menu_dia_items', {
+            'menu_dia_id': menuDiaId,
+            'producto_id': productoId,
+            'disponible': 1,
+            'orden': orden,
+          }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
+      }
+    });
+  }
+
+  /// Deja el menú sin sopa ni platos, conservando las filas que ya tienen
+  /// ventas asociadas para proteger el historial.
+  Future<void> limpiarMenu(int menuDiaId) async {
+    final db = await AppDatabase.instance.database;
+    await db.transaction((txn) async {
+      final items = await txn.query(
+        'menu_dia_items',
+        columns: ['id'],
+        where: 'menu_dia_id = ?',
+        whereArgs: [menuDiaId],
+      );
+      for (final item in items) {
+        await _quitarItemEnTxn(txn, item['id']! as int);
+      }
       await txn.delete(
         'menu_dia_combos',
         where: 'menu_dia_id = ?',
@@ -388,7 +594,7 @@ class MenuRepository {
     final items = await db.query(
       'menu_dia_items',
       columns: ['producto_id'],
-      where: 'menu_dia_id = ?',
+      where: "menu_dia_id = ? AND COALESCE(motivo_agotado, '') <> 'MENU_REEMPLAZADO'",
       whereArgs: [anteriores.first['id']],
       orderBy: 'orden',
     );
@@ -397,7 +603,7 @@ class MenuRepository {
 
   Future<void> quitarItem(int itemId) async {
     final db = await AppDatabase.instance.database;
-    await db.delete('menu_dia_items', where: 'id = ?', whereArgs: [itemId]);
+    await db.transaction((txn) => _quitarItemEnTxn(txn, itemId));
   }
 
   Future<void> setDisponible(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/date_utils.dart';
 
@@ -70,6 +71,38 @@ double parseAmount(String value) {
     return 0;
   }
   return double.tryParse(normalized) ?? 0;
+}
+
+/// Limita la entrada a dígitos y un separador decimal (coma o punto).
+final TextInputFormatter decimalAmountInputFormatter =
+    TextInputFormatter.withFunction((oldValue, newValue) {
+      if (RegExp(r'^\d*(?:[,.]\d*)?$').hasMatch(newValue.text)) {
+        return newValue;
+      }
+      return oldValue;
+    });
+
+/// Valida cantidades numéricas sin permitir texto, negativos ni valores no
+/// finitos. Los formularios de producto pueden permitir cero en costos/stock.
+String? validateDecimalAmount(
+  String? value, {
+  bool allowZero = true,
+  String? label,
+}) {
+  final text = (value ?? '').trim();
+  final nombre = label ?? 'El valor';
+  if (text.isEmpty) return '$nombre es obligatorio.';
+  final normalizado = text.replaceAll(',', '.');
+  if (!RegExp(r'^(?:\d+(?:\.\d*)?|\.\d+)$').hasMatch(normalizado)) {
+    return '$nombre debe ser un número válido.';
+  }
+  final numero = double.tryParse(normalizado);
+  if (numero == null || !numero.isFinite) {
+    return '$nombre debe ser un número válido.';
+  }
+  if (numero < 0) return '$nombre no puede ser negativo.';
+  if (!allowZero && numero == 0) return '$nombre debe ser mayor a cero.';
+  return null;
 }
 
 String formatQty(double value) {
@@ -166,11 +199,7 @@ class AdaptiveRow extends StatelessWidget {
 
 /// Tabla o contenido ancho que se puede recorrer con el dedo o el mouse.
 class HorizontalScrollArea extends StatelessWidget {
-  const HorizontalScrollArea({
-    super.key,
-    required this.child,
-    this.minWidth,
-  });
+  const HorizontalScrollArea({super.key, required this.child, this.minWidth});
 
   final Widget child;
   final double? minWidth;
@@ -192,8 +221,7 @@ class HorizontalScrollArea extends StatelessWidget {
   }
 }
 
-String formatPercent(double value) =>
-    '${(value * 100).toStringAsFixed(1)}%';
+String formatPercent(double value) => '${(value * 100).toStringAsFixed(1)}%';
 
 String formatDateTimeText(String value) {
   final parsed = parseSqlDateTime(value);
@@ -222,9 +250,8 @@ class PageHeader extends StatelessWidget {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 4),
@@ -289,9 +316,8 @@ class AppCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(
-            alpha: 0.6,
-          ),
+          color: Theme.of(context).colorScheme.outlineVariant
+              .withValues(alpha: 0.6),
         ),
       ),
       child: Padding(padding: padding, child: child),
@@ -345,25 +371,21 @@ class StatCard extends StatelessWidget {
                 children: [
                   Text(
                     label,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     value,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: accent,
-                    ),
+                    style: Theme.of(context).textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700, color: accent),
                   ),
                   if (caption != null) ...[
                     const SizedBox(height: 2),
                     Text(
                       caption!,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ],
@@ -439,18 +461,16 @@ class EmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
             ),
             if (message != null) ...[
               const SizedBox(height: 6),
               Text(
                 message!,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
             if (action != null) ...[const SizedBox(height: 16), action!],
@@ -465,8 +485,12 @@ class LoadingView extends StatelessWidget {
   const LoadingView({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()));
+  Widget build(BuildContext context) => const Center(
+    child: Padding(
+      padding: EdgeInsets.all(40),
+      child: CircularProgressIndicator(),
+    ),
+  );
 }
 
 class ErrorView extends StatelessWidget {

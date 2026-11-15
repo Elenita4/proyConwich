@@ -22,6 +22,7 @@ class ProductoCatalogoCard extends StatelessWidget {
     this.esDirecto = false,
     this.stock,
     this.accion,
+    this.pie,
   });
 
   final Uint8List? imagen;
@@ -45,6 +46,7 @@ class ProductoCatalogoCard extends StatelessWidget {
   final bool esDirecto;
   final double? stock;
   final Widget? accion;
+  final Widget? pie;
 
   @override
   Widget build(BuildContext context) {
@@ -151,20 +153,23 @@ class ProductoCatalogoCard extends StatelessWidget {
                         nombre,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700, color: texto),
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: texto,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         formatMoney(precio),
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: agotado
-                              ? scheme.onSurfaceVariant
-                              : habilitado
-                              ? scheme.primary
-                              : texto,
-                        ),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: agotado
+                                  ? scheme.onSurfaceVariant
+                                  : habilitado
+                                  ? scheme.primary
+                                  : texto,
+                            ),
                       ),
                       if (stock != null && esDirecto)
                         Text(
@@ -179,11 +184,7 @@ class ProductoCatalogoCard extends StatelessWidget {
                       const SizedBox(height: 8),
                       Row(
                         children: [
-                          Icon(
-                            iconoMensaje,
-                            size: 18,
-                            color: colorMensaje,
-                          ),
+                          Icon(iconoMensaje, size: 18, color: colorMensaje),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -221,6 +222,7 @@ class ProductoCatalogoCard extends StatelessWidget {
                           ],
                         ),
                       ],
+                      if (pie != null) ...[const SizedBox(height: 10), pie!],
                     ],
                   ),
                 ),

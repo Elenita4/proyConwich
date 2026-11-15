@@ -253,13 +253,14 @@ class _AppShellState extends State<AppShell> {
         ),
       );
     }
-    if (usuario.puede(Permiso.reportes)) {
+    if (usuario.puede(Permiso.reportes) ||
+        (usuario.perfil == Perfil.cajero && usuario.puede(Permiso.ventas))) {
       destinations.add(
         _Destination(
           label: 'Reportes',
           icon: Icons.bar_chart_outlined,
           selectedIcon: Icons.bar_chart,
-          page: ReportsPage(refreshToken: _token('Reportes')),
+          page: ReportsPage(usuario: usuario, refreshToken: _token('Reportes')),
         ),
       );
     }

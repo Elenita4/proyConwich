@@ -33,6 +33,19 @@ class ReportExportData {
   final String negocio;
 
   DateTime get finMostrar => hasta.subtract(const Duration(seconds: 1));
+
+  List<ProductoReporte> get desglosePlatos => productos
+      .where(
+        (producto) =>
+            producto.categoriaNombre.trim().toUpperCase() == 'PLATOS SUELTOS',
+      )
+      .toList();
+
+  List<ProductoReporte> get desgloseSopas => productos
+      .where(
+        (producto) => producto.categoriaNombre.trim().toUpperCase() == 'SOPAS',
+      )
+      .toList();
 }
 
 class ReportExporter {
@@ -48,6 +61,8 @@ class ReportExporter {
         '${data.hasta.year}-${dos(data.hasta.month)}-${dos(data.hasta.day)}';
     return 'conwich_reporte_${desde}_$hasta.$extension';
   }
+
+  String _qtyOrDash(double valor) => valor <= 0 ? '—' : _qty(valor);
 
   Future<Uint8List> generarPdf(ReportExportData data) async {
     final doc = pw.Document();
@@ -323,6 +338,68 @@ class ReportExporter {
               5: pw.Alignment.centerRight,
             },
           ),
+          if (data.desglosePlatos.isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            pw.Text(
+              'Desglose de platos sueltos',
+              style: pw.TextStyle(
+                fontSize: 12,
+                fontWeight: pw.FontWeight.bold,
+                color: scheme,
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            pw.TableHelper.fromTextArray(
+              headers: const ['Plato', 'Sueltos', 'Completos'],
+              data: data.desglosePlatos
+                  .map(
+                    (producto) => [
+                      producto.nombre,
+                      _qtyOrDash(producto.sueltos),
+                      _qtyOrDash(producto.completos),
+                    ],
+                  )
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: blanco,
+              ),
+              headerDecoration: pw.BoxDecoration(color: scheme),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+            ),
+          ],
+          if (data.desgloseSopas.isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            pw.Text(
+              'Desglose de sopas',
+              style: pw.TextStyle(
+                fontSize: 12,
+                fontWeight: pw.FontWeight.bold,
+                color: scheme,
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            pw.TableHelper.fromTextArray(
+              headers: const ['Sopa', 'Solas', 'Incluidas en completos'],
+              data: data.desgloseSopas
+                  .map(
+                    (producto) => [
+                      producto.nombre,
+                      _qtyOrDash(producto.sueltos),
+                      _qtyOrDash(producto.completos),
+                    ],
+                  )
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: blanco,
+              ),
+              headerDecoration: pw.BoxDecoration(color: scheme),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+            ),
+          ],
           pw.SizedBox(height: 16),
           pw.Text(
             'Salidas de caja',
@@ -520,6 +597,34 @@ class ReportExporter {
     }
     for (var i = 0; i < 6; i++) {
       productos.setColumnWidth(i, 22);
+    }
+
+    final almuerzos = excel['Almuerzos'];
+    almuerzos.appendRow([
+      TextCellValue('Plato'),
+      TextCellValue('Sueltos'),
+      TextCellValue('Completos'),
+    ]);
+    for (final producto in data.desglosePlatos) {
+      almuerzos.appendRow([
+        TextCellValue(producto.nombre),
+        TextCellValue(_qtyOrDash(producto.sueltos)),
+        TextCellValue(_qtyOrDash(producto.completos)),
+      ]);
+    }
+
+    final sopas = excel['Sopas'];
+    sopas.appendRow([
+      TextCellValue('Sopa'),
+      TextCellValue('Solas'),
+      TextCellValue('Incluidas en completos'),
+    ]);
+    for (final producto in data.desgloseSopas) {
+      sopas.appendRow([
+        TextCellValue(producto.nombre),
+        TextCellValue(_qtyOrDash(producto.sueltos)),
+        TextCellValue(_qtyOrDash(producto.completos)),
+      ]);
     }
 
     final salidas = excel['Salidas'];
