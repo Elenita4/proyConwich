@@ -74,11 +74,18 @@ void main() {
     await asentar(tester);
     expect(tester.takeException(), isNull);
 
+    await asentar(tester);
+    expect(tester.takeException(), isNull);
+
+    // Las acciones de sesión ahora son iconos en la AppBar.
+    expect(find.byIcon(Icons.logout), findsOneWidget);
+    expect(find.byIcon(Icons.lock_reset_outlined), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // El drawer solo muestra los destinos.
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    expect(find.text('Cerrar sesión'), findsOneWidget);
-    expect(find.text('Cambiar mi contraseña'), findsOneWidget);
-    expect(find.text('Cambiar de usuario'), findsOneWidget);
+    expect(find.text('Ventas'), findsWidgets);
     expect(tester.takeException(), isNull);
 
     await cerrar(tester);
@@ -104,7 +111,9 @@ void main() {
     await asentar(tester);
     expect(tester.takeException(), isNull);
 
-    final rail = find.byType(NavigationRail);
+    // La barra lateral de tablet es una lista desplazable propia (no usa
+    // NavigationRail) y siempre muestra las etiquetas.
+    final rail = find.byKey(const Key('rail-sidebar'));
     expect(
       find.descendant(of: rail, matching: find.text('Ventas')),
       findsOneWidget,
@@ -112,6 +121,11 @@ void main() {
     expect(
       find.descendant(of: rail, matching: find.text('Reportes')),
       findsOneWidget,
+    );
+    // Las acciones de sesión ahora son iconos en la AppBar, no en la barra.
+    expect(
+      find.descendant(of: rail, matching: find.byIcon(Icons.logout)),
+      findsNothing,
     );
     expect(find.byIcon(Icons.logout), findsOneWidget);
     expect(find.byIcon(Icons.lock_reset_outlined), findsOneWidget);

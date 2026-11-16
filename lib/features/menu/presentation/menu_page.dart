@@ -64,6 +64,13 @@ class _MenuPageState extends State<MenuPage> {
   bool _editando = false;
   bool _guardando = false;
 
+  // Estado local durante la edición: se aplica a la BD recién al pulsar
+  // "Listo", así seleccionar/deseleccionar platos no recarga la página ni
+  // pierde el scroll.
+  Set<int> _selLocal = {};
+  int? _sopaLocal;
+  Set<int> _agotadosLocal = {};
+
   bool get _esAdmin => widget.usuario.puede(Permiso.menu);
 
   @override
@@ -139,6 +146,142 @@ class _MenuPageState extends State<MenuPage> {
     return null;
   }
 
+  /// Inicializa el estado local de edición a partir de los items actuales.
+  void _initLocalDeItems(List<MenuItem> items) {
+    _selLocal = items
+        .where((item) => !item.esSopa)
+        .map((item) => item.productoId)
+        .toSet();
+    MenuItem? sopa;
+    for (final item in items) {
+      if (item.esSopa) {
+        sopa = item;
+        break;
+      }
+    }
+    _sopaLocal = sopa?.productoId;
+    _agotadosLocal = items
+        .where((item) => !item.disponible)
+        .map((item) => item.productoId)
+        .toSet();
+  }
+
+  void _iniciarEdicion(_MenuData data) {
+    _initLocalDeItems(data.items);
+    setState(() => _editando = true);
+  }
+
+  /// Aplica los cambios locales a la base y recarga una sola vez.
+  Future<void> _finalizarEdicion(_MenuData data) async {
+    setState(() => _guardando = true);
+    try {
+      final menu = data.menu ?? await _crearConAnterior();
+
+      // Sopa del día.
+      final sopasActuales = data.items.where((item) => item.esSopa).toList();
+      final sopaActualId = sopasActuales.isEmpty
+          ? null
+          : sopasActuales.first.productoId;
+      if (_sopaLocal != sopaActualId) {
+        if (_sopaLocal == null) {
+          for (final sopa in sopasActuales) {
+            await _repository.quitarItem(sopa.id);
+          }
+        } else {
+          await _repository.agregarProducto(menu.id, _sopaLocal!);
+        }
+      }
+
+      // Platos (no sopa) a agregar o quitar.
+      final actualesIds = data.items
+          .where((item) => !item.esSopa)
+          .map((item) => item.productoId)
+          .toSet();
+      final paraAgregar = _selLocal.difference(actualesIds);
+      final paraQuitar = actualesIds.difference(_selLocal);
+      for (final id in paraAgregar) {
+        await _repository.agregarProducto(menu.id, id);
+      }
+      for (final item in data.items) {
+        if (item.esSopa) continue;
+        if (paraQuitar.contains(item.productoId)) {
+          await _repository.quitarItem(item.id);
+        }
+      }
+
+      // Agotados, contra el estado ya aplicado.
+      final itemsAplicados = await _repository.getItems(menu.id);
+      for (final item in itemsAplicados) {
+        final disponible = !_agotadosLocal.contains(item.productoId);
+        if (item.disponible != disponible) {
+          await _repository.setDisponible(
+            item.id,
+            disponible,
+            motivo: disponible ? null : 'Agotado',
+          );
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _guardando = false;
+        _editando = false;
+        _reload();
+      });
+      showAppMessage(context, 'Menú actualizado.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      showAppMessage(
+        context,
+        'No se pudo guardar el menú: $error',
+        error: true,
+      );
+    }
+  }
+
+  /// Items efectivos del menú: durante la edición usa el estado local (aún no
+  /// guardado); fuera de edición usa lo que está en la base.
+  List<MenuItem> _itemsEfectivos(_MenuData data) {
+    if (!_editando) return data.items;
+    final productosPorId = <int, Producto>{
+      for (final producto in data.productos)
+        if (producto.id != null) producto.id!: producto,
+    };
+    final resultado = <MenuItem>[];
+    final vistos = <int>{};
+    if (_sopaLocal != null) {
+      final producto = productosPorId[_sopaLocal];
+      if (producto != null) {
+        resultado.add(_sintetico(producto));
+        vistos.add(producto.id!);
+      }
+    }
+    for (final id in _selLocal) {
+      if (vistos.contains(id)) continue;
+      final producto = productosPorId[id];
+      if (producto != null) {
+        resultado.add(_sintetico(producto));
+        vistos.add(id);
+      }
+    }
+    return resultado;
+  }
+
+  MenuItem _sintetico(Producto producto) => MenuItem(
+    id: 0,
+    menuDiaId: 0,
+    productoId: producto.id!,
+    nombre: producto.nombre,
+    precio: producto.precio,
+    categoriaNombre: producto.categoriaNombre,
+    categoriaColor: producto.categoriaColor,
+    tipoProducto: producto.tipo,
+    disponible: !_agotadosLocal.contains(producto.id),
+    motivoAgotado: _agotadosLocal.contains(producto.id) ? 'Agotado' : null,
+    orden: 0,
+  );
+
   /// Crea el menú del día empezando con los platos del menú anterior para que
   /// solo se ajuste lo que cambie. Si no hay menú anterior queda vacío.
   Future<MenuDia> _crearConAnterior() async {
@@ -154,9 +297,11 @@ class _MenuPageState extends State<MenuPage> {
   Future<void> _crearMenu() async {
     try {
       final previos = await _repository.getProductosMenuAnterior(_fecha, _tipo);
-      await _crearConAnterior();
+      final menu = await _crearConAnterior();
+      final items = await _repository.getItems(menu.id);
       if (!mounted) return;
       setState(() {
+        _initLocalDeItems(items);
         _editando = true;
         _reload();
       });
@@ -186,135 +331,83 @@ class _MenuPageState extends State<MenuPage> {
     if (!confirmado) return;
     await _repository.limpiarMenu(menu.id);
     if (!mounted) return;
-    setState(_reload);
+    setState(() {
+      _selLocal.clear();
+      _sopaLocal = null;
+      _agotadosLocal.clear();
+      _reload();
+    });
     showAppMessage(context, 'Menú limpiado. Elige la sopa y los productos.');
   }
 
-  Future<void> _toggleProducto(_MenuData data, Producto producto) async {
+  void _toggleProducto(_MenuData data, Producto producto) {
     if (!_esAdmin || producto.id == null || _guardando) return;
-    setState(() => _guardando = true);
-    try {
-      final menu = data.menu ?? await _crearConAnterior();
-      // Se consulta el estado real en la BD para que un doble toque rápido no
-      // deje el plato "pegado" en el menú.
-      final items = await _repository.getItems(menu.id);
-      final item = _itemDe(items, producto.id!);
-      if (item != null) {
-        await _repository.quitarItem(item.id);
-        if (!mounted) return;
-        setState(() {
-          _guardando = false;
-          _reload();
-        });
-        showAppMessage(
-          context,
-          '${producto.nombre} ya no está en el menú de hoy.',
-        );
+    setState(() {
+      if (!_selLocal.remove(producto.id!)) {
+        _selLocal.add(producto.id!);
       } else {
-        final sopasAnteriores =
-            producto.categoriaNombre.trim().toUpperCase() == 'SOPAS'
-            ? items.where((menuItem) => menuItem.esSopa).toList()
-            : <MenuItem>[];
-        final reemplazaSopa = sopasAnteriores.isNotEmpty;
-        await _repository.agregarProducto(menu.id, producto.id!);
-        if (!mounted) return;
-        setState(() {
-          _guardando = false;
-          _reload();
-        });
-        showAppMessage(
-          context,
-          !reemplazaSopa
-              ? '${producto.nombre} agregado al menú de hoy.'
-              : 'Sopa cambiada a ${producto.nombre}.',
-        );
+        // Al quitar un plato también se limpia su estado de agotado.
+        _agotadosLocal.remove(producto.id!);
       }
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _guardando = false);
-      showAppMessage(
-        context,
-        'No se pudo actualizar el menú: $error',
-        error: true,
-      );
-    }
+    });
   }
 
-  Future<void> _seleccionarSopa(_MenuData data, int productoId) async {
+  void _seleccionarSopa(_MenuData data, int productoId) {
     if (!_esAdmin || !_editando || _guardando) return;
-    setState(() => _guardando = true);
-    try {
-      final menu = data.menu ?? await _crearConAnterior();
-      final actuales = (await _repository.getItems(menu.id))
-          .where((item) => item.esSopa)
-          .toList();
-      if (productoId == -1) {
-        for (final sopa in actuales) {
-          await _repository.quitarItem(sopa.id);
-        }
-      } else if (actuales.length != 1 ||
-          actuales.single.productoId != productoId) {
-        await _repository.agregarProducto(menu.id, productoId);
-      }
-      if (!mounted) return;
-      setState(() {
-        _guardando = false;
-        _reload();
-      });
-      showAppMessage(
-        context,
-        productoId == -1
-            ? 'El menú de hoy no tendrá sopa.'
-            : 'Sopa del día actualizada.',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _guardando = false);
-      showAppMessage(
-        context,
-        'No se pudo cambiar la sopa: $error',
-        error: true,
-      );
-    }
+    setState(() {
+      _sopaLocal = productoId == -1 ? null : productoId;
+    });
   }
 
-  Future<void> _toggleCategoria(
+  Future<void> _guardarPrecioAlmuerzo(_MenuData data, String texto) async {
+    if (!_esAdmin || !_editando) return;
+    final menu = data.menu ?? await _crearConAnterior();
+    if (!mounted) return;
+    final precio = texto.trim().isEmpty ? null : parseAmount(texto);
+    if (precio != null && precio < 0) {
+      showAppMessage(context, 'El precio no puede ser negativo.', error: true);
+      return;
+    }
+    await _repository.setPrecioAlmuerzo(menu.id, precio);
+    if (!mounted) return;
+    setState(_reload);
+    showAppMessage(
+      context,
+      precio == null
+          ? 'El almuerzo se venderá como plato + sopa.'
+          : 'Precio del almuerzo fijado en ${formatMoney(precio)}.',
+    );
+  }
+
+  void _toggleCategoria(
     _MenuData data,
     List<Producto> productos, {
     required bool seleccionar,
-  }) async {
+  }) {
     if (!_esAdmin || !_editando || _guardando || productos.isEmpty) return;
-    setState(() => _guardando = true);
-    try {
-      final menu = data.menu ?? await _crearConAnterior();
-      await _repository.seleccionarCategoria(
-        menuDiaId: menu.id,
-        productoIds: productos.map((producto) => producto.id!).toList(),
-        seleccionado: seleccionar,
-      );
-      if (!mounted) return;
-      setState(() {
-        _guardando = false;
-        _reload();
-      });
-      showAppMessage(
-        context,
-        seleccionar
-            ? 'Todos los productos de la categoría fueron seleccionados.'
-            : 'Se quitó la selección de la categoría.',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _guardando = false);
-      showAppMessage(
-        context,
-        'No se pudo actualizar la categoría: $error',
-        error: true,
-      );
-    }
+    setState(() {
+      if (seleccionar) {
+        _selLocal.addAll(productos.map((producto) => producto.id!));
+      } else {
+        for (final producto in productos) {
+          _selLocal.remove(producto.id);
+          _agotadosLocal.remove(producto.id);
+        }
+      }
+    });
   }
 
   Future<void> _toggleDisponible(MenuItem item, bool disponible) async {
+    if (_editando) {
+      setState(() {
+        if (disponible) {
+          _agotadosLocal.remove(item.productoId);
+        } else {
+          _agotadosLocal.add(item.productoId);
+        }
+      });
+      return;
+    }
     await _repository.setDisponible(
       item.id,
       disponible,
@@ -354,6 +447,11 @@ class _MenuPageState extends State<MenuPage> {
     if (elegida == null) return;
     setState(() {
       _fecha = DateTime(elegida.year, elegida.month, elegida.day);
+      // Al cambiar de día se sale del modo edición para no mezclar estados.
+      _editando = false;
+      _selLocal.clear();
+      _sopaLocal = null;
+      _agotadosLocal.clear();
       _reload();
     });
   }
@@ -536,12 +634,42 @@ class _MenuPageState extends State<MenuPage> {
             )
             .toList()
           ..sort(_compararProductos);
-    final seleccionadas = data.items.where((item) => item.esSopa).toList();
-    final sopaActual = seleccionadas.isEmpty ? null : seleccionadas.first;
-    final opciones = sopas.map((producto) => producto.id!).toSet();
+    final int? sopaIdEfectivo;
+    final bool sopaAgotada;
+    if (_editando) {
+      sopaIdEfectivo = _sopaLocal;
+      sopaAgotada = _sopaLocal != null && _agotadosLocal.contains(_sopaLocal);
+    } else {
+      final seleccionadas = data.items.where((item) => item.esSopa).toList();
+      final sopaActual = seleccionadas.isEmpty ? null : seleccionadas.first;
+      sopaIdEfectivo = sopaActual?.productoId;
+      sopaAgotada = sopaActual != null && !sopaActual.disponible;
+    }
+    Producto? sopaProducto;
+    for (final producto in sopas) {
+      if (producto.id == sopaIdEfectivo) {
+        sopaProducto = producto;
+        break;
+      }
+    }
+    final sopaActual = sopaProducto == null
+        ? null
+        : MenuItem(
+            id: 0,
+            menuDiaId: 0,
+            productoId: sopaProducto.id!,
+            nombre: sopaProducto.nombre,
+            precio: sopaProducto.precio,
+            categoriaNombre: sopaProducto.categoriaNombre,
+            categoriaColor: sopaProducto.categoriaColor,
+            tipoProducto: sopaProducto.tipo,
+            disponible: !sopaAgotada,
+            motivoAgotado: sopaAgotada ? 'Agotado' : null,
+            orden: 0,
+          );
     final valorActual =
-        sopaActual != null && opciones.contains(sopaActual.productoId)
-        ? sopaActual.productoId
+        sopaIdEfectivo != null && sopas.any((sopa) => sopa.id == sopaIdEfectivo)
+        ? sopaIdEfectivo
         : -1;
     return AppCard(
       child: Column(
@@ -627,6 +755,45 @@ class _MenuPageState extends State<MenuPage> {
                     ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
+          if (_esAdmin && _editando && data.menu != null) ...[
+            const SizedBox(height: 10),
+            TextFormField(
+              key: ValueKey('precio-almuerzo-${data.menu!.precioAlmuerzo}'),
+              initialValue: data.menu!.precioAlmuerzo == null
+                  ? ''
+                  : data.menu!.precioAlmuerzo!.toStringAsFixed(2),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              inputFormatters: [decimalAmountInputFormatter],
+              decoration: appInput(
+                label: 'Precio del almuerzo (completo)',
+                hint: 'Vacío = plato + sopa',
+                icon: Icons.sell_outlined,
+              ),
+              onFieldSubmitted: (value) =>
+                  _guardarPrecioAlmuerzo(data, value),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Todos los completos se venderán a este precio fijo.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ] else if (data.menu?.precioAlmuerzo != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Almuerzo completo: '
+                '${formatMoney(data.menu!.precioAlmuerzo!)}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -703,13 +870,14 @@ class _MenuPageState extends State<MenuPage> {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
     final habilitado = menu?.habilitado == true;
-    final cantidadSopas = data.items.where((item) => item.esSopa).length;
-    final cantidadPlatos = data.items
+    final items = _itemsEfectivos(data);
+    final cantidadSopas = items.where((item) => item.esSopa).length;
+    final cantidadPlatos = items
         .where(
           (item) => MenuRepository.esCategoriaPlatoSuelto(item.categoriaNombre),
         )
         .length;
-    final cantidadOtros = data.items.length - cantidadSopas - cantidadPlatos;
+    final cantidadOtros = items.length - cantidadSopas - cantidadPlatos;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -758,30 +926,31 @@ class _MenuPageState extends State<MenuPage> {
                   ),
                 if (menu != null && !_editando)
                   OutlinedButton.icon(
-                    onPressed: () => setState(() => _editando = true),
+                    onPressed: () => _iniciarEdicion(data),
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('Editar'),
                   ),
                 if (menu != null && _editando)
                   OutlinedButton.icon(
-                    onPressed: () => setState(() => _editando = false),
+                    onPressed: () => _finalizarEdicion(data),
                     icon: const Icon(Icons.done_all_outlined),
                     label: const Text('Listo'),
                   ),
                 if (_editando &&
-                    (data.items.isNotEmpty || data.hayCombosLegacy))
+                    (_itemsEfectivos(data).isNotEmpty ||
+                        data.hayCombosLegacy))
                   OutlinedButton.icon(
                     onPressed: () => _limpiar(data),
                     icon: const Icon(Icons.delete_sweep_outlined),
                     label: const Text('Limpiar'),
                   ),
-                if (menu != null && !habilitado)
+                if (menu != null && !habilitado && !_editando)
                   FilledButton.icon(
                     onPressed: () => _habilitar(data),
                     icon: const Icon(Icons.lock_open_outlined),
                     label: const Text('Publicar menú'),
                   ),
-                if (menu != null)
+                if (menu != null && !_editando)
                   OutlinedButton.icon(
                     onPressed: () => _programarDias(data),
                     icon: const Icon(Icons.event_repeat_outlined),
@@ -1018,7 +1187,9 @@ class _MenuPageState extends State<MenuPage> {
       });
 
     final children = <Widget>[];
-    final idsEnMenu = data.items.map((item) => item.productoId).toSet();
+    final idsEnMenu = _editando
+        ? _selLocal
+        : data.items.map((item) => item.productoId).toSet();
     for (final categoriaId in categorias) {
       final categoria = ordenCategorias[categoriaId];
       final productosVisibles = grupos[categoriaId]!..sort(_compararProductos);
@@ -1101,7 +1272,8 @@ class _MenuPageState extends State<MenuPage> {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
     final habilitado = menu?.habilitado == true;
-    final sopasDelMenu = data.items.where((item) => item.esSopa).toList();
+    final items = _itemsEfectivos(data);
+    final sopasDelMenu = items.where((item) => item.esSopa).toList();
     final precioSopa = sopasDelMenu.isEmpty ? null : sopasDelMenu.first.precio;
     final productosPorId = {
       for (final producto in data.productos) producto.id: producto,
@@ -1124,7 +1296,7 @@ class _MenuPageState extends State<MenuPage> {
                 ),
               ),
               Text(
-                '${data.items.length} producto(s)',
+                '${items.length} producto(s)',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: scheme.primary,
@@ -1133,7 +1305,7 @@ class _MenuPageState extends State<MenuPage> {
             ],
           ),
           const SizedBox(height: 12),
-          if (data.items.isEmpty && data.combos.isEmpty)
+          if (items.isEmpty && data.combos.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
@@ -1143,7 +1315,7 @@ class _MenuPageState extends State<MenuPage> {
               ),
             )
           else
-            for (final item in data.items)
+            for (final item in items)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Row(
@@ -1177,7 +1349,7 @@ class _MenuPageState extends State<MenuPage> {
                                 ? precioSopa == null
                                       ? 'Suelto · ${formatMoney(item.precio)}'
                                       : 'Suelto ${formatMoney(item.precio)} · '
-                                            'Completo ${formatMoney(item.precio + precioSopa)}'
+                                            'Completo ${formatMoney(menu?.precioAlmuerzo ?? (item.precio + precioSopa))}'
                                 : 'Disponible hoy',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -1274,6 +1446,15 @@ class _MenuPageState extends State<MenuPage> {
               onPressed: () => _crearMenu(),
               icon: const Icon(Icons.history),
               label: const Text('Crear menú con lo de ayer'),
+            )
+          else if (_editando)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Pulsa "Listo" para guardar los cambios del menú.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
             )
           else if (!habilitado)
             FilledButton.icon(
@@ -1534,33 +1715,69 @@ class _MenuPageState extends State<MenuPage> {
     required bool directo,
   }) {
     final item = _itemDe(data.items, producto.id!);
-    final agotado = item != null && !item.disponible;
-    final seleccionado = item != null && !agotado;
-    final mensaje = directo
-        ? 'Siempre disponible'
-        : item == null
-        ? (_editando ? 'Toca para agregar' : 'No está en el menú de hoy')
-        : agotado
-        ? (item.motivoAgotado ?? 'Agotado')
-        : _editando
-        ? 'En el menú de hoy · toca para quitar'
-        : 'En el menú de hoy';
+
+    final bool enMenu;
+    final bool agotado;
+    if (_editando && !directo) {
+      enMenu = _selLocal.contains(producto.id);
+      agotado = _agotadosLocal.contains(producto.id);
+    } else {
+      enMenu = item != null;
+      agotado = item != null && !item.disponible;
+    }
+    final seleccionado = enMenu && !agotado;
+
+    final String mensaje;
+    if (directo) {
+      mensaje = 'Siempre disponible';
+    } else if (_editando) {
+      mensaje = !enMenu
+          ? 'Toca para agregar'
+          : agotado
+          ? 'Agotado · toca para quitar'
+          : 'En el menú de hoy · toca para quitar';
+    } else {
+      mensaje = item == null
+          ? 'No está en el menú de hoy'
+          : agotado
+          ? (item.motivoAgotado ?? 'Agotado')
+          : 'En el menú de hoy';
+    }
 
     // Cada toque deja un mensaje claro; fuera de modo edición nada cambia.
     VoidCallback? onTap;
     if (_esAdmin && !directo) {
-      if (agotado) {
-        onTap = () => showAppMessage(
-          context,
-          '${producto.nombre} está agotado. Reactívalo con el control de la tarjeta.',
-        );
-      } else if (_editando) {
-        onTap = () => _toggleProducto(data, producto);
+      if (_editando) {
+        onTap = agotado
+            ? () => showAppMessage(
+                context,
+                '${producto.nombre} está agotado. Reactívalo con el control de la tarjeta.',
+              )
+            : () => _toggleProducto(data, producto);
       } else {
         onTap = () =>
             showAppMessage(context, 'Pulsa "Editar" para modificar el menú.');
       }
     }
+
+    // Durante la edición el producto puede no existir aún en la BD; se usa un
+    // item sintético con el productoId correcto para el botón de agotado.
+    final itemAccion =
+        item ??
+        MenuItem(
+          id: 0,
+          menuDiaId: 0,
+          productoId: producto.id!,
+          nombre: producto.nombre,
+          precio: producto.precio,
+          categoriaNombre: producto.categoriaNombre,
+          categoriaColor: producto.categoriaColor,
+          tipoProducto: producto.tipo,
+          disponible: !agotado,
+          motivoAgotado: agotado ? 'Agotado' : null,
+          orden: 0,
+        );
+    final mostrarAccion = _esAdmin && !directo && enMenu;
 
     return ProductoCatalogoCard(
       nombre: producto.nombre,
@@ -1575,13 +1792,13 @@ class _MenuPageState extends State<MenuPage> {
       agotado: agotado,
       mensaje: mensaje,
       onTap: onTap,
-      accion: item != null && !directo && _esAdmin
+      accion: mostrarAccion
           ? IconButton(
-              tooltip: item.disponible ? 'Marcar agotado' : 'Marcar disponible',
+              tooltip: !agotado ? 'Marcar agotado' : 'Marcar disponible',
               visualDensity: VisualDensity.compact,
-              onPressed: () => _toggleDisponible(item, !item.disponible),
+              onPressed: () => _toggleDisponible(itemAccion, agotado),
               icon: Icon(
-                item.disponible ? Icons.block : Icons.check_circle_outline,
+                !agotado ? Icons.block : Icons.check_circle_outline,
                 size: 18,
               ),
             )

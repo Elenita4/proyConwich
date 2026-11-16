@@ -109,6 +109,26 @@ class GastoReporte {
   final double total;
 }
 
+class CompraReporte {
+  const CompraReporte({
+    required this.fecha,
+    required this.codigo,
+    required this.insumo,
+    required this.unidad,
+    required this.cantidad,
+    required this.costoUnitario,
+    required this.subtotal,
+  });
+
+  final String fecha;
+  final String? codigo;
+  final String insumo;
+  final String unidad;
+  final double cantidad;
+  final double costoUnitario;
+  final double subtotal;
+}
+
 class InventarioReporte {
   const InventarioReporte({
     required this.nombre,
@@ -183,7 +203,13 @@ class ReportRepository {
                   FROM ajustes_stock a
                   INNER JOIN insumos i ON i.id = a.insumo_id
                   WHERE a.cantidad > 0
-                    AND a.fecha >= ? AND a.fecha < ?), 0) AS gasto_insumos,
+                    AND a.fecha >= ? AND a.fecha < ?), 0)
+        + COALESCE((SELECT SUM(dc.subtotal)
+                  FROM detalle_compra dc
+                  INNER JOIN compras c ON c.id = dc.compra_id
+                  WHERE c.estado = 'REGISTRADA'
+                    AND dc.insumo_id IS NOT NULL
+                    AND c.fecha >= ? AND c.fecha < ?), 0) AS gasto_insumos,
         COALESCE((SELECT SUM(monto) FROM gastos
                   WHERE estado = 'REGISTRADO'
                     AND fecha >= ? AND fecha < ?), 0) AS salidas,
@@ -199,7 +225,8 @@ class ReportRepository {
         inicio, fin, // pedidos
         inicio, fin, // cobros efectivo
         inicio, fin, // cobros qr
-        inicio, fin, // gasto en insumos
+        inicio, fin, // gasto en insumos (ajustes)
+        inicio, fin, // gasto en insumos (compras)
         inicio, fin, // salidas
         inicio, fin, // salidas efectivo
         inicio, fin, // salidas qr
@@ -430,6 +457,41 @@ class ReportRepository {
             monto: (row['monto'] as num).toDouble(),
             usuario: (row['usuario'] as String?) ?? '',
             turno: ((row['numero_turno'] as num?) ?? 0).toInt(),
+          ),
+        )
+        .toList();
+  }
+
+  Future<List<CompraReporte>> getCompras(
+    DateTime desde,
+    DateTime hasta,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT c.fecha, c.codigo, i.nombre AS insumo, u.abreviatura AS unidad,
+             dc.cantidad, dc.costo_unitario, dc.subtotal
+      FROM detalle_compra dc
+      INNER JOIN compras c ON c.id = dc.compra_id
+      INNER JOIN insumos i ON i.id = dc.insumo_id
+      INNER JOIN unidades_medida u ON u.id = i.unidad_id
+      WHERE c.estado = 'REGISTRADA'
+        AND dc.insumo_id IS NOT NULL
+        AND c.fecha >= ? AND c.fecha < ?
+      ORDER BY c.fecha DESC, c.id DESC
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
+    return rows
+        .map(
+          (row) => CompraReporte(
+            fecha: row['fecha']! as String,
+            codigo: row['codigo'] as String?,
+            insumo: row['insumo']! as String,
+            unidad: row['unidad']! as String,
+            cantidad: (row['cantidad'] as num).toDouble(),
+            costoUnitario: (row['costo_unitario'] as num).toDouble(),
+            subtotal: (row['subtotal'] as num).toDouble(),
           ),
         )
         .toList();

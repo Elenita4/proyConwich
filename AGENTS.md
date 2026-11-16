@@ -28,13 +28,16 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   Usarlos en Productos, Caja y cobros; no aplicarlos ni cambiar el formulario de Insumos.
 - `lib/main.dart` — tema Material 3 central + `StartupGate` (login vs AppShell según sesión).
 - `AppShell` construye cada sección solo al visitarla y refresca solo la sección activa
-  (cada pantalla tiene su propio token). El drawer y el `NavigationRail` muestran siempre
-  las etiquetas del menú y un pie fijo con cambiar contraseña, cambiar/ver usuario,
-  respaldo (admin) y cerrar sesión.
+  (cada pantalla tiene su propio token). El drawer (teléfono) y una barra lateral propia
+  desplazable de arriba hacia abajo (tablet/escritorio, con `Key('rail-sidebar')`) muestran
+  **solo los destinos** del menú. Las acciones de sesión (cambiar/ver usuario, cambiar
+  contraseña, respaldo y cerrar sesión) son iconos en la esquina superior derecha del `AppBar`.
+  La barra reemplaza al `NavigationRail`, que desbordaba en tablets. El logo "Conwich" del
+  `AppBar` y de la barra lleva al Tablero.
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 16` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
+- `version: 17` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
   foráneas se desactivan durante la migración y se activan en `onOpen` (`PRAGMA foreign_keys = ON`).
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
@@ -45,12 +48,28 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 - La v15 agrega a `detalle_pedido` modalidad de venta y snapshots de la sopa incluida en un
   completo; los productos compuestos anteriores quedan inactivos y conservados para historial.
 - La v16 restaura la categoría base `PLATOS SUELTOS` sin fusionar ni borrar categorías.
+- La v17 agrega `menus_dia.precio_almuerzo` (precio fijo del completo por día), la tabla
+  `producto_presentaciones` (variantes/tamaños de refrescos), `compras.codigo` (código de
+  compra) e `insumos.consumible` (bandera de no consumible). Solo agrega columnas/tablas; no
+  modifica datos.
 - `unidades_medida.familia`/`factor_base` permiten convertir L↔ml y kg↔g en las recetas.
 - La receta es opcional. Al vender, el consumo se limita al stock disponible (nunca deja
   negativos) y el faltante queda registrado en `faltantes_insumo` (se consulta en Reportes).
 - `insumos.venta_directa` genera/actualiza un producto vinculado (`producto_id`) con receta de
   1 unidad; su categoría queda `siempre_disponible = 1`. Los productos `DIRECTO` viejos se
   migran automáticamente a insumo + receta al subir a v7 y el stock actual se conserva.
+- Los insumos se cargan con **compras** (botón "Agregar cantidad" por insumo, que escribe en
+  `compras` + `detalle_compra` y suma stock vía `v_stock_insumos`); el costo se recalcula por
+  promedio ponderado si cambia. "Registrar pérdida" descuenta stock con un ajuste negativo en
+  `ajustes_stock` (motivo `Pérdida`) sin tocar precios. El historial de compras se ve en la
+  pestaña **Compras** de Reportes (y en el PDF/Excel). `insumos.consumible = 0` marca los no
+  consumibles (cucharas, platos, vasos), que se listan aparte. El formulario de insumo registra
+  nombre, unidad de medida, stock mínimo y costo; **no** carga stock inicial (entra por compras).
+- Refrescos con presentaciones: la tabla `producto_presentaciones` guarda tamaños (nombre,
+  precio, foto) de un producto base. En Productos se gestionan con el botón "Presentaciones"
+  (solo categoría `REFRESCOS`); en Ventas, al tocar el refresco se elige la presentación. El
+  stock sigue siendo del producto base; la presentación aporta nombre y precio (se conservan
+  en el pedido vía `CartLine.presentacionId`).
 - `_afterOpen` siembra categorías planas: `PLATOS SUELTOS`, `SOPAS`, `BEBIDAS CALIENTES`,
   `REFRESCOS` y `FRAPPES`. No hay categorías padre ni subcategorías (`parent_id` queda en NULL).
   Las categorías se guardan siempre en mayúsculas y se pueden crear nuevas desde Productos.
@@ -62,7 +81,11 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   checkbox binario para seleccionar o quitar todos sus productos y todavía se puede elegir cada
   producto individualmente. SOPAS y siempre disponibles quedan fuera de esos checkboxes. Solo los
   productos de `PLATOS SUELTOS` pueden ser completos. En Ventas se calcula
-  `precio_plato + precio_sopa`.
+  `precio_plato + precio_sopa`, salvo que el menú defina `precio_almuerzo` (precio fijo del
+  completo por día, editable junto al selector de sopa).
+  En "Editar" la selección es **local** (estado `_selLocal`/`_sopaLocal`/`_agotadosLocal`): tocar
+  platos no recarga ni pierde el scroll; recién al pulsar **"Listo"** se aplica el diff a la BD y
+  se recarga una vez.
   El reporte general no muestra modalidades para otras categorías; el desglose de almuerzos y sopas
   se muestra en secciones separadas y omite los ceros. Al limpiar o reemplazar un menú, las filas
   referenciadas por ventas se conservan ocultas para proteger el

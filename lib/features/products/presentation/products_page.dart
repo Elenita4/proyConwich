@@ -128,6 +128,20 @@ class _ProductsPageState extends State<ProductsPage> {
     setState(_reload);
   }
 
+  Future<void> _openPresentaciones(Producto producto) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _PresentacionesDialog(
+        repository: _repository,
+        producto: producto,
+      ),
+    );
+    if (saved == true && mounted) {
+      setState(_reload);
+      showAppMessage(context, 'Presentaciones actualizadas.');
+    }
+  }
+
   Set<int> _categoriaIdsIncluidos(List<CategoriaProducto> categorias) {
     return {_categoriaId!};
   }
@@ -280,6 +294,12 @@ class _ProductsPageState extends State<ProductsPage> {
                       onAjustarStock: producto.esDirecto
                           ? () => _ajustarStock(producto)
                           : null,
+                      onPresentaciones:
+                          !producto.esCompuesto &&
+                              producto.categoriaNombre.trim().toUpperCase() ==
+                                  'REFRESCOS'
+                          ? () => _openPresentaciones(producto)
+                          : null,
                       onToggle: (value) => _toggle(producto, value),
                     ),
                   ),
@@ -299,6 +319,7 @@ class _ProductRow extends StatelessWidget {
     required this.onRecipe,
     required this.onAjustarStock,
     required this.onToggle,
+    this.onPresentaciones,
   });
 
   final Producto producto;
@@ -306,6 +327,7 @@ class _ProductRow extends StatelessWidget {
   final VoidCallback? onRecipe;
   final VoidCallback? onAjustarStock;
   final ValueChanged<bool> onToggle;
+  final VoidCallback? onPresentaciones;
 
   @override
   Widget build(BuildContext context) {
@@ -413,6 +435,12 @@ class _ProductRow extends StatelessWidget {
       runSpacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
+        if (onPresentaciones != null)
+          OutlinedButton.icon(
+            onPressed: onPresentaciones,
+            icon: const Icon(Icons.local_drink_outlined, size: 18),
+            label: const Text('Presentaciones'),
+          ),
         if (onRecipe != null)
           OutlinedButton.icon(
             onPressed: onRecipe,
@@ -1495,6 +1523,379 @@ class _RecipeDialogState extends State<_RecipeDialog> {
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(_saving ? 'Guardando…' : 'Guardar receta'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PresentacionesDialog extends StatefulWidget {
+  const _PresentacionesDialog({
+    required this.repository,
+    required this.producto,
+  });
+
+  final CatalogRepository repository;
+  final Producto producto;
+
+  @override
+  State<_PresentacionesDialog> createState() => _PresentacionesDialogState();
+}
+
+class _PresentacionesDialogState extends State<_PresentacionesDialog> {
+  late Future<List<ProductoPresentacion>> _future;
+  bool _cambiado = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _cargar();
+  }
+
+  Future<List<ProductoPresentacion>> _cargar() =>
+      widget.repository.getPresentacionesDe(widget.producto.id!);
+
+  Future<void> _abrirForm([ProductoPresentacion? presentacion]) async {
+    final guardado = await showDialog<bool>(
+      context: context,
+      builder: (_) => _PresentacionFormDialog(
+        repository: widget.repository,
+        producto: widget.producto,
+        presentacion: presentacion,
+      ),
+    );
+    if (guardado == true && mounted) {
+      setState(() {
+        _cambiado = true;
+        _future = _cargar();
+      });
+    }
+  }
+
+  Future<void> _eliminar(ProductoPresentacion presentacion) async {
+    final confirmado = await confirmAction(
+      context,
+      title: 'Quitar presentación',
+      message: '${presentacion.nombre} ya no estará disponible para vender.',
+      confirmLabel: 'Quitar',
+      destructive: true,
+    );
+    if (!confirmado) return;
+    await widget.repository.eliminarPresentacion(presentacion.id!);
+    if (!mounted) return;
+    setState(() {
+      _cambiado = true;
+      _future = _cargar();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Presentaciones · ${widget.producto.nombre}'),
+      content: DialogSurface(
+        maxWidth: 520,
+        maxHeightFactor: 0.75,
+        child: FutureBuilder<List<ProductoPresentacion>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const LoadingView();
+            }
+            if (snapshot.hasError) {
+              return ErrorView(message: '${snapshot.error}');
+            }
+            final presentaciones = snapshot.data ?? [];
+            if (presentaciones.isEmpty) {
+              return const EmptyState(
+                icon: Icons.local_drink_outlined,
+                title: 'Sin presentaciones',
+                message:
+                    'Agrega tamaños (ej. 250 ml, 500 ml, 1 L) con su precio y foto.',
+              );
+            }
+            return ListView.separated(
+              itemCount: presentaciones.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final presentacion = presentaciones[index];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: presentacion.imagen != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.memory(
+                            presentacion.imagen!,
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                          ),
+                        )
+                      : Icon(Icons.local_drink_outlined, color: scheme.primary),
+                  title: Text(presentacion.nombre),
+                  subtitle: Text(
+                    presentacion.activo
+                        ? formatMoney(presentacion.precio)
+                        : 'Inactiva',
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Editar',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _abrirForm(presentacion),
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                      ),
+                      IconButton(
+                        tooltip: 'Quitar',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _eliminar(presentacion),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, _cambiado),
+          child: const Text('Cerrar'),
+        ),
+        FilledButton.icon(
+          onPressed: () => _abrirForm(),
+          icon: const Icon(Icons.add),
+          label: const Text('Agregar presentación'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PresentacionFormDialog extends StatefulWidget {
+  const _PresentacionFormDialog({
+    required this.repository,
+    required this.producto,
+    this.presentacion,
+  });
+
+  final CatalogRepository repository;
+  final Producto producto;
+  final ProductoPresentacion? presentacion;
+
+  @override
+  State<_PresentacionFormDialog> createState() => _PresentacionFormDialogState();
+}
+
+class _PresentacionFormDialogState extends State<_PresentacionFormDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _picker = ImagePicker();
+  late final TextEditingController _nombre;
+  late final TextEditingController _precio;
+  Uint8List? _imagen;
+  late bool _activo;
+  bool _saving = false;
+  String? _error;
+
+  bool get _hayCamara {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final presentacion = widget.presentacion;
+    _nombre = TextEditingController(text: presentacion?.nombre ?? '');
+    _precio = TextEditingController(
+      text: presentacion == null ? '' : presentacion.precio.toStringAsFixed(2),
+    );
+    _imagen = presentacion?.imagen;
+    _activo = presentacion?.activo ?? true;
+  }
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _precio.dispose();
+    super.dispose();
+  }
+
+  Future<void> _cargarImagen(ImageSource source) async {
+    try {
+      final archivo = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+      if (archivo == null) return;
+      final bytes = await archivo.readAsBytes();
+      if (!mounted) return;
+      setState(() => _imagen = bytes);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo cargar la imagen: $error');
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.savePresentacion(
+        ProductoPresentacion(
+          id: widget.presentacion?.id,
+          productoId: widget.producto.id!,
+          nombre: _nombre.text,
+          precio: parseAmount(_precio.text),
+          orden: widget.presentacion?.orden ?? 0,
+          activo: _activo,
+          imagen: _imagen,
+        ),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'No se pudo guardar: $error';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final vistaPrevia = Container(
+      height: 120,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF9F0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _imagen == null
+          ? Icon(
+              Icons.image_outlined,
+              size: 30,
+              color: scheme.onSurfaceVariant,
+            )
+          : Image.memory(_imagen!, fit: BoxFit.cover, gaplessPlayback: true),
+    );
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text(
+        widget.presentacion == null
+            ? 'Nueva presentación'
+            : 'Editar presentación',
+      ),
+      content: DialogSurface(
+        maxWidth: 420,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: vistaPrevia),
+                    const SizedBox(width: 12),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_hayCamara)
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                _cargarImagen(ImageSource.camera),
+                            icon: const Icon(
+                              Icons.photo_camera_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('Cámara'),
+                          ),
+                        OutlinedButton.icon(
+                          onPressed: () => _cargarImagen(ImageSource.gallery),
+                          icon: const Icon(
+                            Icons.photo_library_outlined,
+                            size: 18,
+                          ),
+                          label: Text(_hayCamara ? 'Galería' : 'Imagen'),
+                        ),
+                        if (_imagen != null)
+                          TextButton(
+                            onPressed: () => setState(() => _imagen = null),
+                            child: const Text('Quitar'),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _nombre,
+                  autofocus: true,
+                  decoration: appInput(
+                    label: 'Presentación',
+                    hint: 'Ej. Personal 250 ml, 500 ml, 1 L',
+                  ),
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Ingresa un nombre'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _precio,
+                  inputFormatters: [decimalAmountInputFormatter],
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: appInput(
+                    label: 'Precio (Bs)',
+                    icon: Icons.sell_outlined,
+                  ),
+                  validator: (value) => validateDecimalAmount(
+                    value,
+                    allowZero: false,
+                    label: 'El precio',
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Activa'),
+                  value: _activo,
+                  onChanged: (value) => setState(() => _activo = value),
+                ),
+                if (_error != null)
+                  Text(_error!, style: TextStyle(color: scheme.error)),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Guardando…' : 'Guardar'),
         ),
       ],
     );

@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 16;
+  static const int schemaVersion = 17;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -100,6 +100,7 @@ class AppDatabase {
         if (oldVersion == 15) await _migrarV16(db);
         await _migrarV13(db);
         await _migrarV15(db);
+        await _migrarV17(db);
         await _afterOpen(db);
       },
     );
@@ -267,6 +268,7 @@ class AppDatabase {
         precio_venta REAL NOT NULL DEFAULT 0,
         producto_id INTEGER,
         activo INTEGER NOT NULL DEFAULT 1,
+        consumible INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (unidad_id) REFERENCES unidades_medida(id)
       )
     ''');
@@ -292,6 +294,7 @@ class AppDatabase {
         usuario_id INTEGER NOT NULL,
         observacion TEXT,
         habilitado_en TEXT,
+        precio_almuerzo REAL,
         creado_en TEXT NOT NULL,
         UNIQUE (fecha, tipo),
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
@@ -323,6 +326,22 @@ class AppDatabase {
         UNIQUE (producto_id, componente_id),
         FOREIGN KEY (producto_id) REFERENCES productos(id),
         FOREIGN KEY (componente_id) REFERENCES productos(id)
+      )
+    ''');
+
+    // Presentaciones/variantes de un producto (por ejemplo, refrescos de
+    // distintos tamaños). El stock se controla a nivel del producto base y cada
+    // presentación aporta su propio precio e imagen.
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS producto_presentaciones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        producto_id INTEGER NOT NULL,
+        nombre TEXT NOT NULL,
+        precio REAL NOT NULL DEFAULT 0,
+        imagen BLOB,
+        orden INTEGER NOT NULL DEFAULT 0,
+        activo INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (producto_id) REFERENCES productos(id)
       )
     ''');
 
@@ -431,6 +450,7 @@ class AppDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         usuario_id INTEGER NOT NULL,
         fecha TEXT NOT NULL,
+        codigo TEXT,
         metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
         caja_id INTEGER,
         total REAL NOT NULL DEFAULT 0,
@@ -626,6 +646,9 @@ class AppDatabase {
     );
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_detalle_componente ON detalle_pedido(pedido_id, es_componente)',
+    );
+    batch.execute(
+      'CREATE INDEX IF NOT EXISTS idx_presentaciones_producto ON producto_presentaciones(producto_id)',
     );
 
     // Índices de la v14: aceleran el cálculo de stock de las vistas y los
@@ -1206,6 +1229,29 @@ class AppDatabase {
       );
     } catch (error) {
       debugPrint('No se pudo restaurar PLATOS SUELTOS: $error');
+    }
+  }
+
+  /// Agrega el precio fijo del almuerzo por día, las presentaciones de
+  /// productos (refrescos), el código de compra y la bandera de consumible en
+  /// insumos. Solo agrega columnas, no modifica datos.
+  Future<void> _migrarV17(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'menus_dia', 'precio_almuerzo')) {
+        await db.execute(
+          'ALTER TABLE menus_dia ADD COLUMN precio_almuerzo REAL',
+        );
+      }
+      if (!await _tieneColumna(db, 'compras', 'codigo')) {
+        await db.execute('ALTER TABLE compras ADD COLUMN codigo TEXT');
+      }
+      if (!await _tieneColumna(db, 'insumos', 'consumible')) {
+        await db.execute(
+          'ALTER TABLE insumos ADD COLUMN consumible INTEGER NOT NULL DEFAULT 1',
+        );
+      }
+    } catch (error) {
+      debugPrint('No se pudo migrar el esquema v17: $error');
     }
   }
 

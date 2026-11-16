@@ -243,7 +243,17 @@ void main() {
     expect(tester.widget<Checkbox>(checkbox).value, isFalse);
     await tester.tap(checkbox);
     await asentar(tester);
+    // La selección es local hasta pulsar "Listo".
     expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    expect(
+      (await tester.runAsync(() => menuRepository.getItems(menuId)))!,
+      isEmpty,
+    );
+
+    await tester.ensureVisible(find.text('Listo'));
+    await tester.pump();
+    await tester.tap(find.text('Listo'));
+    await asentar(tester);
     final items = (await tester.runAsync(
       () => menuRepository.getItems(menuId),
     ))!;
@@ -254,10 +264,17 @@ void main() {
       findsNothing,
     );
 
+    // Desmarcar la categoría y volver a guardar con "Listo".
+    await tester.tap(find.text('Editar'));
+    await asentar(tester);
     await tester.ensureVisible(checkbox);
     await tester.tap(checkbox);
     await asentar(tester);
     expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+    await tester.ensureVisible(find.text('Listo'));
+    await tester.pump();
+    await tester.tap(find.text('Listo'));
+    await asentar(tester);
     expect(
       (await tester.runAsync(() => menuRepository.getItems(menuId)))!,
       isEmpty,

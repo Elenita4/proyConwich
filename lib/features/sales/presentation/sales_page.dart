@@ -29,6 +29,7 @@ class _SaleProduct {
     required this.enMenu,
     this.costoUnitario = 0,
     this.imagen,
+    this.presentaciones = const [],
   });
 
   final int productoId;
@@ -46,6 +47,9 @@ class _SaleProduct {
   final double costoUnitario;
   final bool enMenu;
   final Uint8List? imagen;
+
+  /// Presentaciones/variantes del producto (por ejemplo, tamaños de refresco).
+  final List<ProductoPresentacion> presentaciones;
 
   bool get esDirecto => tipo == 'DIRECTO';
   bool get esSopa => MenuRepository.esCategoriaSopa(categoriaNombre);
@@ -74,6 +78,7 @@ class _SalesData {
     required this.productos,
     required this.pedidosAbiertos,
     required this.sopaDelDia,
+    required this.precioAlmuerzo,
   });
 
   final Caja? caja;
@@ -81,6 +86,9 @@ class _SalesData {
   final List<_SaleProduct> productos;
   final List<Pedido> pedidosAbiertos;
   final _SaleProduct? sopaDelDia;
+
+  /// Precio fijo del almuerzo completo del día, si se definió en el menú.
+  final double? precioAlmuerzo;
 }
 
 class SalesPage extends StatefulWidget {
@@ -155,6 +163,7 @@ class _SalesPageState extends State<SalesPage> {
       for (final producto in activos)
         if (producto.id != null) producto.id!: producto,
     };
+    final presentaciones = await _catalogRepository.getPresentaciones();
     for (final item in menuItems) {
       final producto = productoPorId[item.productoId];
       final advertencia = await _catalogRepository.advertenciaInsumos(
@@ -178,6 +187,7 @@ class _SalesPageState extends State<SalesPage> {
         enMenu: true,
         costoUnitario: producto?.costoUnitario ?? 0,
         imagen: producto?.imagen,
+        presentaciones: presentaciones[item.productoId] ?? const [],
       );
     }
     // Productos activos que no están en el menú: se muestran al final, en gris.
@@ -222,6 +232,7 @@ class _SalesPageState extends State<SalesPage> {
         enMenu: siempre,
         costoUnitario: producto.costoUnitario,
         imagen: producto.imagen,
+        presentaciones: presentaciones[producto.id!] ?? const [],
       );
     }
     final abiertos = await _salesRepository.getPedidosAbiertos();
@@ -234,6 +245,7 @@ class _SalesPageState extends State<SalesPage> {
       productos: productos.values.toList(),
       pedidosAbiertos: abiertos,
       sopaDelDia: sopas.isEmpty ? null : sopas.first,
+      precioAlmuerzo: menu?.precioAlmuerzo,
     );
   }
 
@@ -247,6 +259,7 @@ class _SalesPageState extends State<SalesPage> {
     _SaleProduct producto, {
     bool completo = false,
     _SaleProduct? sopa,
+    double? precioAlmuerzo,
   }) {
     if (!producto.vendible) {
       showAppMessage(
@@ -272,11 +285,15 @@ class _SalesPageState extends State<SalesPage> {
         : producto.esPlatoSuelto
         ? 'SUELTO'
         : 'NORMAL';
+    // Precio del completo: fijo del menú si existe; si no, plato + sopa.
+    final precioCompleto = completo
+        ? (precioAlmuerzo ?? (producto.precio + sopa!.precio))
+        : 0.0;
     final nuevaLinea = CartLine(
       productoId: producto.productoId,
       menuDiaItemId: producto.menuDiaItemId,
       nombre: producto.nombre,
-      precio: producto.precio + (completo ? sopa!.precio : 0),
+      precio: completo ? precioCompleto : producto.precio,
       cantidad: 1,
       tipo: producto.tipo,
       modalidadVenta: modalidad,
@@ -306,6 +323,47 @@ class _SalesPageState extends State<SalesPage> {
         _cart.remove(key);
       } else {
         _cart[key] = line.copyWith(cantidad: nueva);
+      }
+    });
+  }
+
+  Future<void> _elegirPresentacion(_SaleProduct producto) async {
+    if (!producto.vendible) {
+      showAppMessage(
+        context,
+        producto.motivo ?? 'El producto no está disponible.',
+        error: true,
+      );
+      return;
+    }
+    final elegida = await showModalBottomSheet<ProductoPresentacion>(
+      context: context,
+      builder: (context) => _PresentacionPicker(producto: producto),
+    );
+    if (elegida == null || !mounted) return;
+    _addPresentacion(producto, elegida);
+  }
+
+  void _addPresentacion(
+    _SaleProduct producto,
+    ProductoPresentacion presentacion,
+  ) {
+    final nuevaLinea = CartLine(
+      productoId: producto.productoId,
+      menuDiaItemId: producto.menuDiaItemId,
+      nombre: '${producto.nombre} · ${presentacion.nombre}',
+      precio: presentacion.precio,
+      cantidad: 1,
+      tipo: producto.tipo,
+      modalidadVenta: 'NORMAL',
+      presentacionId: presentacion.id,
+    );
+    setState(() {
+      final line = _cart[nuevaLinea.key];
+      if (line == null) {
+        _cart[nuevaLinea.key] = nuevaLinea;
+      } else {
+        _cart[nuevaLinea.key] = line.copyWith(cantidad: line.cantidad + 1);
       }
     });
   }
@@ -781,6 +839,15 @@ class _SalesPageState extends State<SalesPage> {
                 producto.menuDiaItemId != null &&
                 producto.esPlatoSuelto &&
                 sopa != null;
+            final precioCompleto = sopa != null
+                ? (data.precioAlmuerzo ?? (producto.precio + sopa.precio))
+                : producto.precio;
+            final tienePresentaciones = producto.presentaciones.isNotEmpty;
+            final precioMostrado = tienePresentaciones
+                ? producto.presentaciones
+                      .map((presentacion) => presentacion.precio)
+                      .reduce((a, b) => a < b ? a : b)
+                : producto.precio;
             final pie = ofreceModalidad
                 ? Row(
                     children: [
@@ -798,10 +865,15 @@ class _SalesPageState extends State<SalesPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: producto.vendible && sopa.vendible
-                              ? () => _add(producto, completo: true, sopa: sopa)
+                              ? () => _add(
+                                  producto,
+                                  completo: true,
+                                  sopa: sopa,
+                                  precioAlmuerzo: data.precioAlmuerzo,
+                                )
                               : null,
                           child: Text(
-                            'Completo · ${formatMoney(producto.precio + sopa.precio)}',
+                            'Completo · ${formatMoney(precioCompleto)}',
                           ),
                         ),
                       ),
@@ -813,22 +885,30 @@ class _SalesPageState extends State<SalesPage> {
               child: ProductoCatalogoCard(
                 nombre: producto.nombre,
                 categoria: producto.categoriaEtiqueta,
-                precio: producto.precio,
+                precio: precioMostrado,
                 color: producto.categoriaColor,
                 imagen: producto.imagen,
                 esDirecto: producto.esDirecto,
                 stock: producto.stock,
                 habilitado: producto.vendible,
                 mensaje: producto.vendible
-                    ? (ofreceModalidad
+                    ? (tienePresentaciones
                           ? (cantidad > 0
                                 ? '$cantidad en el pedido'
-                                : 'Elige cómo se sirve')
-                          : (cantidad > 0
-                                ? 'Toca para agregar · $cantidad en el pedido'
-                                : 'Toca para agregar'))
+                                : 'Elige presentación')
+                          : (ofreceModalidad
+                                ? (cantidad > 0
+                                      ? '$cantidad en el pedido'
+                                      : 'Elige cómo se sirve')
+                                : (cantidad > 0
+                                      ? 'Toca para agregar · $cantidad en el pedido'
+                                      : 'Toca para agregar')))
                     : producto.razon,
-                onTap: ofreceModalidad
+                onTap: tienePresentaciones
+                    ? (producto.vendible
+                          ? () => _elegirPresentacion(producto)
+                          : null)
+                    : ofreceModalidad
                     ? null
                     : producto.vendible
                     ? () => _add(producto)
@@ -1320,12 +1400,13 @@ class _PaymentDialogState extends State<_PaymentDialog> {
       title: const Text('Cobrar pedido'),
       content: DialogSurface(
         maxWidth: 480,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Text('Total a cobrar'),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text('Total a cobrar'),
                 const Spacer(),
                 Text(
                   formatMoney(widget.total),
@@ -1429,7 +1510,8 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                   style: TextStyle(color: scheme.error),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
@@ -1529,6 +1611,78 @@ class _PedidoDetalleDialog extends StatelessWidget {
           child: const Text('Cerrar'),
         ),
       ],
+    );
+  }
+}
+
+class _PresentacionPicker extends StatelessWidget {
+  const _PresentacionPicker({required this.producto});
+
+  final _SaleProduct producto;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget miniatura(ProductoPresentacion presentacion) {
+      final bytes = presentacion.imagen ?? producto.imagen;
+      if (bytes != null) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(
+            bytes,
+            width: 40,
+            height: 40,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        );
+      }
+      return Icon(Icons.local_drink_outlined, color: scheme.primary);
+    }
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              producto.nombre,
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Elige la presentación',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: producto.presentaciones
+                    .map(
+                      (presentacion) => ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                        ),
+                        leading: miniatura(presentacion),
+                        title: Text(presentacion.nombre),
+                        trailing: Text(
+                          formatMoney(presentacion.precio),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        onTap: () => Navigator.pop(context, presentacion),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

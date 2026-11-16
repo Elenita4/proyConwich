@@ -19,6 +19,7 @@ class _ReportData {
     required this.inventario,
     required this.pedidos,
     required this.faltantes,
+    required this.compras,
   });
 
   final ResumenFinanciero resumen;
@@ -28,6 +29,7 @@ class _ReportData {
   final List<InventarioReporte> inventario;
   final List<PedidoReporte> pedidos;
   final List<FaltanteInsumoReporte> faltantes;
+  final List<CompraReporte> compras;
 }
 
 /// Porción del pastel de ingresos. Permite agrupar los productos con menos
@@ -229,6 +231,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final inventario = await _repository.getInventario();
     final pedidos = await _repository.getPedidos(range.start, range.end);
     final faltantes = await _repository.getFaltantes(range.start, range.end);
+    final compras = await _repository.getCompras(range.start, range.end);
     return _ReportData(
       resumen: resumen,
       productos: productos,
@@ -237,6 +240,7 @@ class _ReportsPageState extends State<ReportsPage> {
       inventario: inventario,
       pedidos: pedidos,
       faltantes: faltantes,
+      compras: compras,
     );
   }
 
@@ -249,6 +253,7 @@ class _ReportsPageState extends State<ReportsPage> {
         salidas: data.salidasDetalle,
         pedidos: data.pedidos,
         faltantes: data.faltantes,
+        compras: data.compras,
       );
 
   Widget _misPedidosPage(BuildContext context) {
@@ -437,7 +442,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final range = _range;
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
@@ -554,6 +559,10 @@ class _ReportsPageState extends State<ReportsPage> {
                     text: 'Inventario',
                   ),
                   Tab(
+                    icon: Icon(Icons.shopping_basket_outlined),
+                    text: 'Compras',
+                  ),
+                  Tab(
                     icon: Icon(Icons.warning_amber_rounded),
                     text: 'Faltantes',
                   ),
@@ -582,6 +591,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 _resumenTab(context, data),
                 _productosTab(context, data),
                 _inventarioTab(context, data),
+                _comprasTab(context, data),
                 _faltantesTab(context, data),
                 _pedidosTab(context, data),
               ],
@@ -1367,6 +1377,74 @@ class _ReportsPageState extends State<ReportsPage> {
                           ),
                         ),
                         DataCell(Text(formatMoney(item.costoFaltante))),
+                      ],
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _comprasTab(BuildContext context, _ReportData data) {
+    if (data.compras.isEmpty) {
+      return const EmptyState(
+        icon: Icons.shopping_basket_outlined,
+        title: 'Sin compras en el período',
+        message: 'Registra compras desde la sección Insumos para verlas aquí.',
+      );
+    }
+    final total = data.compras.fold<double>(
+      0,
+      (sum, compra) => sum + compra.subtotal,
+    );
+    return ListView(
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
+      children: [
+        StatGrid(
+          children: [
+            StatCard(
+              label: 'Compras registradas',
+              value: '${data.compras.length}',
+              icon: Icons.shopping_basket_outlined,
+            ),
+            StatCard(
+              label: 'Total comprado',
+              value: formatMoney(total),
+              icon: Icons.price_check,
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        AppCard(
+          padding: EdgeInsets.zero,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Código')),
+                DataColumn(label: Text('Fecha')),
+                DataColumn(label: Text('Insumo')),
+                DataColumn(label: Text('Cantidad'), numeric: true),
+                DataColumn(label: Text('Costo unitario'), numeric: true),
+                DataColumn(label: Text('Subtotal'), numeric: true),
+              ],
+              rows: data.compras
+                  .map(
+                    (compra) => DataRow(
+                      cells: [
+                        DataCell(Text(compra.codigo ?? '—')),
+                        DataCell(Text(formatDateTimeText(compra.fecha))),
+                        DataCell(Text(compra.insumo)),
+                        DataCell(
+                          Text('${formatQty(compra.cantidad)} ${compra.unidad}'),
+                        ),
+                        DataCell(Text(formatMoney(compra.costoUnitario))),
+                        DataCell(Text(formatMoney(compra.subtotal))),
                       ],
                     ),
                   )

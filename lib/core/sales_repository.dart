@@ -31,6 +31,7 @@ class CartLine {
     this.precioSopaUnitario = 0,
     this.costoSopaUnitario = 0,
     this.tipoSopa,
+    this.presentacionId,
   });
 
   final int productoId;
@@ -50,8 +51,14 @@ class CartLine {
   final double costoSopaUnitario;
   final String? tipoSopa;
 
+  /// Presentación elegida de un producto con variantes (por ejemplo, el tamaño
+  /// de un refresco). Solo se usa para diferenciar líneas del carrito.
+  final int? presentacionId;
+
   double get subtotal => precio * cantidad;
-  String get key => '${productoId}_${modalidadVenta}_${productoSopaId ?? 0}';
+  String get key =>
+      '${productoId}_${modalidadVenta}_${productoSopaId ?? 0}_'
+      '${presentacionId ?? 0}';
 
   CartLine copyWith({double? cantidad, String? observacion}) => CartLine(
     productoId: productoId,
@@ -70,6 +77,7 @@ class CartLine {
     precioSopaUnitario: precioSopaUnitario,
     costoSopaUnitario: costoSopaUnitario,
     tipoSopa: tipoSopa,
+    presentacionId: presentacionId,
   );
 }
 
@@ -667,17 +675,25 @@ class SalesRepository {
           throw StateError('El producto ${row['nombre']} está agotado hoy.');
         }
       }
+      // Las presentaciones conservan el nombre y precio elegidos por el
+      // usuario; el producto base solo aporta tipo, costo y disponibilidad.
+      final esPresentacion = linea.presentacionId != null;
       result.add(
         CartLine(
           productoId: linea.productoId,
           menuDiaItemId: linea.menuDiaItemId,
-          nombre: row['nombre']! as String,
-          precio: (row['precio'] as num).toDouble(),
+          nombre: esPresentacion
+              ? linea.nombre
+              : row['nombre']! as String,
+          precio: esPresentacion
+              ? linea.precio
+              : (row['precio'] as num).toDouble(),
           cantidad: linea.cantidad,
           observacion: linea.observacion,
           tipo: row['tipo']! as String,
           costoUnitario: (row['costo_unitario'] as num).toDouble(),
           modalidadVenta: linea.modalidadVenta,
+          presentacionId: linea.presentacionId,
         ),
       );
     }

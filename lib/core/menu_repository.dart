@@ -13,6 +13,7 @@ class MenuDia {
     required this.tipo,
     required this.estado,
     this.observacion,
+    this.precioAlmuerzo,
   });
 
   final int id;
@@ -20,6 +21,10 @@ class MenuDia {
   final String tipo;
   final String estado;
   final String? observacion;
+
+  /// Precio fijo del almuerzo completo (sopa + plato suelto) del día. Si es
+  /// nulo, el completo se vende como `plato + sopa`.
+  final double? precioAlmuerzo;
 
   bool get habilitado => estado == 'HABILITADO';
   bool get cerrado => estado == 'CERRADO';
@@ -151,6 +156,14 @@ class MenuRepository {
     if (anteriores.isEmpty) return null;
     final anterior = _fromRow(anteriores.first);
     final nuevo = await crearMenu(fecha, tipo, usuarioId);
+    if (anterior.precioAlmuerzo != null) {
+      await db.update(
+        'menus_dia',
+        {'precio_almuerzo': anterior.precioAlmuerzo},
+        where: 'id = ?',
+        whereArgs: [nuevo.id],
+      );
+    }
     final items = await db.rawQuery(
       '''
       SELECT mi.*, c.nombre AS categoria_nombre
@@ -192,9 +205,17 @@ class MenuRepository {
         tipo: nuevo.tipo,
         estado: 'HABILITADO',
         observacion: nuevo.observacion,
+        precioAlmuerzo: anterior.precioAlmuerzo,
       );
     }
-    return nuevo;
+    return MenuDia(
+      id: nuevo.id,
+      fecha: nuevo.fecha,
+      tipo: nuevo.tipo,
+      estado: nuevo.estado,
+      observacion: nuevo.observacion,
+      precioAlmuerzo: anterior.precioAlmuerzo,
+    );
   }
 
   Future<List<MenuItem>> getItems(int menuDiaId) async {
@@ -633,6 +654,18 @@ class MenuRepository {
     );
   }
 
+  /// Fija o limpia el precio del almuerzo completo del día. Un valor nulo
+  /// vuelve al cálculo automático (plato + sopa).
+  Future<void> setPrecioAlmuerzo(int menuDiaId, double? precio) async {
+    final db = await AppDatabase.instance.database;
+    await db.update(
+      'menus_dia',
+      {'precio_almuerzo': precio},
+      where: 'id = ?',
+      whereArgs: [menuDiaId],
+    );
+  }
+
   Future<void> cerrar(int menuDiaId) async {
     final db = await AppDatabase.instance.database;
     await db.update(
@@ -655,6 +688,7 @@ class MenuRepository {
     tipo: row['tipo']! as String,
     estado: row['estado']! as String,
     observacion: row['observacion'] as String?,
+    precioAlmuerzo: (row['precio_almuerzo'] as num?)?.toDouble(),
   );
 
   static Uint8List? _asBytes(Object? value) {

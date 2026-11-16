@@ -146,6 +146,12 @@ class _AppShellState extends State<AppShell> {
     if (index >= 0) _seleccionar(index);
   }
 
+  void _irATablero() {
+    final destinations = _destinations();
+    final index = destinations.indexWhere((item) => item.label == 'Tablero');
+    if (index >= 0) _seleccionar(index);
+  }
+
   /// Flujo "Empezar el día": va al menú y activa el atajo hacia Caja.
   void _empezarDia() {
     setState(() => _flujoInicio = true);
@@ -269,96 +275,113 @@ class _AppShellState extends State<AppShell> {
 
   /// Accesos de sesión siempre visibles al pie del drawer. Antes quedaban
   /// debajo de todas las secciones y en un teléfono no se veían sin desplazar.
-  Widget _drawerSesion(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+  /// Barra lateral fija para tablet/escritorio. Reemplaza al `NavigationRail`
+  /// para que los destinos y los accesos de sesión se puedan desplazar de
+  /// arriba hacia abajo cuando no caben (antes el rail se salía de pantalla).
+  Widget _railSidebar(List<_Destination> destinations, int index) {
+    const espresso = Color(0xFF3D2419);
     const dorado = Color(0xFFE8C995);
     const crema = Color(0xFFF3E9D9);
+    const caramelo = Color(0xFFC18A55);
+    final scheme = Theme.of(context).colorScheme;
 
-    void cerrarY(VoidCallback accion) {
-      Navigator.pop(context);
-      accion();
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            dense: true,
-            leading: CircleAvatar(
-              radius: 18,
-              backgroundColor: scheme.primaryContainer,
-              child: Text(
-                widget.usuario.inicial,
-                style: TextStyle(
-                  color: scheme.onPrimaryContainer,
-                  fontWeight: FontWeight.w700,
+    return Container(
+      key: const Key('rail-sidebar'),
+      width: 220,
+      color: espresso,
+      child: SafeArea(
+        child: Column(
+          children: [
+            InkWell(
+              onTap: _irATablero,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 12, 8, 20),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: scheme.primary,
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: Icon(Icons.restaurant, color: scheme.onPrimary),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      appNombre,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: crema,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            title: Text(
-              widget.usuario.nombre,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: crema, fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(
-              widget.usuario.esAdmin ? 'Administrador' : 'Cajero',
-              style: const TextStyle(color: dorado),
-            ),
-          ),
-          ListTile(
-            dense: true,
-            leading: const Icon(Icons.lock_reset_outlined),
-            title: const Text('Cambiar mi contraseña'),
-            iconColor: dorado,
-            textColor: crema,
-            onTap: () => cerrarY(_cambiarPassword),
-          ),
-          if (!widget.usuario.esAdmin)
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.admin_panel_settings_outlined),
-              title: const Text('Ver como administrador'),
-              iconColor: dorado,
-              textColor: crema,
-              onTap: () => cerrarY(_verComoAdministrador),
-            )
-          else
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.switch_account_outlined),
-              title: const Text('Cambiar de usuario'),
-              iconColor: dorado,
-              textColor: crema,
-              onTap: () => cerrarY(_cambiarUsuario),
-            ),
-          if (widget.usuario.esAdmin)
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.cloud_sync_outlined),
-              title: const Text('Respaldo y restauración'),
-              iconColor: dorado,
-              textColor: crema,
-              onTap: () => cerrarY(_abrirRespaldo),
-            ),
-          ListTile(
-            dense: true,
-            leading: Icon(Icons.logout, color: scheme.error),
-            title: Text(
-              'Cerrar sesión',
-              style: TextStyle(
-                color: scheme.error,
-                fontWeight: FontWeight.w700,
+            const Divider(color: Color(0x33E8C995)),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (var i = 0; i < destinations.length; i++)
+                    _railItem(
+                      destinations[i],
+                      i,
+                      i == index,
+                      dorado: dorado,
+                      crema: crema,
+                      caramelo: caramelo,
+                    ),
+                ],
               ),
             ),
-            onTap: () {
-              Navigator.pop(context);
-              widget.onLogout();
-            },
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _railItem(
+    _Destination destination,
+    int i,
+    bool selected, {
+    required Color dorado,
+    required Color crema,
+    required Color caramelo,
+  }) {
+    const textoOscuro = Color(0xFF2B1A12);
+    return InkWell(
+      onTap: () => _seleccionar(i),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? caramelo : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected ? destination.selectedIcon : destination.icon,
+              size: 22,
+              color: selected ? textoOscuro : dorado,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                destination.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? textoOscuro : crema,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -373,8 +396,6 @@ class _AppShellState extends State<AppShell> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 860;
-        final extended = constraints.maxWidth >= 1200;
-        final muyAngosto = constraints.maxWidth < 560;
         final body = IndexedStack(
           index: index,
           children: [
@@ -388,156 +409,85 @@ class _AppShellState extends State<AppShell> {
                 const SizedBox.shrink(),
           ],
         );
-        final userMenu = PopupMenuButton<String>(
-          tooltip: 'Sesión',
-          onSelected: (value) {
-            if (value == 'password') _cambiarPassword();
-            if (value == 'backup') _abrirRespaldo();
-            if (value == 'ver_admin') _verComoAdministrador();
-            if (value == 'cambiar_usuario') _cambiarUsuario();
-            if (value == 'logout') widget.onLogout();
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'password',
-              child: Text('Cambiar mi contraseña'),
-            ),
-            if (!widget.usuario.esAdmin)
-              const PopupMenuItem(
-                value: 'ver_admin',
-                child: Row(
-                  children: [
-                    Icon(Icons.admin_panel_settings_outlined),
-                    SizedBox(width: 10),
-                    Text('Ver como administrador'),
-                  ],
-                ),
-              ),
-            if (widget.usuario.esAdmin)
-              const PopupMenuItem(
-                value: 'cambiar_usuario',
-                child: Row(
-                  children: [
-                    Icon(Icons.switch_account_outlined),
-                    SizedBox(width: 10),
-                    Text('Cambiar de usuario'),
-                  ],
-                ),
-              ),
-            if (widget.usuario.esAdmin)
-              const PopupMenuItem(
-                value: 'backup',
-                child: Text('Respaldo y restauración'),
-              ),
-            const PopupMenuDivider(),
-            PopupMenuItem(
-              value: 'logout',
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.logout,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Cerrar sesión',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircleAvatar(
-                  radius: 16,
-                  backgroundColor: scheme.primaryContainer,
-                  child: Text(
-                    widget.usuario.inicial,
-                    style: TextStyle(
-                      color: scheme.onPrimaryContainer,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (!muyAngosto)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 130),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.usuario.nombre,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: const Color(0xFFF3E9D9), // Crema
-                              ),
-                        ),
-                        Text(
-                          widget.usuario.esAdmin ? 'Administrador' : 'Cajero',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: const Color(0xFFE8C995)),
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(width: 4),
-                const Icon(Icons.arrow_drop_down),
-              ],
-            ),
-          ),
-        );
-
         return Scaffold(
           appBar: AppBar(
             backgroundColor: const Color(0xFF3D2419), // Espresso
             surfaceTintColor: const Color(0xFF3D2419),
-            title: Row(
-              children: [
-                if (!wide) ...[
-                  Icon(Icons.restaurant_menu, color: scheme.primaryContainer),
-                  const SizedBox(width: 8),
-                ],
-                Flexible(
-                  child: Text(
-                    appNombre,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFFF3E9D9), // Crema
-                    ),
-                  ),
-                ),
-                if (wide) ...[
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Text(
-                      '· ${current.label}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: const Color(0xFFE8C995), // Dorado
+            title: InkWell(
+              onTap: _irATablero,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    if (!wide) ...[
+                      Icon(
+                        Icons.restaurant_menu,
+                        color: scheme.primaryContainer,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(
+                      child: Text(
+                        appNombre,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFFF3E9D9), // Crema
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ],
+                    if (wide) ...[
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          '· ${current.label}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: const Color(0xFFE8C995), // Dorado
+                              ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-            actions: [userMenu, const SizedBox(width: 8)],
+            actions: [
+              IconButton(
+                tooltip: widget.usuario.esAdmin
+                    ? 'Cambiar de usuario'
+                    : 'Ver como administrador',
+                onPressed: widget.usuario.esAdmin
+                    ? _cambiarUsuario
+                    : _verComoAdministrador,
+                icon: Icon(
+                  widget.usuario.esAdmin
+                      ? Icons.switch_account_outlined
+                      : Icons.admin_panel_settings_outlined,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Cambiar mi contraseña',
+                onPressed: _cambiarPassword,
+                icon: const Icon(Icons.lock_reset_outlined),
+              ),
+              if (widget.usuario.esAdmin)
+                IconButton(
+                  tooltip: 'Respaldo y restauración',
+                  onPressed: _abrirRespaldo,
+                  icon: const Icon(Icons.cloud_sync_outlined),
+                ),
+              IconButton(
+                tooltip: 'Cerrar sesión',
+                onPressed: widget.onLogout,
+                icon: const Icon(Icons.logout),
+              ),
+              const SizedBox(width: 8),
+            ],
           ),
           drawer: wide
               ? null
@@ -545,28 +495,35 @@ class _AppShellState extends State<AppShell> {
                   child: SafeArea(
                     child: Column(
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                appNombre,
-                                style: Theme.of(context).textTheme.titleLarge
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      color: const Color(0xFFF3E9D9), // Crema
-                                    ),
-                              ),
-                              Text(
-                                appCanal,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: const Color(0xFFE8C995), // Dorado
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
+                        InkWell(
+                          onTap: () {
+                            Navigator.pop(context);
+                            _irATablero();
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  appNombre,
+                                  style: Theme.of(context).textTheme.titleLarge
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w800,
+                                        color: const Color(0xFFF3E9D9), // Crema
+                                      ),
+                                ),
+                                Text(
+                                  appCanal,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: const Color(0xFFE8C995), // Dorado
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                         Expanded(
@@ -593,8 +550,6 @@ class _AppShellState extends State<AppShell> {
                             ],
                           ),
                         ),
-                        const Divider(),
-                        _drawerSesion(context),
                       ],
                     ),
                   ),
@@ -602,122 +557,7 @@ class _AppShellState extends State<AppShell> {
           body: wide
               ? Row(
                   children: [
-                    NavigationRail(
-                      extended: extended,
-                      minExtendedWidth: 210,
-                      minWidth: 92,
-                      selectedIndex: index,
-                      onDestinationSelected: (value) => _seleccionar(value),
-                      leading: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 12, 8, 20),
-                        child: Column(
-                          children: [
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: scheme.primary,
-                                borderRadius: BorderRadius.circular(13),
-                              ),
-                              child: Icon(
-                                Icons.restaurant,
-                                color: scheme.onPrimary, // Blanco cálido
-                              ),
-                            ),
-                            if (extended) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                appNombre,
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      color: const Color(0xFFF3E9D9), // Crema
-                                    ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      destinations: destinations
-                          .map(
-                            (item) => NavigationRailDestination(
-                              icon: Icon(item.icon),
-                              selectedIcon: Icon(item.selectedIcon),
-                              label: Text(item.label),
-                            ),
-                          )
-                          .toList(),
-                      // Accesos de sesión al pie del rail, visibles también en
-                      // tablet (donde no hay drawer).
-                      trailing: Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (extended) ...[
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 190,
-                                ),
-                                child: Text(
-                                  widget.usuario.nombre,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xFFF3E9D9),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                widget.usuario.esAdmin
-                                    ? 'Administrador'
-                                    : 'Cajero',
-                                style: const TextStyle(
-                                  color: Color(0xFFE8C995),
-                                  fontSize: 12,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                            ],
-                            IconButton(
-                              tooltip: widget.usuario.esAdmin
-                                  ? 'Cambiar de usuario'
-                                  : 'Ver como administrador',
-                              onPressed: widget.usuario.esAdmin
-                                  ? _cambiarUsuario
-                                  : _verComoAdministrador,
-                              icon: Icon(
-                                widget.usuario.esAdmin
-                                    ? Icons.switch_account_outlined
-                                    : Icons.admin_panel_settings_outlined,
-                              ),
-                              color: const Color(0xFFE8C995),
-                            ),
-                            IconButton(
-                              tooltip: 'Cambiar mi contraseña',
-                              onPressed: _cambiarPassword,
-                              icon: const Icon(Icons.lock_reset_outlined),
-                              color: const Color(0xFFE8C995),
-                            ),
-                            if (widget.usuario.esAdmin)
-                              IconButton(
-                                tooltip: 'Respaldo y restauración',
-                                onPressed: _abrirRespaldo,
-                                icon: const Icon(Icons.cloud_sync_outlined),
-                                color: const Color(0xFFE8C995),
-                              ),
-                            IconButton(
-                              tooltip: 'Cerrar sesión',
-                              onPressed: widget.onLogout,
-                              icon: const Icon(Icons.logout),
-                              color: scheme.error,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    _railSidebar(destinations, index),
                     const VerticalDivider(width: 1),
                     Expanded(child: body),
                   ],

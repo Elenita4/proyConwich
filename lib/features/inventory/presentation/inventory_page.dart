@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/catalog_repository.dart';
+import '../../../core/compras_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
@@ -46,10 +47,12 @@ class InventoryPage extends StatefulWidget {
 
 class _InventoryPageState extends State<InventoryPage> {
   final _repository = CatalogRepository();
+  final _compras = ComprasRepository();
   late Future<_InsumosData> _future;
   String _search = '';
   bool _soloActivos = false;
   bool _soloAlertas = false;
+  bool _soloNoConsumibles = false;
 
   @override
   void initState() {
@@ -131,6 +134,58 @@ class _InventoryPageState extends State<InventoryPage> {
     }
   }
 
+  Future<void> _agregarCantidad(Insumo insumo) async {
+    final resultado = await showDialog<_CompraInput>(
+      context: context,
+      builder: (_) => _AgregarCantidadDialog(insumo: insumo),
+    );
+    if (resultado == null) return;
+    try {
+      await _compras.registrarCompraInsumo(
+        insumoId: insumo.id!,
+        cantidad: resultado.cantidad,
+        costoUnitario: resultado.costo,
+        usuarioId: widget.usuario.id,
+      );
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(context, 'Se agregó cantidad a ${insumo.nombre}.');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo registrar la compra: $error',
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _registrarPerdida(Insumo insumo) async {
+    final resultado = await showDialog<_PerdidaInput>(
+      context: context,
+      builder: (_) => _RegistrarPerdidaDialog(insumo: insumo),
+    );
+    if (resultado == null) return;
+    try {
+      await _compras.registrarPerdida(
+        insumoId: insumo.id!,
+        cantidad: resultado.cantidad,
+        usuarioId: widget.usuario.id,
+        motivo: resultado.motivo,
+      );
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(context, 'Pérdida registrada de ${insumo.nombre}.');
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo registrar la pérdida: $error',
+        error: true,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<_InsumosData>(
@@ -141,6 +196,7 @@ class _InventoryPageState extends State<InventoryPage> {
         final filtrados = insumos.where((insumo) {
           if (_soloActivos && !insumo.activo) return false;
           if (_soloAlertas && !insumo.bajoStock) return false;
+          if (_soloNoConsumibles && insumo.consumible) return false;
           final term = _search.trim().toLowerCase();
           return term.isEmpty || insumo.nombre.toLowerCase().contains(term);
         }).toList();
@@ -214,6 +270,12 @@ class _InventoryPageState extends State<InventoryPage> {
                       onSelected: (value) =>
                           setState(() => _soloAlertas = value),
                     ),
+                    FilterChip(
+                      label: const Text('No consumibles'),
+                      selected: _soloNoConsumibles,
+                      onSelected: (value) =>
+                          setState(() => _soloNoConsumibles = value),
+                    ),
                   ],
                 ),
               ),
@@ -248,6 +310,8 @@ class _InventoryPageState extends State<InventoryPage> {
                       insumo: insumo,
                       onEdit: () => _openForm(insumo),
                       onAjustarStock: () => _ajustarStock(insumo),
+                      onAgregarCantidad: () => _agregarCantidad(insumo),
+                      onRegistrarPerdida: () => _registrarPerdida(insumo),
                       onToggleActivo: (value) => _toggleActivo(insumo, value),
                     ),
                   ),
@@ -265,12 +329,16 @@ class _InsumoRow extends StatelessWidget {
     required this.insumo,
     required this.onEdit,
     required this.onAjustarStock,
+    required this.onAgregarCantidad,
+    required this.onRegistrarPerdida,
     required this.onToggleActivo,
   });
 
   final Insumo insumo;
   final VoidCallback onEdit;
   final VoidCallback onAjustarStock;
+  final VoidCallback onAgregarCantidad;
+  final VoidCallback onRegistrarPerdida;
   final ValueChanged<bool> onToggleActivo;
 
   @override
@@ -310,6 +378,14 @@ class _InsumoRow extends StatelessWidget {
                 backgroundColor: scheme.primaryContainer,
                 labelStyle: Theme.of(context).textTheme.labelSmall,
               ),
+            if (!insumo.consumible)
+              Chip(
+                label: const Text('No consumible'),
+                side: BorderSide.none,
+                visualDensity: VisualDensity.compact,
+                backgroundColor: scheme.tertiaryContainer,
+                labelStyle: Theme.of(context).textTheme.labelSmall,
+              ),
           ],
         ),
         Text(
@@ -342,6 +418,16 @@ class _InsumoRow extends StatelessWidget {
       runSpacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
+        OutlinedButton.icon(
+          onPressed: onAgregarCantidad,
+          icon: const Icon(Icons.add_circle_outline, size: 18),
+          label: const Text('Agregar cantidad'),
+        ),
+        OutlinedButton.icon(
+          onPressed: onRegistrarPerdida,
+          icon: const Icon(Icons.remove_circle_outline, size: 18),
+          label: const Text('Registrar pérdida'),
+        ),
         OutlinedButton.icon(
           onPressed: onAjustarStock,
           icon: const Icon(Icons.tune, size: 18),
@@ -424,7 +510,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   final _picker = ImagePicker();
   late final TextEditingController _nombre;
   late final TextEditingController _stockMinimo;
-  late final TextEditingController _stockActual;
   late final TextEditingController _costo;
   late final TextEditingController _precioVenta;
   late List<CategoriaProducto> _categorias;
@@ -432,6 +517,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   late int? _categoriaVentaId;
   late bool _activo;
   late bool _ventaDirecta;
+  late bool _consumible;
   Uint8List? _imagen;
   bool _saving = false;
   String? _error;
@@ -442,15 +528,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
         defaultTargetPlatform == TargetPlatform.iOS;
   }
 
-  /// Aviso cuando el mínimo deja al insumo en alerta desde el primer momento.
-  String? get _advertenciaStock {
-    final actual = parseAmount(_stockActual.text);
-    final minimo = parseAmount(_stockMinimo.text);
-    if (minimo <= 0 || actual > minimo) return null;
-    return 'El stock mínimo (${formatQty(minimo)}) es mayor o igual al stock '
-        'actual (${formatQty(actual)}): el insumo quedará en alerta de stock.';
-  }
-
   @override
   void initState() {
     super.initState();
@@ -459,9 +536,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     _nombre = TextEditingController(text: insumo?.nombre ?? '');
     _stockMinimo = TextEditingController(
       text: insumo == null ? '0' : formatQty(insumo.stockMinimo),
-    );
-    _stockActual = TextEditingController(
-      text: insumo == null ? '0' : formatQty(insumo.stock),
     );
     _costo = TextEditingController(
       text: insumo == null ? '0' : insumo.costoPromedio.toStringAsFixed(2),
@@ -486,6 +560,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     }
     _activo = insumo?.activo ?? true;
     _ventaDirecta = insumo?.ventaDirecta ?? false;
+    _consumible = insumo?.consumible ?? true;
     _imagen = insumo?.imagen;
   }
 
@@ -493,7 +568,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   void dispose() {
     _nombre.dispose();
     _stockMinimo.dispose();
-    _stockActual.dispose();
     _costo.dispose();
     _precioVenta.dispose();
     super.dispose();
@@ -640,7 +714,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     });
     try {
       final unidad = widget.unidades.firstWhere((item) => item.id == _unidadId);
-      final id = await widget.repository.saveInsumo(
+      await widget.repository.saveInsumo(
         Insumo(
           id: widget.insumo?.id,
           nombre: _nombre.text,
@@ -658,13 +732,8 @@ class _InsumoDialogState extends State<_InsumoDialog> {
           productoId: widget.insumo?.productoId,
           categoriaVentaDirectaId: _categoriaVentaId,
           imagen: _imagen,
+          consumible: _consumible,
         ),
-      );
-      await widget.repository.ajustarStockInsumo(
-        insumoId: id,
-        nuevoStock: parseAmount(_stockActual.text),
-        usuarioId: widget.usuarioId,
-        motivo: 'Carga inicial',
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -727,83 +796,17 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                   validator: (value) =>
                       value == null ? 'Selecciona una unidad' : null,
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  'Registra el stock en la unidad elegida. Ej.: 30 botellas de '
-                  '1 L se cargan como 30 L; en la receta puedes usar 250 ml.',
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
-                ),
                 const SizedBox(height: 12),
-                Builder(
-                  builder: (context) {
-                    final angosto = esAngosto(
-                      MediaQuery.sizeOf(context).width,
-                      limite: 420,
-                    );
-                    final actual = TextFormField(
-                      controller: _stockActual,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                      decoration: appInput(
-                        label: 'Stock actual',
-                        icon: Icons.inventory_2_outlined,
-                      ),
-                    );
-                    final minimo = TextFormField(
-                      controller: _stockMinimo,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                      decoration: appInput(
-                        label: 'Stock mínimo',
-                        icon: Icons.warning_amber_outlined,
-                      ),
-                    );
-                    if (angosto) {
-                      return Column(
-                        children: [actual, const SizedBox(height: 12), minimo],
-                      );
-                    }
-                    return Row(
-                      children: [
-                        Expanded(child: actual),
-                        const SizedBox(width: 12),
-                        Expanded(child: minimo),
-                      ],
-                    );
-                  },
-                ),
-                if (_advertenciaStock != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: scheme.errorContainer.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.warning_amber_rounded,
-                          color: scheme.error,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _advertenciaStock!,
-                            style: TextStyle(color: scheme.error),
-                          ),
-                        ),
-                      ],
-                    ),
+                TextFormField(
+                  controller: _stockMinimo,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
                   ),
-                ],
+                  decoration: appInput(
+                    label: 'Stock mínimo',
+                    icon: Icons.warning_amber_outlined,
+                  ),
+                ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _costo,
@@ -811,7 +814,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                     decimal: true,
                   ),
                   decoration: appInput(
-                    label: 'Costo promedio (Bs)',
+                    label: 'Costo (Bs)',
                     icon: Icons.price_check,
                   ),
                 ),
@@ -889,6 +892,17 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                         ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
                 ],
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('No consumible (activo fijo)'),
+                  subtitle: const Text(
+                    'Cucharas, platos, vasos y otros que no se descuentan con '
+                    'recetas. Se controlan igual pero en su propia lista.',
+                  ),
+                  value: !_consumible,
+                  onChanged: (value) => setState(() => _consumible = !value),
+                ),
                 const SizedBox(height: 4),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -1060,6 +1074,248 @@ class _StockDialogState extends State<_StockDialog> {
           },
           child: const Text('Guardar'),
         ),
+      ],
+    );
+  }
+}
+
+class _CompraInput {
+  const _CompraInput({required this.cantidad, required this.costo});
+
+  final double cantidad;
+  final double costo;
+}
+
+class _AgregarCantidadDialog extends StatefulWidget {
+  const _AgregarCantidadDialog({required this.insumo});
+
+  final Insumo insumo;
+
+  @override
+  State<_AgregarCantidadDialog> createState() => _AgregarCantidadDialogState();
+}
+
+class _AgregarCantidadDialogState extends State<_AgregarCantidadDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _cantidad;
+  late final TextEditingController _costo;
+
+  @override
+  void initState() {
+    super.initState();
+    _cantidad = TextEditingController();
+    _costo = TextEditingController(
+      text: widget.insumo.costoPromedio.toStringAsFixed(2),
+    );
+  }
+
+  @override
+  void dispose() {
+    _cantidad.dispose();
+    _costo.dispose();
+    super.dispose();
+  }
+
+  void _guardar() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(
+      context,
+      _CompraInput(
+        cantidad: parseAmount(_cantidad.text),
+        costo: parseAmount(_costo.text),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insumo = widget.insumo;
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Agregar cantidad · ${insumo.nombre}'),
+      content: DialogSurface(
+        maxWidth: 400,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Unidad ${insumo.unidadAbreviatura} · stock actual '
+                '${formatQty(insumo.stock)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cantidad,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [decimalAmountInputFormatter],
+                decoration: appInput(
+                  label: 'Cantidad a agregar',
+                  icon: Icons.add_circle_outline,
+                ),
+                validator: (value) => validateDecimalAmount(
+                  value,
+                  allowZero: false,
+                  label: 'La cantidad',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _costo,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [decimalAmountInputFormatter],
+                decoration: appInput(
+                  label: 'Costo de esta compra (Bs)',
+                  hint: 'Vacío = mantener costo promedio',
+                  icon: Icons.price_check,
+                ),
+                validator: (value) {
+                  final texto = (value ?? '').trim();
+                  if (texto.isEmpty) return null;
+                  if (parseAmount(texto) < 0) {
+                    return 'El costo no puede ser negativo.';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Si el costo cambia, se recalcula el costo promedio ponderado.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _guardar, child: const Text('Agregar')),
+      ],
+    );
+  }
+}
+
+class _PerdidaInput {
+  const _PerdidaInput({required this.cantidad, this.motivo});
+
+  final double cantidad;
+  final String? motivo;
+}
+
+class _RegistrarPerdidaDialog extends StatefulWidget {
+  const _RegistrarPerdidaDialog({required this.insumo});
+
+  final Insumo insumo;
+
+  @override
+  State<_RegistrarPerdidaDialog> createState() => _RegistrarPerdidaDialogState();
+}
+
+class _RegistrarPerdidaDialogState extends State<_RegistrarPerdidaDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _cantidad;
+  late final TextEditingController _motivo;
+
+  @override
+  void initState() {
+    super.initState();
+    _cantidad = TextEditingController();
+    _motivo = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _cantidad.dispose();
+    _motivo.dispose();
+    super.dispose();
+  }
+
+  void _guardar() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(
+      context,
+      _PerdidaInput(
+        cantidad: parseAmount(_cantidad.text),
+        motivo: _motivo.text.trim().isEmpty ? null : _motivo.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insumo = widget.insumo;
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Registrar pérdida · ${insumo.nombre}'),
+      content: DialogSurface(
+        maxWidth: 400,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Unidad ${insumo.unidadAbreviatura} · stock actual '
+                '${formatQty(insumo.stock)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _cantidad,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [decimalAmountInputFormatter],
+                decoration: appInput(
+                  label: 'Cantidad perdida',
+                  icon: Icons.remove_circle_outline,
+                ),
+                validator: (value) => validateDecimalAmount(
+                  value,
+                  allowZero: false,
+                  label: 'La cantidad',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _motivo,
+                decoration: appInput(
+                  label: 'Motivo (opcional)',
+                  hint: 'Ej. se echó a perder, rotura',
+                  icon: Icons.notes,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Solo baja el stock; no cambia precios ni el costo promedio.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _guardar, child: const Text('Registrar')),
       ],
     );
   }

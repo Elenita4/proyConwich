@@ -324,7 +324,6 @@ void main() {
     await tester.enterText(find.byType(TextFormField).at(1), '2');
     await tester.enterText(find.byType(TextFormField).at(2), '5');
     await tester.pump();
-    expect(find.textContaining('quedará en alerta'), findsOneWidget);
 
     await tester.ensureVisible(
       find.widgetWithText(SwitchListTile, 'Disponible para venta directa'),

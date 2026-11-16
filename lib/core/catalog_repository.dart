@@ -147,6 +147,7 @@ class Insumo {
     this.productoId,
     this.categoriaVentaDirectaId,
     this.imagen,
+    this.consumible = true,
   });
 
   final int? id;
@@ -170,6 +171,10 @@ class Insumo {
   /// Imagen del producto generado (solo para venta directa).
   final Uint8List? imagen;
 
+  /// `false` para insumos no consumibles (cucharas, platos, vasos): se
+  /// controlan como inventario pero no se descuentan con recetas.
+  final bool consumible;
+
   bool get bajoStock => stock <= stockMinimo;
   bool get unidadConvertible =>
       unidadFamilia == 'MASA' || unidadFamilia == 'VOLUMEN';
@@ -189,6 +194,29 @@ class RecetaLinea {
   final String unidadAbreviatura;
   final double cantidad;
   final double stock;
+}
+
+/// Presentación/variante de un producto (por ejemplo, el tamaño de un
+/// refresco). El stock vive en el producto base; cada presentación aporta su
+/// propio precio e imagen.
+class ProductoPresentacion {
+  const ProductoPresentacion({
+    this.id,
+    required this.productoId,
+    required this.nombre,
+    required this.precio,
+    required this.orden,
+    required this.activo,
+    this.imagen,
+  });
+
+  final int? id;
+  final int productoId;
+  final String nombre;
+  final double precio;
+  final int orden;
+  final bool activo;
+  final Uint8List? imagen;
 }
 
 class CatalogRepository {
@@ -594,6 +622,7 @@ class CatalogRepository {
       'venta_directa': insumo.ventaDirecta ? 1 : 0,
       'precio_venta': insumo.precioVenta,
       'activo': insumo.activo ? 1 : 0,
+      'consumible': insumo.consumible ? 1 : 0,
     };
     final int id;
     if (insumo.id == null) {
@@ -878,6 +907,85 @@ class CatalogRepository {
     });
   }
 
+  /// Presentaciones activas agrupadas por producto base.
+  Future<Map<int, List<ProductoPresentacion>>> getPresentaciones() async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'producto_presentaciones',
+      where: 'activo = 1',
+      orderBy: 'orden, id',
+    );
+    final map = <int, List<ProductoPresentacion>>{};
+    for (final row in rows) {
+      final presentacion = ProductoPresentacion(
+        id: row['id']! as int,
+        productoId: row['producto_id']! as int,
+        nombre: row['nombre']! as String,
+        precio: (row['precio'] as num).toDouble(),
+        orden: (row['orden'] as num?)?.toInt() ?? 0,
+        activo: (row['activo'] as num).toInt() == 1,
+        imagen: _asBytes(row['imagen']),
+      );
+      map.putIfAbsent(presentacion.productoId, () => []).add(presentacion);
+    }
+    return map;
+  }
+
+  /// Presentaciones (activas e inactivas) de un producto, para editarlas.
+  Future<List<ProductoPresentacion>> getPresentacionesDe(int productoId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.query(
+      'producto_presentaciones',
+      where: 'producto_id = ?',
+      whereArgs: [productoId],
+      orderBy: 'orden, id',
+    );
+    return rows
+        .map(
+          (row) => ProductoPresentacion(
+            id: row['id']! as int,
+            productoId: row['producto_id']! as int,
+            nombre: row['nombre']! as String,
+            precio: (row['precio'] as num).toDouble(),
+            orden: (row['orden'] as num?)?.toInt() ?? 0,
+            activo: (row['activo'] as num).toInt() == 1,
+            imagen: _asBytes(row['imagen']),
+          ),
+        )
+        .toList();
+  }
+
+  Future<int> savePresentacion(ProductoPresentacion presentacion) async {
+    final db = await AppDatabase.instance.database;
+    final values = <String, Object?>{
+      'producto_id': presentacion.productoId,
+      'nombre': presentacion.nombre.trim(),
+      'precio': presentacion.precio,
+      'imagen': presentacion.imagen,
+      'orden': presentacion.orden,
+      'activo': presentacion.activo ? 1 : 0,
+    };
+    if (presentacion.id == null) {
+      return db.insert('producto_presentaciones', values);
+    }
+    await db.update(
+      'producto_presentaciones',
+      values,
+      where: 'id = ?',
+      whereArgs: [presentacion.id],
+    );
+    return presentacion.id!;
+  }
+
+  Future<void> eliminarPresentacion(int id) async {
+    final db = await AppDatabase.instance.database;
+    await db.delete(
+      'producto_presentaciones',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Producto _productFromRow(Map<String, Object?> row) => Producto(
     id: row['id']! as int,
     nombre: row['nombre']! as String,
@@ -917,6 +1025,7 @@ class CatalogRepository {
     productoId: row['producto_id'] as int?,
     categoriaVentaDirectaId: row['categoria_venta_id'] as int?,
     imagen: _asBytes(row['producto_imagen']),
+    consumible: (row['consumible'] as num?)?.toInt() != 0,
   );
 
   static Uint8List? _asBytes(Object? value) {

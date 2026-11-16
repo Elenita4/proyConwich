@@ -20,6 +20,7 @@ class ReportExportData {
     required this.salidas,
     required this.pedidos,
     this.faltantes = const [],
+    this.compras = const [],
     this.negocio = 'Conwich',
   });
 
@@ -30,6 +31,7 @@ class ReportExportData {
   final List<SalidaReporte> salidas;
   final List<PedidoReporte> pedidos;
   final List<FaltanteInsumoReporte> faltantes;
+  final List<CompraReporte> compras;
   final String negocio;
 
   DateTime get finMostrar => hasta.subtract(const Duration(seconds: 1));
@@ -448,6 +450,55 @@ class ReportExporter {
             ),
           pw.SizedBox(height: 16),
           pw.Text(
+            'Compras de insumos',
+            style: pw.TextStyle(
+              fontSize: 13,
+              fontWeight: pw.FontWeight.bold,
+              color: scheme,
+            ),
+          ),
+          pw.SizedBox(height: 8),
+          if (data.compras.isEmpty)
+            pw.Text(
+              'Sin compras registradas.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
+          else
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Código',
+                'Fecha',
+                'Insumo',
+                'Cantidad',
+                'Costo unit.',
+                'Subtotal',
+              ],
+              data: data.compras
+                  .map(
+                    (compra) => [
+                      compra.codigo ?? '—',
+                      _fechaHora(compra.fecha),
+                      compra.insumo,
+                      '${_qty(compra.cantidad)} ${compra.unidad}',
+                      formatMoney(compra.costoUnitario),
+                      formatMoney(compra.subtotal),
+                    ],
+                  )
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: blanco,
+              ),
+              headerDecoration: pw.BoxDecoration(color: scheme),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignments: {
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.centerRight,
+              },
+            ),
+          pw.SizedBox(height: 16),
+          pw.Text(
             'Pedidos',
             style: pw.TextStyle(
               fontSize: 13,
@@ -648,6 +699,29 @@ class ReportExporter {
     }
     for (var i = 0; i < 6; i++) {
       salidas.setColumnWidth(i, 22);
+    }
+
+    final compras = excel['Compras'];
+    compras.appendRow([
+      TextCellValue('Código'),
+      TextCellValue('Fecha'),
+      TextCellValue('Insumo'),
+      TextCellValue('Cantidad'),
+      TextCellValue('Costo unitario'),
+      TextCellValue('Subtotal'),
+    ]);
+    for (final compra in data.compras) {
+      compras.appendRow([
+        TextCellValue(compra.codigo ?? '—'),
+        TextCellValue(_fechaHora(compra.fecha)),
+        TextCellValue(compra.insumo),
+        TextCellValue('${_qty(compra.cantidad)} ${compra.unidad}'),
+        DoubleCellValue(compra.costoUnitario),
+        DoubleCellValue(compra.subtotal),
+      ]);
+    }
+    for (var i = 0; i < 6; i++) {
+      compras.setColumnWidth(i, 20);
     }
 
     final pedidos = excel['Pedidos'];
