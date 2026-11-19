@@ -83,6 +83,113 @@ class _InventoryPageState extends State<InventoryPage> {
     );
   }
 
+  Future<void> _registrarCompra() async {
+    final data = await _future;
+    if (!mounted) return;
+    final resultado = await showDialog<_CompraResultado>(
+      context: context,
+      builder: (_) => _RegistrarCompraDialog(
+        unidades: data.unidades,
+        categorias: data.categorias,
+      ),
+    );
+    if (resultado == null || !mounted) return;
+    try {
+      // Buscar insumo existente por nombre o crear uno nuevo.
+      final existente = await _repository.getInsumoByNombre(resultado.nombre);
+      final int insumoId;
+      if (existente != null) {
+        insumoId = existente.id!;
+      } else {
+        final und = data.unidades.firstWhere(
+          (u) => u.id == resultado.unidadId,
+          orElse: () => data.unidades.first,
+        );
+        insumoId = await _repository.saveInsumo(
+          Insumo(
+            nombre: resultado.nombre,
+            unidadId: und.id,
+            unidadAbreviatura: und.abreviatura,
+            stockMinimo: 0,
+            costoPromedio: resultado.costoUnitario,
+            activo: true,
+            stock: 0,
+          ),
+        );
+      }
+      await _compras.registrarCompraInsumo(
+        insumoId: insumoId,
+        cantidad: resultado.cantidad,
+        costoUnitario: resultado.costoUnitario,
+        usuarioId: widget.usuario.id,
+      );
+      if (!mounted) return;
+      setState(_reload);
+      if (resultado.loVendeDirecto) {
+        final insumo = await _repository.getInsumo(insumoId);
+        if (insumo != null && mounted) {
+          await _crearProductoDesdeCompra(insumo, data);
+        }
+      } else {
+        showAppMessage(context, 'Compra registrada: ${resultado.nombre}.');
+      }
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo registrar la compra: $error',
+        error: true,
+      );
+    }
+  }
+
+  Future<void> _crearProductoDesdeCompra(
+    Insumo insumo,
+    _InsumosData data,
+  ) async {
+    final resultado = await showDialog<_ProductoDesdeCompra>(
+      context: context,
+      builder: (_) => _CrearProductoDesdeCompraDialog(
+        insumo: insumo,
+        categorias: data.categorias,
+      ),
+    );
+    if (resultado == null || !mounted) return;
+    try {
+      await _repository.saveInsumo(
+        Insumo(
+          id: insumo.id,
+          nombre: insumo.nombre,
+          unidadId: insumo.unidadId,
+          unidadAbreviatura: insumo.unidadAbreviatura,
+          stockMinimo: insumo.stockMinimo,
+          costoPromedio: insumo.costoPromedio,
+          activo: resultado.activo,
+          stock: insumo.stock,
+          ventaDirecta: true,
+          precioVenta: resultado.precioVenta,
+          productoId: insumo.productoId,
+          categoriaVentaDirectaId: resultado.categoriaId,
+          imagen: resultado.imagen,
+          consumible: insumo.consumible,
+        ),
+      );
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(
+        context,
+        'Producto "${insumo.nombre}" creado correctamente.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo crear el producto: $error',
+        error: true,
+      );
+    }
+  }
+
   Future<void> _openForm([Insumo? insumo]) async {
     final data = await _future;
     if (!mounted) return;
@@ -210,13 +317,13 @@ class _InventoryPageState extends State<InventoryPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               PageHeader(
-                title: 'Insumos',
-                subtitle: 'Materias primas y su stock. Al vender un plato se descuentan sus insumos según la receta, si la tiene.',
+                title: 'Compras de insumos',
+                subtitle: 'Registra lo que compras para llevar el control de stock y costos.',
                 actions: [
                   FilledButton.icon(
-                    onPressed: snapshot.hasData ? () => _openForm() : null,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Nuevo insumo'),
+                    onPressed: snapshot.hasData ? _registrarCompra : null,
+                    icon: const Icon(Icons.shopping_cart_outlined),
+                    label: const Text('Registrar compra'),
                   ),
                 ],
               ),
@@ -292,13 +399,13 @@ class _InventoryPageState extends State<InventoryPage> {
                   icon: Icons.inventory_2_outlined,
                   title: 'No hay insumos que coincidan',
                   message: insumos.isEmpty
-                      ? 'Crea el primer insumo para controlar el inventario.'
+                      ? 'Registra tu primera compra para controlar el inventario.'
                       : 'Ajusta la búsqueda o los filtros.',
                   action: insumos.isEmpty
                       ? FilledButton.icon(
-                          onPressed: () => _openForm(),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Crear insumo'),
+                          onPressed: _registrarCompra,
+                          icon: const Icon(Icons.shopping_cart_outlined),
+                          label: const Text('Registrar compra'),
                         )
                       : null,
                 )
@@ -407,7 +514,7 @@ class _InsumoRow extends StatelessWidget {
           ),
         ),
         Text(
-          'Mínimo: ${formatQty(insumo.stockMinimo)}',
+          'Stock: ${formatQty(insumo.stock)} ${insumo.unidadAbreviatura}',
           style: Theme.of(context).textTheme.bodySmall
               ?.copyWith(color: scheme.onSurfaceVariant),
         ),
@@ -509,7 +616,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   final _formKey = GlobalKey<FormState>();
   final _picker = ImagePicker();
   late final TextEditingController _nombre;
-  late final TextEditingController _stockMinimo;
   late final TextEditingController _costo;
   late final TextEditingController _precioVenta;
   late List<CategoriaProducto> _categorias;
@@ -534,9 +640,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
     final insumo = widget.insumo;
     _categorias = List.of(widget.categorias);
     _nombre = TextEditingController(text: insumo?.nombre ?? '');
-    _stockMinimo = TextEditingController(
-      text: insumo == null ? '0' : formatQty(insumo.stockMinimo),
-    );
     _costo = TextEditingController(
       text: insumo == null ? '0' : insumo.costoPromedio.toStringAsFixed(2),
     );
@@ -567,7 +670,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
   @override
   void dispose() {
     _nombre.dispose();
-    _stockMinimo.dispose();
     _costo.dispose();
     _precioVenta.dispose();
     super.dispose();
@@ -723,7 +825,7 @@ class _InsumoDialogState extends State<_InsumoDialog> {
           unidadNombre: unidad.nombre,
           unidadFamilia: unidad.familia,
           unidadFactorBase: unidad.factorBase,
-          stockMinimo: parseAmount(_stockMinimo.text),
+          stockMinimo: 0,
           costoPromedio: parseAmount(_costo.text),
           activo: _activo,
           stock: widget.insumo?.stock ?? 0,
@@ -795,17 +897,6 @@ class _InsumoDialogState extends State<_InsumoDialog> {
                   onChanged: (value) => setState(() => _unidadId = value),
                   validator: (value) =>
                       value == null ? 'Selecciona una unidad' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _stockMinimo,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: appInput(
-                    label: 'Stock mínimo',
-                    icon: Icons.warning_amber_outlined,
-                  ),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -1220,7 +1311,8 @@ class _RegistrarPerdidaDialog extends StatefulWidget {
   final Insumo insumo;
 
   @override
-  State<_RegistrarPerdidaDialog> createState() => _RegistrarPerdidaDialogState();
+  State<_RegistrarPerdidaDialog> createState() =>
+      _RegistrarPerdidaDialogState();
 }
 
 class _RegistrarPerdidaDialogState extends State<_RegistrarPerdidaDialog> {
@@ -1316,6 +1408,407 @@ class _RegistrarPerdidaDialogState extends State<_RegistrarPerdidaDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(onPressed: _guardar, child: const Text('Registrar')),
+      ],
+    );
+  }
+}
+
+// --- Nuevos diálogos de compra rápida ---
+
+class _CompraResultado {
+  const _CompraResultado({
+    required this.nombre,
+    required this.cantidad,
+    required this.costoUnitario,
+    required this.unidadId,
+    this.loVendeDirecto = false,
+  });
+
+  final String nombre;
+  final double cantidad;
+  final double costoUnitario;
+  final int unidadId;
+  final bool loVendeDirecto;
+}
+
+class _RegistrarCompraDialog extends StatefulWidget {
+  const _RegistrarCompraDialog({
+    required this.unidades,
+    required this.categorias,
+  });
+
+  final List<UnidadMedida> unidades;
+  final List<CategoriaProducto> categorias;
+
+  @override
+  State<_RegistrarCompraDialog> createState() => _RegistrarCompraDialogState();
+}
+
+class _RegistrarCompraDialogState extends State<_RegistrarCompraDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nombre = TextEditingController();
+  final _cantidad = TextEditingController();
+  final _costoTotal = TextEditingController();
+  int? _unidadId;
+  bool _loVendeDirecto = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _unidadId = widget.unidades.isNotEmpty ? widget.unidades.first.id : null;
+  }
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _cantidad.dispose();
+    _costoTotal.dispose();
+    super.dispose();
+  }
+
+  double get _costoUnitario {
+    final cantidad = parseAmount(_cantidad.text);
+    final costo = parseAmount(_costoTotal.text);
+    if (cantidad <= 0) return 0;
+    return costo / cantidad;
+  }
+
+  void _guardar() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(
+      context,
+      _CompraResultado(
+        nombre: _nombre.text.trim(),
+        cantidad: parseAmount(_cantidad.text),
+        costoUnitario: _costoUnitario,
+        unidadId: _unidadId!,
+        loVendeDirecto: _loVendeDirecto,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: const Text('Registrar compra'),
+      content: DialogSurface(
+        maxWidth: 460,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: _nombre,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: appInput(
+                    label: '¿Qué compraste?',
+                    hint: 'Ej. Carne, Leche, Coca-Cola',
+                  ),
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Escribe qué compraste'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: TextFormField(
+                        controller: _cantidad,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [decimalAmountInputFormatter],
+                        decoration: appInput(label: '¿Cuánto?'),
+                        validator: (value) => validateDecimalAmount(
+                          value,
+                          allowZero: false,
+                          label: 'La cantidad',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: DropdownButtonFormField<int>(
+                        initialValue: _unidadId,
+                        decoration: appInput(label: 'Unidad'),
+                        items: widget.unidades
+                            .map(
+                              (u) => DropdownMenuItem(
+                                value: u.id,
+                                child: Text(u.abreviatura),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) => setState(() => _unidadId = value),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _costoTotal,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [decimalAmountInputFormatter],
+                  decoration: appInput(
+                    label: '¿Cuánto costó? (Bs total)',
+                    icon: Icons.payments_outlined,
+                  ),
+                  validator: (value) => validateDecimalAmount(
+                    value,
+                    allowZero: false,
+                    label: 'El costo',
+                  ),
+                ),
+                if (_costoUnitario > 0) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Costo unitario: ${formatMoney(_costoUnitario)} / '
+                    '${widget.unidades.firstWhere((u) => u.id == _unidadId, orElse: () => widget.unidades.first).abreviatura}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('¿Lo vendes directo?'),
+                  subtitle: const Text(
+                    'Se creará un producto en el catálogo para venderlo.',
+                  ),
+                  value: _loVendeDirecto,
+                  onChanged: (value) => setState(() => _loVendeDirecto = value),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _guardar, child: const Text('Registrar')),
+      ],
+    );
+  }
+}
+
+class _ProductoDesdeCompra {
+  const _ProductoDesdeCompra({
+    required this.categoriaId,
+    required this.categoriaNombre,
+    required this.categoriaColor,
+    required this.precioVenta,
+    this.imagen,
+    this.activo = true,
+  });
+
+  final int categoriaId;
+  final String categoriaNombre;
+  final int categoriaColor;
+  final double precioVenta;
+  final Uint8List? imagen;
+  final bool activo;
+}
+
+class _CrearProductoDesdeCompraDialog extends StatefulWidget {
+  const _CrearProductoDesdeCompraDialog({
+    required this.insumo,
+    required this.categorias,
+  });
+
+  final Insumo insumo;
+  final List<CategoriaProducto> categorias;
+
+  @override
+  State<_CrearProductoDesdeCompraDialog> createState() =>
+      _CrearProductoDesdeCompraDialogState();
+}
+
+class _CrearProductoDesdeCompraDialogState
+    extends State<_CrearProductoDesdeCompraDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _precio = TextEditingController();
+  int? _categoriaId;
+  Uint8List? _imagen;
+  bool _activo = true;
+  final _picker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    _imagen = widget.insumo.imagen;
+  }
+
+  @override
+  void dispose() {
+    _precio.dispose();
+    super.dispose();
+  }
+
+  Future<void> _cargarImagen() async {
+    try {
+      final archivo = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+      if (archivo == null) return;
+      final bytes = await archivo.readAsBytes();
+      if (mounted) setState(() => _imagen = bytes);
+    } catch (error) {
+      if (mounted) {
+        showAppMessage(
+          context,
+          'No se pudo cargar la imagen: $error',
+          error: true,
+        );
+      }
+    }
+  }
+
+  void _crear() {
+    if (!_formKey.currentState!.validate()) return;
+    if (_categoriaId == null) {
+      showAppMessage(context, 'Elige una categoría.', error: true);
+      return;
+    }
+    final cat = widget.categorias.firstWhere((c) => c.id == _categoriaId);
+    Navigator.pop(
+      context,
+      _ProductoDesdeCompra(
+        categoriaId: _categoriaId!,
+        categoriaNombre: cat.nombre,
+        categoriaColor: cat.color,
+        precioVenta: parseAmount(_precio.text),
+        imagen: _imagen,
+        activo: _activo,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text('Crear producto desde "${widget.insumo.nombre}"'),
+      content: DialogSurface(
+        maxWidth: 420,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_imagen != null)
+                  Center(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        _imagen!,
+                        width: 100,
+                        height: 100,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Center(
+                  child: OutlinedButton.icon(
+                    onPressed: _cargarImagen,
+                    icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                    label: Text(
+                      _imagen == null
+                          ? 'Subir foto (opcional)'
+                          : 'Cambiar foto',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  '¿En qué categoría lo vendes?',
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  initialValue: _categoriaId,
+                  isExpanded: true,
+                  decoration: appInput(
+                    label: 'Categoría',
+                    hint: 'Elige una categoría',
+                  ),
+                  items: widget.categorias
+                      .map(
+                        (c) => DropdownMenuItem(
+                          value: c.id,
+                          child: Text(c.nombre),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() => _categoriaId = value),
+                  validator: (value) =>
+                      value == null ? 'Elige una categoría' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _precio,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [decimalAmountInputFormatter],
+                  decoration: appInput(
+                    label: 'Precio de venta (Bs)',
+                    icon: Icons.sell_outlined,
+                  ),
+                  validator: (value) => validateDecimalAmount(
+                    value,
+                    allowZero: false,
+                    label: 'El precio de venta',
+                  ),
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Producto activo'),
+                  subtitle: const Text(
+                    'Si está activo se puede vender de inmediato.',
+                  ),
+                  value: _activo,
+                  onChanged: (value) => setState(() => _activo = value),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Nombre: ${widget.insumo.nombre}',
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _crear, child: const Text('Crear producto')),
       ],
     );
   }

@@ -560,7 +560,12 @@ class _SalesPageState extends State<SalesPage> {
                 const SizedBox(height: 14),
                 LayoutBuilder(
                   builder: (context, constraints) {
-                    final horizontal = constraints.maxWidth >= 1000;
+                    // En tablet/escritorio el pedido queda fijo a la derecha;
+                    // solo en teléfono se acomoda abajo.
+                    final horizontal = !esAngosto(
+                      MediaQuery.sizeOf(context).width,
+                      limite: 860,
+                    );
                     final catalogo = _catalogo(context, data);
                     final carrito = _carrito(context, data);
                     if (horizontal) {
@@ -1009,7 +1014,6 @@ class _SalesPageState extends State<SalesPage> {
       ),
     );
   }
-
 }
 
 class _PaymentDialog extends StatefulWidget {
@@ -1101,109 +1105,109 @@ class _PaymentDialogState extends State<_PaymentDialog> {
               Row(
                 children: [
                   Text('Total a cobrar'),
-                const Spacer(),
-                Text(
-                  formatMoney(widget.total),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: scheme.primary,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'El otro método se completa automáticamente.',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _efectivo,
-              inputFormatters: [decimalAmountInputFormatter],
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: appInput(
-                label: 'Efectivo (Bs)',
-                icon: Icons.payments_outlined,
-              ),
-              onChanged: (value) => _actualizar('EFECTIVO', value),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _qr,
-              inputFormatters: [decimalAmountInputFormatter],
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: appInput(label: 'QR (Bs)', icon: Icons.qr_code_2),
-              onChanged: (value) => _actualizar('QR', value),
-            ),
-            const SizedBox(height: 8),
-            if (!_montosValidos)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Ingresa montos numéricos válidos, sin negativos.',
-                  style: TextStyle(color: scheme.error),
-                ),
-              ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  ActionChip(
-                    label: const Text('Todo efectivo'),
-                    onPressed: () => _todo('EFECTIVO'),
-                  ),
-                  ActionChip(
-                    label: const Text('Todo QR'),
-                    onPressed: () => _todo('QR'),
+                  const Spacer(),
+                  Text(
+                    formatMoney(widget.total),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: scheme.primary,
+                    ),
                   ),
                 ],
               ),
-            ),
-            const Divider(),
-            Row(
-              children: [
-                Text(
-                  _restante > 0.004
-                      ? 'Restante'
-                      : _restante < -0.004
-                      ? 'Excede el total'
-                      : 'Completo',
-                  style: TextStyle(
-                    color: _restante.abs() <= 0.004
-                        ? scheme.primary
-                        : scheme.error,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  formatMoney(_restante.abs()),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: _restante.abs() <= 0.004
-                        ? scheme.primary
-                        : scheme.error,
-                  ),
-                ),
-              ],
-            ),
-            if (_excede)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
                 child: Text(
-                  'Los pagos no pueden superar el total.',
-                  style: TextStyle(color: scheme.error),
+                  'El otro método se completa automáticamente.',
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _efectivo,
+                inputFormatters: [decimalAmountInputFormatter],
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInput(
+                  label: 'Efectivo (Bs)',
+                  icon: Icons.payments_outlined,
+                ),
+                onChanged: (value) => _actualizar('EFECTIVO', value),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _qr,
+                inputFormatters: [decimalAmountInputFormatter],
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInput(label: 'QR (Bs)', icon: Icons.qr_code_2),
+                onChanged: (value) => _actualizar('QR', value),
+              ),
+              const SizedBox(height: 8),
+              if (!_montosValidos)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Ingresa montos numéricos válidos, sin negativos.',
+                    style: TextStyle(color: scheme.error),
+                  ),
+                ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    ActionChip(
+                      label: const Text('Todo efectivo'),
+                      onPressed: () => _todo('EFECTIVO'),
+                    ),
+                    ActionChip(
+                      label: const Text('Todo QR'),
+                      onPressed: () => _todo('QR'),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(),
+              Row(
+                children: [
+                  Text(
+                    _restante > 0.004
+                        ? 'Restante'
+                        : _restante < -0.004
+                        ? 'Excede el total'
+                        : 'Completo',
+                    style: TextStyle(
+                      color: _restante.abs() <= 0.004
+                          ? scheme.primary
+                          : scheme.error,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    formatMoney(_restante.abs()),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _restante.abs() <= 0.004
+                          ? scheme.primary
+                          : scheme.error,
+                    ),
+                  ),
+                ],
+              ),
+              if (_excede)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Los pagos no pueden superar el total.',
+                    style: TextStyle(color: scheme.error),
+                  ),
+                ),
             ],
           ),
         ),

@@ -50,6 +50,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  bool _railOculto = false;
   final Set<int> _visitados = <int>{0};
   final Map<String, int> _tokens = <String, int>{};
   int _generacion = 0;
@@ -325,10 +326,8 @@ class _AppShellState extends State<AppShell> {
                     const SizedBox(height: 8),
                     Text(
                       appNombre,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: crema,
-                      ),
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800, color: crema),
                     ),
                   ],
                 ),
@@ -427,6 +426,18 @@ class _AppShellState extends State<AppShell> {
           appBar: AppBar(
             backgroundColor: const Color(0xFF3D2419), // Espresso
             surfaceTintColor: const Color(0xFF3D2419),
+            // En tablet/escritorio este botón oculta o muestra la barra
+            // lateral. En teléfono el menú lo abre el botón del drawer.
+            leading: wide
+                ? IconButton(
+                    tooltip: _railOculto ? 'Mostrar menú' : 'Ocultar menú',
+                    onPressed: () => setState(() => _railOculto = !_railOculto),
+                    icon: Icon(
+                      _railOculto ? Icons.menu : Icons.menu_open,
+                      color: const Color(0xFFF3E9D9), // Crema
+                    ),
+                  )
+                : null,
             title: InkWell(
               onTap: _irATablero,
               borderRadius: BorderRadius.circular(8),
@@ -532,7 +543,9 @@ class _AppShellState extends State<AppShell> {
                                   appCanal,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
-                                        color: const Color(0xFFE8C995), // Dorado
+                                        color: const Color(
+                                          0xFFE8C995,
+                                        ), // Dorado
                                         fontWeight: FontWeight.w600,
                                       ),
                                 ),
@@ -571,8 +584,10 @@ class _AppShellState extends State<AppShell> {
           body: wide
               ? Row(
                   children: [
-                    _railSidebar(destinations, index),
-                    const VerticalDivider(width: 1),
+                    if (!_railOculto) ...[
+                      _railSidebar(destinations, index),
+                      const VerticalDivider(width: 1),
+                    ],
                     Expanded(child: body),
                   ],
                 )

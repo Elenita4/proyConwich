@@ -259,6 +259,22 @@ void main() {
       }
     }
 
+    /// Espera a que aparezca un widget sin depender de tiempos fijos: los
+    /// diálogos se abren tras consultas a la BD que pueden tardar más.
+    Future<void> esperar(Finder finder) async {
+      for (var i = 0; i < 40; i++) {
+        if (finder.evaluate().isNotEmpty) {
+          await tester.pump();
+          return;
+        }
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      }
+    }
+
     final repository = CatalogRepository();
 
     // Producto.
@@ -317,39 +333,59 @@ void main() {
       ),
     );
     await asentar();
-    await tester.tap(find.text('Nuevo insumo').first);
-    await asentar();
-    expect(find.widgetWithText(FilledButton, 'Guardar'), findsOneWidget);
+    await tester.tap(find.text('Registrar compra'));
+    await esperar(find.widgetWithText(FilledButton, 'Registrar'));
+    expect(find.widgetWithText(FilledButton, 'Registrar'), findsOneWidget);
     await tester.enterText(find.byType(TextFormField).first, 'Insumo móvil');
     await tester.enterText(find.byType(TextFormField).at(1), '2');
     await tester.enterText(find.byType(TextFormField).at(2), '5');
     await tester.pump();
 
     await tester.ensureVisible(
-      find.widgetWithText(SwitchListTile, 'Disponible para venta directa'),
+      find.widgetWithText(SwitchListTile, '¿Lo vendes directo?'),
     );
     await tester.tap(
-      find.widgetWithText(SwitchListTile, 'Disponible para venta directa'),
+      find.widgetWithText(SwitchListTile, '¿Lo vendes directo?'),
     );
     await asentar();
-    expect(
-      find.text('Elegir imagen').evaluate().isNotEmpty ||
-          find.text('Buscar imagen').evaluate().isNotEmpty,
-      isTrue,
+    await tester.tap(find.widgetWithText(FilledButton, 'Registrar'));
+    await esperar(find.widgetWithText(FilledButton, 'Crear producto'));
+    // Se abre el diálogo de creación de producto.
+    expect(find.widgetWithText(FilledButton, 'Crear producto'), findsOneWidget);
+    final categoriasProd = await tester.runAsync(repository.getCategorias);
+    final categoriaProd = categoriasProd!.firstWhere(
+      (item) => item.nombre == 'ALMUERZOS',
     );
-    expect(find.widgetWithText(OutlinedButton, 'Nueva'), findsOneWidget);
-    await tester.ensureVisible(find.byType(TextFormField).last);
-    await tester.enterText(find.byType(TextFormField).last, '7');
+    final dropdownProd = tester.widget<DropdownButtonFormField<int>>(
+      find.byType(DropdownButtonFormField<int>),
+    );
+    dropdownProd.onChanged!(categoriaProd.id);
+    final campoProd = tester.state<FormFieldState<int>>(
+      find.byType(DropdownButtonFormField<int>),
+    );
+    campoProd.didChange(categoriaProd.id);
     await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
-    await asentar();
-    final insumos = await tester.runAsync(repository.getInsumos);
-    final insumo = insumos!.firstWhere(
-      (insumo) => insumo.nombre == 'Insumo móvil',
-    );
-    expect(insumo.productoId, isNotNull);
+    await tester.enterText(find.byType(TextFormField).first, '7');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Crear producto'));
+    // El guardado escribe en la BD antes de vincular el producto; se espera a
+    // que el vínculo exista en vez de confiar en un tiempo fijo.
+    Insumo? insumo;
+    for (var i = 0; i < 40 && insumo?.productoId == null; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      final insumos = await tester.runAsync(repository.getInsumos);
+      insumo = insumos
+          ?.where((insumo) => insumo.nombre == 'Insumo móvil')
+          .firstOrNull;
+    }
+    expect(insumo, isNotNull);
+    expect(insumo!.productoId, isNotNull);
     final producto = await tester.runAsync(
-      () => repository.getProducto(insumo.productoId!),
+      () => repository.getProducto(insumo!.productoId!),
     );
     expect(producto!.precio, 7);
   });
