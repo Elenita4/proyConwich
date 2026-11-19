@@ -6,9 +6,11 @@ import '../../../core/cash_repository.dart';
 import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
+import '../../../core/printer/printer_service.dart';
 import '../../../core/receipt_service.dart';
 import '../../../core/sales_repository.dart';
 import '../../../core/session.dart';
+import '../../../data/database/app_database.dart';
 import '../../../ui/common.dart';
 import '../../../ui/producto_catalogo_card.dart';
 
@@ -76,7 +78,6 @@ class _SalesData {
     required this.caja,
     required this.menu,
     required this.productos,
-    required this.pedidosAbiertos,
     required this.sopaDelDia,
     required this.precioAlmuerzo,
   });
@@ -84,7 +85,6 @@ class _SalesData {
   final Caja? caja;
   final MenuDia? menu;
   final List<_SaleProduct> productos;
-  final List<Pedido> pedidosAbiertos;
   final _SaleProduct? sopaDelDia;
 
   /// Precio fijo del almuerzo completo del día, si se definió en el menú.
@@ -118,7 +118,6 @@ class _SalesPageState extends State<SalesPage> {
   final _observacion = TextEditingController();
   String _search = '';
   String? _categoria;
-  int? _pedidoEditandoId;
   bool _saving = false;
   bool _mostrarFueraMenu = false;
 
@@ -235,7 +234,6 @@ class _SalesPageState extends State<SalesPage> {
         presentaciones: presentaciones[producto.id!] ?? const [],
       );
     }
-    final abiertos = await _salesRepository.getPedidosAbiertos();
     final sopas = productos.values
         .where((producto) => producto.esSopa)
         .toList();
@@ -243,7 +241,6 @@ class _SalesPageState extends State<SalesPage> {
       caja: caja,
       menu: menu,
       productos: productos.values.toList(),
-      pedidosAbiertos: abiertos,
       sopaDelDia: sopas.isEmpty ? null : sopas.first,
       precioAlmuerzo: menu?.precioAlmuerzo,
     );
@@ -377,54 +374,7 @@ class _SalesPageState extends State<SalesPage> {
       _cart.clear();
       _referencia.clear();
       _observacion.clear();
-      _pedidoEditandoId = null;
     });
-  }
-
-  Future<void> _guardarPendiente(_SalesData data) async {
-    final caja = data.caja;
-    if (caja == null) return;
-    if (_cart.isEmpty) {
-      showAppMessage(context, 'Agrega productos al pedido.', error: true);
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      if (_pedidoEditandoId != null) {
-        await _salesRepository.agregarLineas(
-          _pedidoEditandoId!,
-          _cart.values.toList(),
-          cajaId: caja.id,
-        );
-      } else {
-        await _salesRepository.crearPedido(
-          usuarioId: widget.usuario.id,
-          cajaId: caja.id,
-          menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
-          referencia: _referencia.text,
-          observacion: _observacion.text,
-          lineas: _cart.values.toList(),
-          pagos: const [],
-        );
-      }
-      if (!mounted) return;
-      final editando = _pedidoEditandoId;
-      _limpiarCarrito();
-      setState(() {
-        _saving = false;
-        _reload();
-      });
-      showAppMessage(
-        context,
-        editando == null
-            ? 'Pedido guardado como pendiente de pago.'
-            : 'Líneas agregadas al pedido.',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      showAppMessage(context, '$error', error: true);
-    }
   }
 
   Future<void> _cobrar(_SalesData data) async {
@@ -441,32 +391,15 @@ class _SalesPageState extends State<SalesPage> {
     if (pagos == null) return;
     setState(() => _saving = true);
     try {
-      final int pedidoId;
-      final editando = _pedidoEditandoId;
-      if (editando != null) {
-        pedidoId = editando;
-        await _salesRepository.agregarLineas(
-          pedidoId,
-          _cart.values.toList(),
-          cajaId: caja.id,
-        );
-        await _salesRepository.agregarPagos(
-          pedidoId: pedidoId,
-          usuarioId: widget.usuario.id,
-          cajaId: caja.id,
-          pagos: pagos,
-        );
-      } else {
-        pedidoId = await _salesRepository.crearPedido(
-          usuarioId: widget.usuario.id,
-          cajaId: caja.id,
-          menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
-          referencia: _referencia.text,
-          observacion: _observacion.text,
-          lineas: _cart.values.toList(),
-          pagos: pagos,
-        );
-      }
+      final pedidoId = await _salesRepository.crearPedido(
+        usuarioId: widget.usuario.id,
+        cajaId: caja.id,
+        menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
+        referencia: _referencia.text,
+        observacion: _observacion.text,
+        lineas: _cart.values.toList(),
+        pagos: pagos,
+      );
       final detalle = await _salesRepository.getPedido(pedidoId);
       if (!mounted) return;
       _limpiarCarrito();
@@ -476,9 +409,7 @@ class _SalesPageState extends State<SalesPage> {
       });
       showAppMessage(
         context,
-        editando == null
-            ? 'Venta registrada por ${formatMoney(_totalAnterior(pagos))}.'
-            : 'Pago agregado al pedido.',
+        'Venta registrada por ${formatMoney(_totalAnterior(pagos))}.',
       );
       if (detalle.pedido.pagadoCompleto) {
         await _ofrecerImprimir(detalle, caja);
@@ -492,41 +423,6 @@ class _SalesPageState extends State<SalesPage> {
 
   double _totalAnterior(List<PagoInput> pagos) =>
       pagos.fold<double>(0, (sum, pago) => sum + pago.monto);
-
-  Future<void> _cobrarPedido(Pedido pedido, _SalesData data) async {
-    final caja = data.caja;
-    if (caja == null) {
-      showAppMessage(
-        context,
-        'Abre una caja para cobrar pedidos pendientes.',
-        error: true,
-      );
-      return;
-    }
-    final pagos = await showDialog<List<PagoInput>>(
-      context: context,
-      builder: (_) => _PaymentDialog(total: pedido.saldo),
-    );
-    if (pagos == null) return;
-    try {
-      await _salesRepository.agregarPagos(
-        pedidoId: pedido.id,
-        usuarioId: widget.usuario.id,
-        cajaId: caja.id,
-        pagos: pagos,
-      );
-      final detalle = await _salesRepository.getPedido(pedido.id);
-      if (!mounted) return;
-      setState(_reload);
-      showAppMessage(context, 'Pago registrado para el pedido #${pedido.id}.');
-      if (detalle.pedido.pagadoCompleto) {
-        await _ofrecerImprimir(detalle, caja);
-      }
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, '$error', error: true);
-    }
-  }
 
   Future<void> _ofrecerImprimir(PedidoDetalle detalle, Caja caja) async {
     final imprimir = await showDialog<bool>(
@@ -550,6 +446,27 @@ class _SalesPageState extends State<SalesPage> {
       ),
     );
     if (imprimir != true) return;
+    final meta = await AppDatabase.instance.leerAppMeta();
+    final mac = (meta?['impresora_mac'] as String?) ?? '';
+    final printer = PrinterService();
+    if (mac.isNotEmpty && printer.disponible) {
+      try {
+        await printer.imprimirNotaVenta(
+          detalle: detalle,
+          turno: caja.turnoLabel,
+          cajero: widget.usuario.nombre,
+          mac: mac,
+        );
+        return;
+      } catch (error) {
+        if (!mounted) return;
+        showAppMessage(
+          context,
+          'No se pudo imprimir por Bluetooth: $error. Se abrirá el PDF.',
+          error: true,
+        );
+      }
+    }
     try {
       await ReceiptService().imprimirNotaVenta(
         detalle: detalle,
@@ -561,45 +478,6 @@ class _SalesPageState extends State<SalesPage> {
       showAppMessage(
         context,
         'No se pudo generar la nota de venta: $error',
-        error: true,
-      );
-    }
-  }
-
-  Future<void> _anular(Pedido pedido) async {
-    final confirmado = await confirmAction(
-      context,
-      title: 'Anular pedido',
-      message:
-          'Se anularán el pedido #${pedido.id}, sus pagos y los consumos de insumos asociados.',
-      confirmLabel: 'Anular',
-      destructive: true,
-    );
-    if (!confirmado) return;
-    try {
-      await _salesRepository.anularPedido(pedido.id);
-      if (!mounted) return;
-      setState(_reload);
-      showAppMessage(context, 'Pedido anulado.');
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, 'No se pudo anular: $error', error: true);
-    }
-  }
-
-  Future<void> _verPedido(Pedido pedido) async {
-    try {
-      final detalle = await _salesRepository.getPedido(pedido.id);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (_) => _PedidoDetalleDialog(detalle: detalle),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'No se pudo cargar el pedido: $error',
         error: true,
       );
     }
@@ -673,8 +551,6 @@ class _SalesPageState extends State<SalesPage> {
                               label: const Text('Ir a Caja'),
                             ),
                     ),
-                    if (data.pedidosAbiertos.isNotEmpty)
-                      _pedidosAbiertos(context, data),
                   ],
                 )
               else ...[
@@ -702,8 +578,6 @@ class _SalesPageState extends State<SalesPage> {
                     );
                   },
                 ),
-                const SizedBox(height: 22),
-                _pedidosAbiertos(context, data),
               ],
             ],
           ),
@@ -999,29 +873,6 @@ class _SalesPageState extends State<SalesPage> {
               ),
             ],
           ),
-          if (_pedidoEditandoId != null) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: scheme.tertiaryContainer.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Agregando líneas al pedido #$_pedidoEditandoId',
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => setState(() => _pedidoEditandoId = null),
-                    child: const Text('Cancelar'),
-                  ),
-                ],
-              ),
-            ),
-          ],
           const SizedBox(height: 10),
           if (_cart.isEmpty)
             const EmptyState(
@@ -1148,174 +999,17 @@ class _SalesPageState extends State<SalesPage> {
               decoration: appInput(label: 'Observación (opcional)'),
             ),
             const SizedBox(height: 14),
-            if (_pedidoEditandoId != null)
-              FilledButton.icon(
-                onPressed: _saving ? null : () => _guardarPendiente(data),
-                icon: const Icon(Icons.playlist_add),
-                label: Text(_saving ? 'Guardando…' : 'Agregar al pedido'),
-              )
-            else ...[
-              FilledButton.icon(
-                onPressed: _saving ? null : () => _cobrar(data),
-                icon: const Icon(Icons.point_of_sale),
-                label: const Text('Pagado'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _saving ? null : () => _guardarPendiente(data),
-                icon: const Icon(Icons.pending_actions_outlined),
-                label: const Text('Guardar pendiente de pago'),
-              ),
-            ],
+            FilledButton.icon(
+              onPressed: _saving ? null : () => _cobrar(data),
+              icon: const Icon(Icons.point_of_sale),
+              label: const Text('Pagado'),
+            ),
           ],
         ],
       ),
     );
   }
 
-  Widget _pedidosAbiertos(BuildContext context, _SalesData data) {
-    if (data.pedidosAbiertos.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    final hayCaja = data.caja != null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Pedidos pendientes de pago',
-          style: Theme.of(context).textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        if (!hayCaja) ...[
-          const SizedBox(height: 4),
-          Text(
-            'Abre una caja para cobrar o modificar pedidos pendientes.',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-        const SizedBox(height: 10),
-        ...data.pedidosAbiertos.map(
-          (pedido) => Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: AppCard(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final angosto = esAngosto(constraints.maxWidth, limite: 820);
-                  final cabecera = Row(
-                    children: [
-                      CircleAvatar(radius: 18, child: Text('${pedido.id}')),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              pedido.referencia == null
-                                  ? 'Pedido #${pedido.id}'
-                                  : '${pedido.referencia} · #${pedido.id}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              '${formatDateTimeText(pedido.fecha)} · ${pedido.usuarioNombre}',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                  final montos = Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Total ${formatMoney(pedido.total)}',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          'Saldo ${formatMoney(pedido.saldo)}',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                  final acciones = Wrap(
-                    spacing: 2,
-                    runSpacing: 0,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      IconButton(
-                        tooltip: 'Ver detalle',
-                        onPressed: () => _verPedido(pedido),
-                        icon: const Icon(Icons.visibility_outlined),
-                      ),
-                      TextButton(
-                        onPressed: hayCaja
-                            ? () => _cobrarPedido(pedido, data)
-                            : null,
-                        child: const Text('Cobrar'),
-                      ),
-                      TextButton(
-                        onPressed: hayCaja
-                            ? () {
-                                setState(() => _pedidoEditandoId = pedido.id);
-                                showAppMessage(
-                                  context,
-                                  'Agrega productos y usa “Agregar al pedido”.',
-                                );
-                              }
-                            : null,
-                        child: const Text('Agregar'),
-                      ),
-                      TextButton(
-                        onPressed: () => _anular(pedido),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Theme.of(context).colorScheme.error,
-                        ),
-                        child: const Text('Anular'),
-                      ),
-                    ],
-                  );
-                  if (angosto) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        cabecera,
-                        const SizedBox(height: 8),
-                        montos,
-                        acciones,
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      Expanded(flex: 2, child: cabecera),
-                      Expanded(child: montos),
-                      acciones,
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 class _PaymentDialog extends StatefulWidget {
@@ -1522,93 +1216,6 @@ class _PaymentDialogState extends State<_PaymentDialog> {
         FilledButton(
           onPressed: _completo ? _confirmar : null,
           child: const Text('Confirmar pago'),
-        ),
-      ],
-    );
-  }
-}
-
-class _PedidoDetalleDialog extends StatelessWidget {
-  const _PedidoDetalleDialog({required this.detalle});
-
-  final PedidoDetalle detalle;
-
-  @override
-  Widget build(BuildContext context) {
-    final pedido = detalle.pedido;
-    return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-      title: Text('Pedido #${pedido.id}'),
-      content: DialogSurface(
-        maxWidth: 520,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LabelValue(label: 'Estado de pago', value: pedido.estadoPago),
-              LabelValue(
-                label: 'Estado de entrega',
-                value: pedido.estadoEntrega,
-              ),
-              if (pedido.referencia != null)
-                LabelValue(label: 'Referencia', value: pedido.referencia!),
-              LabelValue(
-                label: 'Fecha',
-                value: formatDateTimeText(pedido.fecha),
-              ),
-              LabelValue(label: 'Total', value: formatMoney(pedido.total)),
-              LabelValue(label: 'Pagado', value: formatMoney(pedido.pagado)),
-              LabelValue(label: 'Saldo', value: formatMoney(pedido.saldo)),
-              const Divider(height: 22),
-              Text(
-                'Productos',
-                style: Theme.of(context).textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              ...detalle.lineas
-                  .where((linea) => !linea.esComponente)
-                  .map(
-                    (linea) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${formatQty(linea.cantidad)} × ${linea.nombreParaMostrar}',
-                            ),
-                          ),
-                          Text(formatMoney(linea.subtotal)),
-                        ],
-                      ),
-                    ),
-                  ),
-              const Divider(height: 22),
-              Text(
-                'Pagos',
-                style: Theme.of(context).textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              if (detalle.pagos.isEmpty)
-                const Text('Sin pagos registrados.')
-              else
-                ...detalle.pagos.map(
-                  (pago) => Row(
-                    children: [
-                      Expanded(child: Text('${pago.metodo} · ${pago.estado}')),
-                      Text(formatMoney(pago.monto)),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cerrar'),
         ),
       ],
     );

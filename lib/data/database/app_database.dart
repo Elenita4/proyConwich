@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 17;
+  static const int schemaVersion = 18;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -101,6 +101,7 @@ class AppDatabase {
         await _migrarV13(db);
         await _migrarV15(db);
         await _migrarV17(db);
+        await _migrarV18(db);
         await _afterOpen(db);
       },
     );
@@ -188,7 +189,9 @@ class AppDatabase {
         drive_al_cerrar_caja INTEGER NOT NULL DEFAULT 1,
         drive_frecuencia TEXT NOT NULL DEFAULT 'CADA_CIERRE',
         drive_ultimo_exito TEXT,
-        drive_ultimo_error TEXT
+        drive_ultimo_error TEXT,
+        impresora_mac TEXT,
+        impresora_nombre TEXT
       )
     ''');
 
@@ -1252,6 +1255,22 @@ class AppDatabase {
       }
     } catch (error) {
       debugPrint('No se pudo migrar el esquema v17: $error');
+    }
+  }
+
+  /// Agrega la configuración de la impresora térmica Bluetooth en `app_meta`.
+  Future<void> _migrarV18(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'app_meta', 'impresora_mac')) {
+        await db.execute('ALTER TABLE app_meta ADD COLUMN impresora_mac TEXT');
+      }
+      if (!await _tieneColumna(db, 'app_meta', 'impresora_nombre')) {
+        await db.execute(
+          'ALTER TABLE app_meta ADD COLUMN impresora_nombre TEXT',
+        );
+      }
+    } catch (error) {
+      debugPrint('No se pudo migrar el esquema v18: $error');
     }
   }
 

@@ -18,6 +18,11 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+  errors:
+    # Flutter 3.50 deprecó `package:flutter/material.dart` a favor de
+    # `package:material_ui/material_ui.dart`. La migración es un trabajo aparte;
+    # se silencia para no marcar todo el proyecto mientras tanto.
+    deprecated_member_use: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the

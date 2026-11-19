@@ -5,7 +5,9 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 
 ## Comandos
 - `flutter pub get`
-- `flutter analyze` — `analysis_options.yaml` excluye build/ y todas las carpetas de plataforma
+- `flutter analyze` — `analysis_options.yaml` excluye build/ y las carpetas de plataforma e
+  ignora `deprecated_member_use` (Flutter 3.50 deprecó `package:flutter/material.dart` a favor de
+  `material_ui`; la migración queda pendiente).
 - `flutter test` — corre unit + "integración" de BD (usa sqflite_common_ffi, no requiere dispositivo).
   `dart_test.yaml` fija `concurrency: 1` porque todos los archivos comparten la misma BD SQLite.
 - `flutter run` (o `flutter run -d chrome` para web)
@@ -13,7 +15,7 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 
 ## Build / plataformas
 - Android: `applicationId`/namespace `com.example.test_code_02`, Java/Kotlin 17,
-  minSdk/targetSdk/compileSdk toman los defaults de Flutter. Gradle wrapper 9.3.1, AGP 9.1.0,
+  minSdk/targetSdk/compileSdk toman los defaults de Flutter. Gradle wrapper 9.5.0, AGP 9.1.1,
   Kotlin 2.4.0. El release firma con las debug keys (sin keystore propio). versionName/versionCode
   salen de `pubspec.yaml` (1.0.0+1). El canal "Beta 1" es solo una etiqueta visual en
   `lib/core/app_info.dart`; no forma parte de la versión para iOS.
@@ -37,7 +39,7 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 17` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
+- `version: 18` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
   foráneas se desactivan durante la migración y se activan en `onOpen` (`PRAGMA foreign_keys = ON`).
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
@@ -52,6 +54,7 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   `producto_presentaciones` (variantes/tamaños de refrescos), `compras.codigo` (código de
   compra) e `insumos.consumible` (bandera de no consumible). Solo agrega columnas/tablas; no
   modifica datos.
+- La v18 agrega `app_meta.impresora_mac` e `impresora_nombre` (impresora térmica Bluetooth).
 - `unidades_medida.familia`/`factor_base` permiten convertir L↔ml y kg↔g en las recetas.
 - La receta es opcional. Al vender, el consumo se limita al stock disponible (nunca deja
   negativos) y el faltante queda registrado en `faltantes_insumo` (se consulta en Reportes).
@@ -96,6 +99,9 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   sección SIEMPRE DISPONIBLES. Si no hay caja abierta, Ventas muestra un botón "Ir a Caja".
   En Ventas, los productos activos que no están en el menú del día se agrupan en una sección
   colapsable ("Productos fuera del menú de hoy"), oculta por defecto y no vendible.
+- Todas las ventas son **directas** (se cobran al momento): no hay pedidos pendientes ni
+  reservas. Se eliminó el botón "Guardar pendiente de pago", el modo "Agregar al pedido" y la
+  sección "Pedidos pendientes de pago".
 - El estado del menú se llama `HABILITADO` (antes `PUBLICADO`) en BD, código y textos; la columna
   es `habilitado_en`. El tablero ofrece "Empezar el día" (lleva al menú y de ahí un atajo a Caja).
 - `app_meta` (fila única): `instalacion_id` (UUID estable de la instalación), fecha del último
@@ -135,6 +141,25 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   permiso, escribir, listar y borrar. La carpeta elegida se guarda en `app_meta`. Las copias se
   suben al cerrar caja (según configuración) y en el inicio si la frecuencia está vencida; se
   conservan las últimas N copias (`drive_retencion`, por defecto 30).
+
+## Impresión
+- `lib/core/receipt_service.dart` genera la **nota de venta en PDF de 80 mm** con fuente
+  **Roboto embebida** (`assets/fonts/Roboto-Regular.ttf` y `-Bold.ttf`) para que acentos y ñ se
+  impriman bien; el alto de página se ajusta al contenido. Sirve para el diálogo de impresión
+  del sistema.
+- Impresora térmica **Bluetooth de 80 mm** por ESC/POS: `lib/core/printer/printer_service.dart`
+  arma los bytes (48 columnas) y usa el `MethodChannel`
+  `com.example.test_code_02/bluetooth_printer` implementado en `MainActivity.kt`. La Golden Sky
+  **GS-FJ80M-UB usa BLE GATT** (servicio `49535343-fe7d-4ae5-8fa9-9fafd205e455`, escritura
+  `49535343-8841-43f4-a8d4-ecbe34729bb3`, notificaciones
+  `49535343-1e4d-4bd9-ba61-23c647249616`); el canal conecta por BLE (chunk 20 B con
+  `onCharacteristicWrite`) y deja SPP como respaldo. "Probar impresora" envía
+  `1B 40 43 4F 4E 57 49 43 48 0A 0A` (CONWICH) y `1B 64 03 1D 56 01` (avance + corte parcial).
+  La comprobación real es el papel, no el callback. La configuración
+  (`impresora_mac`/`impresora_nombre`) vive en `app_meta` y se edita en la pantalla
+  **"Impresora"** (admin), que permite escanear BLE, probar y guardar. Al cobrar se mantiene el
+  diálogo "¿Imprimir nota de venta?": si hay impresora configurada, imprime por Bluetooth; si no,
+  abre el PDF.
 
 ## Convenciones / gotchas
 - **Regla: el sistema nunca depende de que los productos tengan receta.** Un `PREPARADO` sin

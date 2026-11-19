@@ -12,6 +12,7 @@ import '../../cash/presentation/cash_page.dart';
 import '../../dashboard/presentation/dashboard_page.dart';
 import '../../inventory/presentation/inventory_page.dart';
 import '../../menu/presentation/menu_page.dart';
+import '../../printer/presentation/printer_page.dart';
 import '../../products/presentation/products_page.dart';
 import '../../reports/presentation/reports_page.dart';
 import '../../sales/presentation/sales_page.dart';
@@ -256,6 +257,19 @@ class _AppShellState extends State<AppShell> {
           icon: Icons.manage_accounts_outlined,
           selectedIcon: Icons.manage_accounts,
           page: UsersPage(usuario: usuario, refreshToken: _token('Usuarios')),
+        ),
+      );
+    }
+    if (usuario.esAdmin) {
+      destinations.add(
+        _Destination(
+          label: 'Impresora',
+          icon: Icons.print_outlined,
+          selectedIcon: Icons.print,
+          page: PrinterPage(
+            usuario: usuario,
+            refreshToken: _token('Impresora'),
+          ),
         ),
       );
     }

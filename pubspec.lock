@@ -5,10 +5,10 @@ packages:
     dependency: transitive
     description:
       name: android_file_picker
-      sha256: e7e02f9bab7e014e5b47e4cef135a8f5c66f5c14fd90986e415e758f6a1762e1
+      sha256: ec3cf2a2c7a9b2bd56747e85f80efdd994e563049dfb0981a23903acfdd58cb5
       url: "https://pub.dev"
     source: hosted
-    version: "2.1.6"
+    version: "2.2.0"
   archive:
     dependency: transitive
     description:
@@ -117,18 +117,18 @@ packages:
     dependency: transitive
     description:
       name: dbus
-      sha256: f7db8504e715b835f5ebe5fe74604ccd961d504c73389a5d8e81bafc2e2f3612
+      sha256: fe6b46eae35441227e9e750656d06a4f40c230fe96e4390da7d7ebc69a60f0b3
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.0"
+    version: "0.8.1"
   dev_build:
     dependency: transitive
     description:
       name: dev_build
-      sha256: "422f8556d40c8d60e3f2cb5c28a6e8594f2b27487f47b340f38e6027f1bb18b0"
+      sha256: d5acb57f5baac2768e96d19a97026f7a0e344560f2dbe8c15ad9b3d4cfe121dd
       url: "https://pub.dev"
     source: hosted
-    version: "1.2.2"
+    version: "1.2.2+1"
   equatable:
     dependency: transitive
     description:
@@ -181,10 +181,10 @@ packages:
     dependency: "direct main"
     description:
       name: file_picker
-      sha256: "079dc46b753abbddb7f77cd87e6ed9ecc62902580707514568321bdf8e050a86"
+      sha256: c3780977700b8962c3b9b6a9aa4e2c988956893d70d4a4fa2d7adf4ec9b9eaee
       url: "https://pub.dev"
     source: hosted
-    version: "13.3.3"
+    version: "13.4.0"
   file_picker_darwin:
     dependency: transitive
     description:
@@ -205,10 +205,10 @@ packages:
     dependency: transitive
     description:
       name: file_picker_platform_interface
-      sha256: "336e7168306834a2b68e6168ed768e00d3fabeac23154d5793e277ca9f97cf20"
+      sha256: a2ef71c4628f92a4471d424576e3bf7042b40a2683c9f9a0e3033a7fc7f7763c
       url: "https://pub.dev"
     source: hosted
-    version: "4.2.0"
+    version: "4.3.0"
   file_picker_web:
     dependency: transitive
     description:
@@ -652,10 +652,10 @@ packages:
     dependency: transitive
     description:
       name: process_run
-      sha256: bc771cd3e812205540923ecbc2612367a78eadae08b32e593362aac9c2959693
+      sha256: "3880f5eba132ded718c90f3f8d788284163ac90dde8d0d27cb8a16cb2d5df89d"
       url: "https://pub.dev"
     source: hosted
-    version: "1.4.4"
+    version: "1.4.4+1"
   pub_semver:
     dependency: transitive
     description:
