@@ -32,8 +32,10 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 - `AppShell` construye cada sección solo al visitarla y refresca solo la sección activa
   (cada pantalla tiene su propio token). El drawer (teléfono) y una barra lateral propia
   desplazable de arriba hacia abajo (tablet/escritorio, con `Key('rail-sidebar')`) muestran
-  **solo los destinos** del menú. Las acciones de sesión (cambiar/ver usuario, cambiar
-  contraseña, respaldo y cerrar sesión) son iconos en la esquina superior derecha del `AppBar`.
+  **solo los destinos** del menú. Un botón ☰ en el `AppBar` oculta/muestra la barra lateral en
+  tablet/escritorio (solo visible mientras la ventana mida ≥ 860). Las acciones de sesión
+  (cambiar/ver usuario, cambiar contraseña, respaldo y cerrar sesión) son iconos en la esquina
+  superior derecha del `AppBar`.
   La barra reemplaza al `NavigationRail`, que desbordaba en tablets. El logo "Conwich" del
   `AppBar` y de la barra lleva al Tablero.
 
@@ -86,9 +88,11 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   productos de `PLATOS SUELTOS` pueden ser completos. En Ventas se calcula
   `precio_plato + precio_sopa`, salvo que el menú defina `precio_almuerzo` (precio fijo del
   completo por día, editable junto al selector de sopa).
-  En "Editar" la selección es **local** (estado `_selLocal`/`_sopaLocal`/`_agotadosLocal`): tocar
-  platos no recarga ni pierde el scroll; recién al pulsar **"Listo"** se aplica el diff a la BD y
-  se recarga una vez.
+  No hay modo "Editar" ni botón "Listo": tocar un plato lo agrega o quita del menú y el cambio
+  se guarda **al instante** en la BD (el mismo efecto tiene el checkbox "Todos" de cada
+  categoría y el selector de sopa). La tarjeta se actualiza sin recargar la página para no
+  perder el scroll. En tablet (ventana ≥ 860) el panel "MENÚ DE HOY" queda fijo a la derecha;
+  en teléfono se acomoda abajo (en Ventas igual con el panel "Pedido").
   El reporte general no muestra modalidades para otras categorías; el desglose de almuerzos y sopas
   se muestra en secciones separadas y omite los ceros. Al limpiar o reemplazar un menú, las filas
   referenciadas por ventas se conservan ocultas para proteger el

@@ -352,9 +352,11 @@ class MenuRepository {
     await db.delete('menu_dia_combos', where: 'id = ?', whereArgs: [comboId]);
   }
 
-  Future<void> agregarProducto(int menuDiaId, int productoId) async {
+  /// Agrega un producto al menú del día (o lo reactiva si ya existía).
+  /// Devuelve el id del item para poder actualizarlo sin recargar la pantalla.
+  Future<int> agregarProducto(int menuDiaId, int productoId) async {
     final db = await AppDatabase.instance.database;
-    await db.transaction((txn) async {
+    return db.transaction((txn) async {
       final productoRows = await txn.rawQuery(
         '''
         SELECT c.nombre AS categoria_nombre
@@ -398,20 +400,21 @@ class MenuRepository {
         limit: 1,
       );
       if (existente.isNotEmpty) {
+        final itemId = existente.first['id']! as int;
         await txn.update(
           'menu_dia_items',
           {'disponible': 1, 'motivo_agotado': null},
           where: 'id = ?',
-          whereArgs: [existente.first['id']],
+          whereArgs: [itemId],
         );
-        return;
+        return itemId;
       }
       final maxRows = await txn.rawQuery(
         'SELECT COALESCE(MAX(orden), 0) AS maximo FROM menu_dia_items WHERE menu_dia_id = ?',
         [menuDiaId],
       );
       final orden = ((maxRows.first['maximo'] as num?)?.toInt() ?? 0) + 1;
-      await txn.insert('menu_dia_items', {
+      return txn.insert('menu_dia_items', {
         'menu_dia_id': menuDiaId,
         'producto_id': productoId,
         'disponible': 1,

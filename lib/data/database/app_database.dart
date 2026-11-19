@@ -1679,6 +1679,30 @@ class AppDatabase {
         'familia': 'VOLUMEN',
         'factor_base': 1.0,
       },
+      {
+        'nombre': 'Bolsa',
+        'abreviatura': 'bolsa',
+        'familia': 'OTRO',
+        'factor_base': 1.0,
+      },
+      {
+        'nombre': 'Arroba',
+        'abreviatura': 'arroba',
+        'familia': 'MASA',
+        'factor_base': 11500.0,
+      },
+      {
+        'nombre': 'Paquete',
+        'abreviatura': 'paq',
+        'familia': 'OTRO',
+        'factor_base': 1.0,
+      },
+      {
+        'nombre': 'Caja',
+        'abreviatura': 'caja',
+        'familia': 'OTRO',
+        'factor_base': 1.0,
+      },
     ];
     for (final unit in units) {
       await db.insert(

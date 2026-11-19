@@ -610,6 +610,28 @@ class CatalogRepository {
     return rows.isEmpty ? null : _insumoFromRow(rows.first);
   }
 
+  Future<Insumo?> getInsumoByNombre(String nombre) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT i.*, u.abreviatura AS unidad_abreviatura,
+             u.nombre AS unidad_nombre, u.familia AS unidad_familia,
+             u.factor_base AS unidad_factor,
+             p.categoria_id AS categoria_venta_id,
+             p.imagen AS producto_imagen,
+             COALESCE(s.stock, 0) AS stock
+      FROM insumos i
+      INNER JOIN unidades_medida u ON u.id = i.unidad_id
+      LEFT JOIN productos p ON p.id = i.producto_id
+      LEFT JOIN v_stock_insumos s ON s.insumo_id = i.id
+      WHERE LOWER(TRIM(i.nombre)) = LOWER(?)
+      LIMIT 1
+    ''',
+      [nombre.trim()],
+    );
+    return rows.isEmpty ? null : _insumoFromRow(rows.first);
+  }
+
   Future<int> saveInsumo(Insumo insumo) async {
     final db = await AppDatabase.instance.database;
     final values = <String, Object?>{

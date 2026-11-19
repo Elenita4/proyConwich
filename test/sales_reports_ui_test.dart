@@ -46,6 +46,29 @@ void main() {
     }
   }
 
+  /// Espera a que el menú tenga la cantidad de items indicada, sin depender de
+  /// tiempos fijos: los toques guardan en la base antes de actualizar la vista.
+  Future<void> esperarItems(
+    WidgetTester tester,
+    int menuId,
+    int cantidad,
+  ) async {
+    final menuRepository = MenuRepository();
+    for (var i = 0; i < 40; i++) {
+      final items = await tester.runAsync(
+        () => menuRepository.getItems(menuId),
+      );
+      if ((items ?? const []).length == cantidad) {
+        await tester.pump();
+        return;
+      }
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+  }
+
   Future<(CatalogoPrueba, int)> sembrarCatalogo() async {
     final catalog = CatalogRepository();
     final categoria = (await catalog.getCategorias()).firstWhere(
@@ -230,8 +253,6 @@ void main() {
       ),
     );
     await asentar(tester);
-    await tester.tap(find.text('Editar'));
-    await asentar(tester);
 
     final categoriaPlatos = categorias.firstWhere(
       (item) => item.nombre == 'PLATOS SUELTOS',
@@ -242,43 +263,24 @@ void main() {
     await tester.ensureVisible(checkbox);
     expect(tester.widget<Checkbox>(checkbox).value, isFalse);
     await tester.tap(checkbox);
-    await asentar(tester);
-    // La selección es local hasta pulsar "Listo".
+    // El toque guarda al instante en la base: ya no hay botón "Listo".
+    await esperarItems(tester, menuId, 2);
     expect(tester.widget<Checkbox>(checkbox).value, isTrue);
-    expect(
-      (await tester.runAsync(() => menuRepository.getItems(menuId)))!,
-      isEmpty,
-    );
-
-    await tester.ensureVisible(find.text('Listo'));
-    await tester.pump();
-    await tester.tap(find.text('Listo'));
-    await asentar(tester);
     final items = (await tester.runAsync(
       () => menuRepository.getItems(menuId),
     ))!;
-    expect(items.length, 2);
     expect(items.every((item) => !item.esSopa), isTrue);
     expect(
       find.byKey(ValueKey('seleccionar-categoria-${sopa.id}')),
       findsNothing,
     );
 
-    // Desmarcar la categoría y volver a guardar con "Listo".
-    await tester.tap(find.text('Editar'));
-    await asentar(tester);
+    // Desmarcar la categoría: también se guarda al instante.
     await tester.ensureVisible(checkbox);
-    await tester.tap(checkbox);
-    await asentar(tester);
-    expect(tester.widget<Checkbox>(checkbox).value, isFalse);
-    await tester.ensureVisible(find.text('Listo'));
     await tester.pump();
-    await tester.tap(find.text('Listo'));
-    await asentar(tester);
-    expect(
-      (await tester.runAsync(() => menuRepository.getItems(menuId)))!,
-      isEmpty,
-    );
+    await tester.tap(checkbox);
+    await esperarItems(tester, menuId, 0);
+    expect(tester.widget<Checkbox>(checkbox).value, isFalse);
     expect(tester.takeException(), isNull);
   });
 
