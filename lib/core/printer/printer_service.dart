@@ -465,18 +465,24 @@ class PrinterService {
     b.line(_fila('Cajero', cajero, _ancho));
     b.line(b.separador(_ancho));
     b.line(
-      _fila('Ventas efectivo', formatMoney(resumen.ventasEfectivo), _ancho),
-    );
-    b.line(_fila('Ventas QR', formatMoney(resumen.ventasQr), _ancho));
-    b.line(
       _fila(
-        'Salidas de caja',
-        formatMoney(resumen.salidasEfectivo + resumen.salidasQr),
+        'Ventas efectivo',
+        formatSignedMoney(resumen.ventasEfectivo),
         _ancho,
       ),
     );
     b.line(
-      _fila('Sobrante del turno', formatMoney(sobrante), _ancho),
+      _fila('Ventas QR', formatSignedMoney(resumen.ventasQr), _ancho),
+    );
+    b.line(
+      _fila(
+        'Salidas de caja',
+        '-${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
+        _ancho,
+      ),
+    );
+    b.line(
+      _fila('Sobrante del turno', formatSignedMoney(sobrante), _ancho),
     );
     b.line(b.separador(_ancho));
     b.bold(true);

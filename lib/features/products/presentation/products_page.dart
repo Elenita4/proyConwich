@@ -561,9 +561,11 @@ class _ComboDialogState extends State<_ComboDialog> {
   final _picker = ImagePicker();
   late final TextEditingController _nombre;
   late final TextEditingController _precio;
+  late final TextEditingController _buscarProductos;
   late List<CategoriaProducto> _categorias;
   late int? _categoriaId;
   final _seleccionados = <int>{};
+  String? _categoriaFiltro;
   Uint8List? _imagen;
   bool _saving = false;
   String? _error;
@@ -579,6 +581,7 @@ class _ComboDialogState extends State<_ComboDialog> {
     super.initState();
     _nombre = TextEditingController();
     _precio = TextEditingController();
+    _buscarProductos = TextEditingController();
     _categorias = List.of(widget.categorias);
     final combos = _categorias.where(
       (categoria) => categoria.nombre.trim().toUpperCase() == 'COMBOS',
@@ -592,6 +595,7 @@ class _ComboDialogState extends State<_ComboDialog> {
   void dispose() {
     _nombre.dispose();
     _precio.dispose();
+    _buscarProductos.dispose();
     super.dispose();
   }
 
@@ -667,6 +671,19 @@ class _ComboDialogState extends State<_ComboDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final categoriasProductos = widget.productos
+        .map((producto) => producto.categoriaNombre)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final termino = _buscarProductos.text.trim().toLowerCase();
+    final productosFiltrados = widget.productos.where((producto) {
+      if (_categoriaFiltro != null &&
+          producto.categoriaNombre != _categoriaFiltro) {
+        return false;
+      }
+      return termino.isEmpty || producto.nombre.toLowerCase().contains(termino);
+    }).toList();
     final vistaPrevia = Container(
       height: 130,
       decoration: BoxDecoration(
@@ -799,11 +816,52 @@ class _ComboDialogState extends State<_ComboDialog> {
                   ],
                 ),
                 const SizedBox(height: 6),
+                TextField(
+                  controller: _buscarProductos,
+                  decoration: appInput(
+                    label: 'Buscar producto',
+                    icon: Icons.search,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 8),
+                if (categoriasProductos.isNotEmpty)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Todas'),
+                          selected: _categoriaFiltro == null,
+                          onSelected: (_) =>
+                              setState(() => _categoriaFiltro = null),
+                        ),
+                        for (final categoria in categoriasProductos)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: ChoiceChip(
+                              label: Text(categoria),
+                              selected: _categoriaFiltro == categoria,
+                              onSelected: (_) => setState(
+                                () => _categoriaFiltro = categoria,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 280),
                   child: ListView(
                     shrinkWrap: true,
-                    children: widget.productos
+                    children: productosFiltrados.isEmpty
+                        ? const [
+                            ListTile(
+                              title: Text('No hay productos que coincidan.'),
+                            ),
+                          ]
+                        : productosFiltrados
                         .map(
                           (producto) => CheckboxListTile(
                             dense: true,

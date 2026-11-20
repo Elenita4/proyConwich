@@ -24,6 +24,9 @@ DateTime? parseSqlDateTime(String? value) {
 
 String formatMoney(double value) => 'Bs ${value.toStringAsFixed(2)}';
 
+String formatSignedMoney(double value) =>
+    '${value < 0 ? '-' : '+'}${formatMoney(value.abs())}';
+
 String formatDateShort(DateTime value) =>
     '${_two(value.day)}/${_two(value.month)}/${value.year}';
 

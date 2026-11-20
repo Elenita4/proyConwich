@@ -191,6 +191,14 @@ class _CashPageState extends State<CashPage> {
     CajaResumen resumen,
     double sobrante,
   ) async {
+    final esFaltante = sobrante < 0;
+    final tieneSobrante = sobrante > 0;
+    final valorSobrante = formatSignedMoney(sobrante);
+    final iconoSobrante = esFaltante
+        ? Icons.remove_circle_outline
+        : tieneSobrante
+        ? Icons.add_circle_outline
+        : Icons.horizontal_rule;
     final imprimir = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -209,11 +217,32 @@ class _CashPageState extends State<CashPage> {
             ),
             LabelValue(
               label: 'Salidas de caja',
-              value: formatMoney(
-                resumen.salidasEfectivo + resumen.salidasQr,
-              ),
+              value:
+                  '-${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
             ),
-            LabelValue(label: 'Sobrante del turno', value: formatMoney(sobrante)),
+            Row(
+              children: [
+                Icon(
+                  iconoSobrante,
+                  color: esFaltante || tieneSobrante
+                      ? (esFaltante
+                            ? Theme.of(context).colorScheme.error
+                            : Theme.of(context).colorScheme.primary)
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LabelValue(
+                    label: esFaltante
+                        ? 'Faltante del turno'
+                        : tieneSobrante
+                        ? 'Sobrante del turno'
+                        : 'Diferencia del turno',
+                    value: valorSobrante,
+                  ),
+                ),
+              ],
+            ),
             const Divider(height: 18),
             LabelValue(
               label: 'Total esperado',

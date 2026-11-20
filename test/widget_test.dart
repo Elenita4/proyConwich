@@ -19,6 +19,9 @@ void main() {
     expect(parseAmount(' 8 '), 8);
     expect(parseAmount('1/4'), 0.25);
     expect(formatMoney(12.5), 'Bs 12.50');
+    expect(formatSignedMoney(0), '+Bs 0.00');
+    expect(formatSignedMoney(11), '+Bs 11.00');
+    expect(formatSignedMoney(-11), '-Bs 11.00');
     expect(sqlDate(DateTime(2026, 11, 8)), '2026-11-08');
     expect(sqlDateTime(DateTime(2026, 11, 8, 9, 5, 3)), '2026-11-08 09:05:03');
     expect(parseSqlDate('2026-11-08'), DateTime(2026, 11, 8));

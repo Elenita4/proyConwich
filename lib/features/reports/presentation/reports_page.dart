@@ -78,6 +78,16 @@ class _CajaGrupo {
   final Set<String> cajeros = <String>{};
 }
 
+DataRow _filaTotal(List<String> valores) => DataRow(
+  cells: valores
+      .map(
+        (valor) => DataCell(
+          Text(valor, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ),
+      )
+      .toList(),
+);
+
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key, required this.refreshToken, this.usuario});
 
@@ -667,33 +677,33 @@ class _ReportsPageState extends State<ReportsPage> {
         esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
       ),
       children: [
-        _ventasCard(context, resumen),
-        const SizedBox(height: 16),
-        StatGrid(
-          children: [
-            StatCard(
-              label: 'Cobros en efectivo',
-              value: formatMoney(resumen.cobrosEfectivo),
-              caption: 'Pagos confirmados del período',
-              icon: Icons.payments_outlined,
-              color: scheme.primary,
-            ),
-            StatCard(
-              label: 'Cobros QR',
-              value: formatMoney(resumen.cobrosQr),
-              caption: 'Pagos confirmados del período',
-              icon: Icons.qr_code_2,
-              color: scheme.secondary,
-            ),
-            StatCard(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final ventas = _ventasCard(context, resumen);
+            final salidas = StatCard(
               label: 'Salidas de emergencia',
               value: formatMoney(resumen.salidas),
-              caption:
-                  'Efectivo ${formatMoney(resumen.salidasEfectivo)} · QR ${formatMoney(resumen.salidasQr)}',
               icon: Icons.outbox,
               color: scheme.tertiary,
-            ),
-          ],
+            );
+            if (constraints.maxWidth < 760) {
+              return Column(
+                children: [
+                  ventas,
+                  const SizedBox(height: 12),
+                  salidas,
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 3, child: ventas),
+                const SizedBox(width: 16),
+                Expanded(child: salidas),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 16),
         AppCard(
@@ -770,8 +780,7 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-  /// Tarjeta grande de ventas con los cobros Efectivo / QR bien visibles
-  /// (pensada para el cierre del día).
+  /// Tarjeta de ventas netas con el desglose de cobros por método.
   Widget _ventasCard(BuildContext context, ResumenFinanciero resumen) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
@@ -784,7 +793,7 @@ class _ReportsPageState extends State<ReportsPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'VENTAS',
+                  'VENTAS NETAS',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.2,
@@ -795,9 +804,12 @@ class _ReportsPageState extends State<ReportsPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            formatMoney(resumen.ventas),
+            formatMoney(resumen.ganancia),
             style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w800, color: scheme.primary),
+                ?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: resumen.ganancia >= 0 ? scheme.primary : scheme.error,
+                ),
           ),
           Text(
             '${resumen.pedidos} pedido(s) · ticket promedio ${formatMoney(resumen.ticketPromedio)}',
@@ -895,6 +907,18 @@ class _ReportsPageState extends State<ReportsPage> {
     final total = data.productos.fold<double>(
       0,
       (suma, producto) => suma + producto.ventas,
+    );
+    final cantidadTotal = data.productos.fold<double>(
+      0,
+      (suma, producto) => suma + producto.cantidad,
+    );
+    final costoTotal = data.productos.fold<double>(
+      0,
+      (suma, producto) => suma + producto.costo,
+    );
+    final gananciaTotal = data.productos.fold<double>(
+      0,
+      (suma, producto) => suma + producto.ganancia,
     );
     final slices = _slicesIngresos(data.productos);
     final porCantidad = [...data.productos.where((p) => p.cantidad > 0)]
@@ -1003,30 +1027,38 @@ class _ReportsPageState extends State<ReportsPage> {
                 DataColumn(label: Text('Costo'), numeric: true),
                 DataColumn(label: Text('Ganancia'), numeric: true),
               ],
-              rows: data.productos
-                  .map(
-                    (producto) => DataRow(
-                      cells: [
-                        DataCell(Text(producto.nombre)),
-                        DataCell(Text(formatQty(producto.cantidad))),
-                        DataCell(Text(formatMoney(producto.precioUnitario))),
-                        DataCell(Text(formatMoney(producto.ventas))),
-                        DataCell(Text(formatMoney(producto.costo))),
-                        DataCell(
-                          Text(
-                            formatMoney(producto.ganancia),
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: producto.ganancia >= 0
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Theme.of(context).colorScheme.error,
-                            ),
+              rows: [
+                ...data.productos.map(
+                  (producto) => DataRow(
+                    cells: [
+                      DataCell(Text(producto.nombre)),
+                      DataCell(Text(formatQty(producto.cantidad))),
+                      DataCell(Text(formatMoney(producto.precioUnitario))),
+                      DataCell(Text(formatMoney(producto.ventas))),
+                      DataCell(Text(formatMoney(producto.costo))),
+                      DataCell(
+                        Text(
+                          formatMoney(producto.ganancia),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: producto.ganancia >= 0
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).colorScheme.error,
                           ),
                         ),
-                      ],
-                    ),
-                  )
-                  .toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                _filaTotal([
+                  'TOTAL',
+                  formatQty(cantidadTotal),
+                  '—',
+                  formatMoney(total),
+                  formatMoney(costoTotal),
+                  formatMoney(gananciaTotal),
+                ]),
+              ],
             ),
           ),
         ),
@@ -1055,6 +1087,11 @@ class _ReportsPageState extends State<ReportsPage> {
     if (platos.isEmpty && sopas.isEmpty) return const SizedBox.shrink();
 
     String cantidad(double valor) => valor <= 0 ? '—' : formatQty(valor);
+    DataRow filaTotal(List<ProductoReporte> items) => _filaTotal([
+      'TOTAL',
+      formatQty(items.fold<double>(0, (suma, item) => suma + item.cantidad)),
+      formatMoney(items.fold<double>(0, (suma, item) => suma + item.ventas)),
+    ]);
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1078,17 +1115,18 @@ class _ReportsPageState extends State<ReportsPage> {
                   DataColumn(label: Text('Cantidad'), numeric: true),
                   DataColumn(label: Text('Ventas'), numeric: true),
                 ],
-                rows: platos
-                    .map(
-                      (producto) => DataRow(
-                        cells: [
-                          DataCell(Text(producto.nombre)),
-                          DataCell(Text(cantidad(producto.cantidad))),
-                          DataCell(Text(formatMoney(producto.ventas))),
-                        ],
-                      ),
-                    )
-                    .toList(),
+                rows: [
+                  ...platos.map(
+                    (producto) => DataRow(
+                      cells: [
+                        DataCell(Text(producto.nombre)),
+                        DataCell(Text(cantidad(producto.cantidad))),
+                        DataCell(Text(formatMoney(producto.ventas))),
+                      ],
+                    ),
+                  ),
+                  filaTotal(platos),
+                ],
               ),
             ),
           ],
@@ -1103,17 +1141,18 @@ class _ReportsPageState extends State<ReportsPage> {
                   DataColumn(label: Text('Cantidad'), numeric: true),
                   DataColumn(label: Text('Ventas'), numeric: true),
                 ],
-                rows: sopas
-                    .map(
-                      (producto) => DataRow(
-                        cells: [
-                          DataCell(Text(producto.nombre)),
-                          DataCell(Text(cantidad(producto.cantidad))),
-                          DataCell(Text(formatMoney(producto.ventas))),
-                        ],
-                      ),
-                    )
-                    .toList(),
+                rows: [
+                  ...sopas.map(
+                    (producto) => DataRow(
+                      cells: [
+                        DataCell(Text(producto.nombre)),
+                        DataCell(Text(cantidad(producto.cantidad))),
+                        DataCell(Text(formatMoney(producto.ventas))),
+                      ],
+                    ),
+                  ),
+                  filaTotal(sopas),
+                ],
               ),
             ),
           ],
@@ -1309,6 +1348,27 @@ class _ReportsPageState extends State<ReportsPage> {
       );
     }
     final filas = grupos.values.toList();
+    final totalTurnos = filas.fold<int>(
+      0,
+      (suma, grupo) => suma + grupo.turnos,
+    );
+    final totalEfectivo = filas.fold<double>(
+      0,
+      (suma, grupo) => suma + grupo.efectivo,
+    );
+    final totalQr = filas.fold<double>(0, (suma, grupo) => suma + grupo.qr);
+    final totalSalidas = filas.fold<double>(
+      0,
+      (suma, grupo) => suma + grupo.salidas,
+    );
+    final totalEsperado = filas.fold<double>(
+      0,
+      (suma, grupo) => suma + grupo.esperado,
+    );
+    final totalSobrante = filas.fold<double>(
+      0,
+      (suma, grupo) => suma + grupo.sobrante,
+    );
     return ListView(
       padding: EdgeInsets.all(
         esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
@@ -1362,27 +1422,37 @@ class _ReportsPageState extends State<ReportsPage> {
                     DataColumn(label: Text('Sobrante'), numeric: true),
                     DataColumn(label: Text('Cajero(s)')),
                   ],
-                  rows: filas
-                      .map(
-                        (grupo) => DataRow(
-                          cells: [
-                            DataCell(Text(grupo.etiqueta)),
-                            DataCell(Text('${grupo.turnos}')),
-                            DataCell(Text(formatMoney(grupo.efectivo))),
-                            DataCell(Text(formatMoney(grupo.qr))),
-                            DataCell(Text(formatMoney(grupo.salidas))),
-                            DataCell(Text(formatMoney(grupo.esperado))),
-                            DataCell(Text(formatMoney(grupo.sobrante))),
-                            DataCell(
-                              Text(
-                                grupo.cajeros.join(', '),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                  rows: [
+                    ...filas.map(
+                      (grupo) => DataRow(
+                        cells: [
+                          DataCell(Text(grupo.etiqueta)),
+                          DataCell(Text('${grupo.turnos}')),
+                          DataCell(Text(formatMoney(grupo.efectivo))),
+                          DataCell(Text(formatMoney(grupo.qr))),
+                          DataCell(Text(formatMoney(grupo.salidas))),
+                          DataCell(Text(formatMoney(grupo.esperado))),
+                          DataCell(Text(formatMoney(grupo.sobrante))),
+                          DataCell(
+                            Text(
+                              grupo.cajeros.join(', '),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ],
-                        ),
-                      )
-                      .toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _filaTotal([
+                      'TOTAL',
+                      '$totalTurnos',
+                      formatMoney(totalEfectivo),
+                      formatMoney(totalQr),
+                      formatMoney(totalSalidas),
+                      formatMoney(totalEsperado),
+                      formatMoney(totalSobrante),
+                      '—',
+                    ]),
+                  ],
                 ),
               ),
             ],
@@ -1505,39 +1575,47 @@ class _ReportsPageState extends State<ReportsPage> {
                   DataColumn(label: Text('Monto'), numeric: true),
                   DataColumn(label: Text('Motivo')),
                 ],
-                rows: data.devoluciones
-                    .map(
-                      (devolucion) => DataRow(
-                        cells: [
-                          DataCell(Text('#${devolucion.pedidoId}')),
-                          DataCell(
-                            Text(
-                              formatDateTimeShort(
-                                parseSqlDateTime(devolucion.fecha) ??
-                                    DateTime.now(),
-                              ),
+                rows: [
+                  ...data.devoluciones.map(
+                    (devolucion) => DataRow(
+                      cells: [
+                        DataCell(Text('#${devolucion.pedidoId}')),
+                        DataCell(
+                          Text(
+                            formatDateTimeShort(
+                              parseSqlDateTime(devolucion.fecha) ??
+                                  DateTime.now(),
                             ),
                           ),
-                          DataCell(Text(devolucion.usuarioNombre)),
-                          DataCell(
-                            Text(
-                              devolucion.metodo == 'EFECTIVO'
-                                  ? 'Efectivo'
-                                  : 'QR',
-                            ),
+                        ),
+                        DataCell(Text(devolucion.usuarioNombre)),
+                        DataCell(
+                          Text(
+                            devolucion.metodo == 'EFECTIVO'
+                                ? 'Efectivo'
+                                : 'QR',
                           ),
-                          DataCell(Text(formatMoney(devolucion.monto))),
-                          DataCell(
-                            Text(
-                              (devolucion.motivo ?? '').isEmpty
-                                  ? '—'
-                                  : devolucion.motivo!,
-                            ),
+                        ),
+                        DataCell(Text(formatMoney(devolucion.monto))),
+                        DataCell(
+                          Text(
+                            (devolucion.motivo ?? '').isEmpty
+                                ? '—'
+                                : devolucion.motivo!,
                           ),
-                        ],
-                      ),
-                    )
-                    .toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _filaTotal([
+                    'TOTAL',
+                    '—',
+                    '—',
+                    '—',
+                    formatMoney(total),
+                    '—',
+                  ]),
+                ],
               ),
             ),
           ),
@@ -1601,34 +1679,43 @@ class _ReportsPageState extends State<ReportsPage> {
                   DataColumn(label: Text('Valor'), numeric: true),
                   DataColumn(label: Text('Alerta')),
                 ],
-                rows: data.inventario
-                    .map(
-                      (item) => DataRow(
-                        cells: [
-                          DataCell(Text(item.nombre)),
-                          DataCell(
-                            Text(item.tipo == 'INSUMO' ? 'Insumo' : 'Producto'),
-                          ),
-                          DataCell(Text(formatQty(item.stock))),
-                          DataCell(Text(formatQty(item.stockMinimo))),
-                          DataCell(Text(formatMoney(item.costoUnitario))),
-                          DataCell(Text(formatMoney(item.valor))),
-                          DataCell(
-                            item.alerta
-                                ? Chip(
-                                    label: const Text('Bajo'),
-                                    side: BorderSide.none,
-                                    visualDensity: VisualDensity.compact,
-                                    backgroundColor: Theme.of(context)
-                                        .colorScheme
-                                        .errorContainer,
-                                  )
-                                : const Text('OK'),
-                          ),
-                        ],
-                      ),
-                    )
-                    .toList(),
+                rows: [
+                  ...data.inventario.map(
+                    (item) => DataRow(
+                      cells: [
+                        DataCell(Text(item.nombre)),
+                        DataCell(
+                          Text(item.tipo == 'INSUMO' ? 'Insumo' : 'Producto'),
+                        ),
+                        DataCell(Text(formatQty(item.stock))),
+                        DataCell(Text(formatQty(item.stockMinimo))),
+                        DataCell(Text(formatMoney(item.costoUnitario))),
+                        DataCell(Text(formatMoney(item.valor))),
+                        DataCell(
+                          item.alerta
+                              ? Chip(
+                                  label: const Text('Bajo'),
+                                  side: BorderSide.none,
+                                  visualDensity: VisualDensity.compact,
+                                  backgroundColor: Theme.of(context)
+                                      .colorScheme
+                                      .errorContainer,
+                                )
+                              : const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _filaTotal([
+                    'TOTAL',
+                    '—',
+                    '—',
+                    '—',
+                    '—',
+                    formatMoney(total),
+                    '$alertas alerta(s)',
+                  ]),
+                ],
               ),
             ),
           ),
@@ -1685,34 +1772,44 @@ class _ReportsPageState extends State<ReportsPage> {
                 DataColumn(label: Text('Faltante'), numeric: true),
                 DataColumn(label: Text('Costo'), numeric: true),
               ],
-              rows: data.faltantes
-                  .map(
-                    (item) => DataRow(
-                      cells: [
-                        DataCell(Text(formatDateTimeShort(item.fecha))),
-                        DataCell(Text(item.referencia ?? '—')),
-                        DataCell(Text(item.producto)),
-                        DataCell(Text(item.insumo)),
-                        DataCell(
-                          Text('${formatQty(item.requerido)} ${item.unidad}'),
-                        ),
-                        DataCell(
-                          Text('${formatQty(item.disponible)} ${item.unidad}'),
-                        ),
-                        DataCell(
-                          Text(
-                            '${formatQty(item.faltante)} ${item.unidad}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: scheme.error,
-                            ),
+              rows: [
+                ...data.faltantes.map(
+                  (item) => DataRow(
+                    cells: [
+                      DataCell(Text(formatDateTimeShort(item.fecha))),
+                      DataCell(Text(item.referencia ?? '—')),
+                      DataCell(Text(item.producto)),
+                      DataCell(Text(item.insumo)),
+                      DataCell(
+                        Text('${formatQty(item.requerido)} ${item.unidad}'),
+                      ),
+                      DataCell(
+                        Text('${formatQty(item.disponible)} ${item.unidad}'),
+                      ),
+                      DataCell(
+                        Text(
+                          '${formatQty(item.faltante)} ${item.unidad}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: scheme.error,
                           ),
                         ),
-                        DataCell(Text(formatMoney(item.costoFaltante))),
-                      ],
-                    ),
-                  )
-                  .toList(),
+                      ),
+                      DataCell(Text(formatMoney(item.costoFaltante))),
+                    ],
+                  ),
+                ),
+                _filaTotal([
+                  'TOTAL',
+                  '—',
+                  '—',
+                  '—',
+                  '—',
+                  '—',
+                  '—',
+                  formatMoney(total),
+                ]),
+              ],
             ),
           ),
         ),
@@ -1765,22 +1862,30 @@ class _ReportsPageState extends State<ReportsPage> {
                 DataColumn(label: Text('Costo unitario'), numeric: true),
                 DataColumn(label: Text('Subtotal'), numeric: true),
               ],
-              rows: data.compras
-                  .map(
-                    (compra) => DataRow(
-                      cells: [
-                        DataCell(Text(compra.codigo ?? '—')),
-                        DataCell(Text(formatDateTimeText(compra.fecha))),
-                        DataCell(Text(compra.insumo)),
-                        DataCell(
-                          Text('${formatQty(compra.cantidad)} ${compra.unidad}'),
-                        ),
-                        DataCell(Text(formatMoney(compra.costoUnitario))),
-                        DataCell(Text(formatMoney(compra.subtotal))),
-                      ],
-                    ),
-                  )
-                  .toList(),
+              rows: [
+                ...data.compras.map(
+                  (compra) => DataRow(
+                    cells: [
+                      DataCell(Text(compra.codigo ?? '—')),
+                      DataCell(Text(formatDateTimeText(compra.fecha))),
+                      DataCell(Text(compra.insumo)),
+                      DataCell(
+                        Text('${formatQty(compra.cantidad)} ${compra.unidad}'),
+                      ),
+                      DataCell(Text(formatMoney(compra.costoUnitario))),
+                      DataCell(Text(formatMoney(compra.subtotal))),
+                    ],
+                  ),
+                ),
+                _filaTotal([
+                  'TOTAL',
+                  '—',
+                  '—',
+                  '—',
+                  '—',
+                  formatMoney(total),
+                ]),
+              ],
             ),
           ),
         ),
@@ -1814,6 +1919,18 @@ class _ReportsPageState extends State<ReportsPage> {
         message: 'No hay pedidos registrados para mostrar.',
       );
     }
+    final totalPedidos = data.pedidos.fold<double>(
+      0,
+      (suma, pedido) => suma + pedido.total,
+    );
+    final totalEfectivo = data.pedidos.fold<double>(
+      0,
+      (suma, pedido) => suma + pedido.efectivo,
+    );
+    final totalQr = data.pedidos.fold<double>(
+      0,
+      (suma, pedido) => suma + pedido.qr,
+    );
     return ListView(
       padding: EdgeInsets.all(
         esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
@@ -1835,35 +1952,46 @@ class _ReportsPageState extends State<ReportsPage> {
                 DataColumn(label: Text('Estado')),
                 DataColumn(label: Text('Nota')),
               ],
-              rows: data.pedidos
-                  .map(
-                    (pedido) => DataRow(
-                      cells: [
-                        DataCell(
-                          Text(
-                            pedido.referencia == null
-                                ? '#${pedido.id}'
-                                : '${pedido.referencia} · #${pedido.id}',
-                          ),
+              rows: [
+                ...data.pedidos.map(
+                  (pedido) => DataRow(
+                    cells: [
+                      DataCell(
+                        Text(
+                          pedido.referencia == null
+                              ? '#${pedido.id}'
+                              : '${pedido.referencia} · #${pedido.id}',
                         ),
-                        DataCell(Text(formatDateTimeText(pedido.fecha))),
-                        DataCell(Text(pedido.usuario)),
-                        DataCell(Text(pedido.turnoLabel)),
-                        DataCell(Text(formatMoney(pedido.total))),
-                        DataCell(Text(formatMoney(pedido.efectivo))),
-                        DataCell(Text(formatMoney(pedido.qr))),
-                        DataCell(Text(pedido.estadoPago)),
-                        DataCell(
-                          IconButton(
-                            tooltip: 'Imprimir nota de venta',
-                            onPressed: () => _imprimirPedido(pedido),
-                            icon: const Icon(Icons.print_outlined),
-                          ),
+                      ),
+                      DataCell(Text(formatDateTimeText(pedido.fecha))),
+                      DataCell(Text(pedido.usuario)),
+                      DataCell(Text(pedido.turnoLabel)),
+                      DataCell(Text(formatMoney(pedido.total))),
+                      DataCell(Text(formatMoney(pedido.efectivo))),
+                      DataCell(Text(formatMoney(pedido.qr))),
+                      DataCell(Text(pedido.estadoPago)),
+                      DataCell(
+                        IconButton(
+                          tooltip: 'Imprimir nota de venta',
+                          onPressed: () => _imprimirPedido(pedido),
+                          icon: const Icon(Icons.print_outlined),
                         ),
-                      ],
-                    ),
-                  )
-                  .toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                _filaTotal([
+                  'TOTAL',
+                  '—',
+                  '—',
+                  '—',
+                  formatMoney(totalPedidos),
+                  formatMoney(totalEfectivo),
+                  formatMoney(totalQr),
+                  '—',
+                  '—',
+                ]),
+              ],
             ),
           ),
         ),

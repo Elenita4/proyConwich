@@ -701,12 +701,25 @@ void main() {
         pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 90)],
       ),
     );
+    await tester.runAsync(
+      () => CashRepository().registrarSalida(
+        cajaId: cajaId,
+        usuarioId: admin.id,
+        monto: 15,
+        descripcion: 'Salida de emergencia',
+      ),
+    );
 
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: ReportsPage(refreshToken: 0))),
     );
     await asentar(tester);
     expect(tester.takeException(), isNull);
+    expect(find.text('VENTAS NETAS'), findsOneWidget);
+    expect(find.text('Bs 75.00'), findsOneWidget);
+    expect(find.text('Salidas de emergencia'), findsOneWidget);
+    expect(find.text('Cobros en efectivo'), findsNothing);
+    expect(find.text('Cobros QR'), findsNothing);
 
     await tester.tap(find.text('Productos'));
     await tester.pumpAndSettle();
@@ -714,6 +727,14 @@ void main() {
     expect(find.text('Ingresos por producto'), findsOneWidget);
     expect(find.text('Productos más vendidos'), findsOneWidget);
     expect(find.text('Bebida dos'), findsWidgets);
+    final tablaProductos = tester.widget<DataTable>(
+      find.byType(DataTable).first,
+    );
+    expect((tablaProductos.rows.last.cells.first.child as Text).data, 'TOTAL');
+    expect(
+      (tablaProductos.rows.last.cells[3].child as Text).data,
+      'Bs 90.00',
+    );
     expect(tester.takeException(), isNull);
   });
 }
