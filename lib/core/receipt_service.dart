@@ -8,8 +8,8 @@ import 'cash_repository.dart';
 import 'date_utils.dart';
 import 'sales_repository.dart';
 
-/// Genera la nota de venta en un PDF de 80 mm y la envía al diálogo de
-/// impresión del sistema (útil para impresoras térmicas). Usa una fuente
+/// Genera las dos fichas de la venta en un PDF de 80 mm y las envía al diálogo
+/// de impresión del sistema (útil para impresoras térmicas). Usa una fuente
 /// Unicode (Roboto) embebida para que acentos y ñ se impriman bien.
 class ReceiptService {
   pw.Font? _regular;
@@ -34,87 +34,127 @@ class ReceiptService {
     final regular = _regular!;
     final bold = _bold!;
 
-    final meta = await AppDatabase.instance.leerAppMeta();
-    final negocio = (meta?['nombre_negocio'] as String?) ?? 'Conwich';
     final pedido = detalle.pedido;
     final fecha = parseSqlDateTime(pedido.fecha);
     final fechaTexto = fecha == null
         ? pedido.fecha
-        : formatDateTimeShort(fecha);
+        : formatDateShort(fecha);
+    final horaTexto = fecha == null ? '' : formatTimeShort(fecha);
+    final fechaHora = horaTexto.isEmpty
+        ? 'Fecha: $fechaTexto'
+        : 'Fecha: $fechaTexto   Hora: $horaTexto';
 
     final lineas = detalle.lineas.where((linea) => !linea.esComponente).toList();
+
+    Uint8List? logoBytes;
+    try {
+      logoBytes = (await rootBundle.load(
+        'assets/images/logo_ticket.png',
+      )).buffer.asUint8List();
+    } catch (_) {
+      // El logo es opcional: si falta el asset, el PDF se genera igual.
+    }
 
     final doc = pw.Document();
     final pequeno = pw.TextStyle(font: regular, fontSize: 8);
     final negrita = pw.TextStyle(font: bold, fontSize: 8);
 
-    pw.Widget fila(String etiqueta, String valor, {bool fuerte = false}) =>
-        pw.Padding(
-          padding: const pw.EdgeInsets.only(bottom: 1.5),
-          child: pw.Row(
-            children: [
-              pw.Expanded(
-                child: pw.Text(etiqueta, style: fuerte ? negrita : pequeno),
+    // Ficha 1: copia corta para el cliente.
+    doc.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat(
+          80 * PdfPageFormat.mm,
+          55 * PdfPageFormat.mm,
+          marginAll: 4 * PdfPageFormat.mm,
+        ),
+        theme: pw.ThemeData.withFont(base: regular, bold: bold),
+        build: (context) => pw.Column(
+          mainAxisAlignment: pw.MainAxisAlignment.center,
+          crossAxisAlignment: pw.CrossAxisAlignment.center,
+          children: [
+            if (logoBytes != null) ...[
+              pw.Image(
+                pw.MemoryImage(logoBytes),
+                width: 18 * PdfPageFormat.mm,
               ),
-              pw.Text(valor, style: fuerte ? negrita : pequeno),
+              pw.SizedBox(height: 3),
             ],
-          ),
-        );
-
-    // Alto compacto según la cantidad de líneas (mínimo 100 mm).
-    final altoMm = (90 + lineas.length * 7.0).clamp(100.0, 500.0);
-    final pageFormat = PdfPageFormat(
-      80 * PdfPageFormat.mm,
-      altoMm * PdfPageFormat.mm,
-      marginAll: 4 * PdfPageFormat.mm,
+            pw.Text(
+              'PEDIDO #${pedido.id}',
+              style: pw.TextStyle(
+                font: bold,
+                fontSize: 24,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 3),
+            pw.Text(fechaHora, style: pequeno),
+          ],
+        ),
+      ),
     );
 
+    // Ficha 2: copia del vendedor con el detalle.
+    final altoMm = (80 + lineas.length * 8.0).clamp(100.0, 500.0);
     doc.addPage(
       pw.MultiPage(
-        pageFormat: pageFormat,
+        pageFormat: PdfPageFormat(
+          80 * PdfPageFormat.mm,
+          altoMm * PdfPageFormat.mm,
+          marginAll: 4 * PdfPageFormat.mm,
+        ),
         theme: pw.ThemeData.withFont(base: regular, bold: bold),
         build: (context) => [
+          if (logoBytes != null) ...[
+            pw.Center(
+              child: pw.Image(
+                pw.MemoryImage(logoBytes),
+                width: 18 * PdfPageFormat.mm,
+              ),
+            ),
+            pw.SizedBox(height: 4),
+          ],
           pw.Center(
             child: pw.Text(
-              negocio,
+              'PEDIDO #${pedido.id}',
               style: pw.TextStyle(
                 font: bold,
-                fontSize: 13,
+                fontSize: 16,
                 fontWeight: pw.FontWeight.bold,
               ),
             ),
           ),
-          pw.Center(
-            child: pw.Text(
-              'NOTA DE VENTA',
-              style: pw.TextStyle(
-                font: bold,
-                fontSize: 9,
-                fontWeight: pw.FontWeight.bold,
+          pw.Center(child: pw.Text(fechaHora, style: pequeno)),
+          pw.Divider(),
+          ...lineas.expand(
+            (linea) => [
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: pw.Text(
+                      '${_cantidad(linea.cantidad)} x '
+                      '${linea.modalidadVenta == 'COMPLETO' ? '${linea.nombre} completo' : linea.nombre}',
+                      style: pequeno,
+                    ),
+                  ),
+                  pw.SizedBox(width: 6),
+                  pw.Text(formatMoney(linea.subtotal), style: pequeno),
+                ],
               ),
-            ),
-          ),
-          pw.SizedBox(height: 4),
-          pw.Divider(),
-          fila('Pedido', '#${pedido.id}'),
-          fila('Fecha', fechaTexto),
-          if (turno.isNotEmpty) fila('Turno', turno),
-          fila('Cajero', cajero),
-          if (pedido.referencia != null && pedido.referencia!.isNotEmpty)
-            fila('Referencia', pedido.referencia!),
-          pw.Divider(),
-          ...lineas.map(
-            (linea) => pw.Padding(
-              padding: const pw.EdgeInsets.only(bottom: 2),
-              child: pw.Text(
-                '${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}',
-                style: pequeno,
-              ),
-            ),
+              if (linea.modalidadVenta == 'COMPLETO' &&
+                  (linea.nombreSopa ?? '').isNotEmpty)
+                pw.Padding(
+                  padding: const pw.EdgeInsets.only(left: 8, bottom: 2),
+                  child: pw.Text(
+                    'incluye ${linea.nombreSopa}',
+                    style: pequeno,
+                  ),
+                ),
+            ],
           ),
           pw.Divider(),
-          pw.SizedBox(height: 3),
-          pw.Center(child: pw.Text('Gracias por su compra', style: negrita)),
+          pw.Text('Cajero: $cajero', style: negrita),
         ],
       ),
     );

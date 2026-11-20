@@ -22,6 +22,7 @@ import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -59,7 +60,8 @@ class MainActivity : FlutterActivity() {
     private var blePrintBytes: ByteArray? = null
     private var bleWriteOffset = 0
     private var bleLastChunk = 0
-    private val bleChunkSize = 20
+    private var bleChunkSize = 20
+    private var bleConexionCompletada = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -397,6 +399,8 @@ class MainActivity : FlutterActivity() {
         bleAddress = address
         bleConnectResult = result
         bleFallbackDone = false
+        bleConexionCompletada = false
+        bleChunkSize = 20
         val started = try {
             bluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -503,7 +507,9 @@ class MainActivity : FlutterActivity() {
                     fallbackToSpp()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.w("PrinterBLE", "desconectado status=$status")
                 bleConnected = false
+                bleConexionCompletada = false
                 bleWriteChar = null
                 if (bleConnectResult != null) {
                     fallbackToSpp()
@@ -535,12 +541,37 @@ class MainActivity : FlutterActivity() {
                 return
             }
             bleWriteChar = writeChar
-            bleConnected = true
             // No se habilitan notificaciones: el writeDescriptor dejaría el
             // stack GATT ocupado y la primera escritura fallaría con BUSY.
-            val result = bleConnectResult
-            bleConnectResult = null
-            result?.success(true)
+            // No se cambia la prioridad de conexión: en esta térmica provocaba
+            // desconexiones (status=22) durante la impresión.
+            val pidioMtu = try {
+                gatt.requestMtu(247)
+            } catch (_: Exception) {
+                false
+            }
+            if (!pidioMtu) {
+                finishBleConnection()
+            } else {
+                // Si la impresora no responde al MTU, no bloquear la conexión.
+                Handler(Looper.getMainLooper()).postDelayed({
+                    finishBleConnection()
+                }, 500)
+            }
+        }
+
+        override fun onMtuChanged(
+            gatt: BluetoothGatt,
+            mtu: Int,
+            status: Int,
+        ) {
+            bleChunkSize = if (status == BluetoothGatt.GATT_SUCCESS) {
+                (mtu - 3).coerceIn(20, 96)
+            } else {
+                20
+            }
+            Log.d("PrinterBLE", "MTU=$mtu status=$status chunk=$bleChunkSize")
+            finishBleConnection()
         }
 
         override fun onCharacteristicWrite(
@@ -551,13 +582,26 @@ class MainActivity : FlutterActivity() {
             if (characteristic.uuid != bleWriteUuid) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 bleWriteOffset += bleLastChunk
-                if (bleWriteOffset < (blePrintBytes?.size ?: 0)) {
-                    writeNextChunk()
+                val total = blePrintBytes?.size ?: 0
+                Log.d(
+                    "PrinterBLE",
+                    "write ok offset=$bleWriteOffset/$total chunk=$bleLastChunk",
+                )
+                if (bleWriteOffset < total) {
+                    // Pausa breve para que el UART de la térmica drene el buffer.
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        writeNextChunk()
+                    }, 8)
                 } else {
                     completeBlePrint(true)
                 }
                 return
             }
+            Log.w(
+                "PrinterBLE",
+                "write fail status=$status offset=$bleWriteOffset/" +
+                    "${blePrintBytes?.size ?: 0}",
+            )
             // Si el modo con respuesta falla, reintentar ese chunk sin respuesta.
             val data = blePrintBytes
             if (data != null && bleWriteOffset < data.size) {
@@ -573,6 +617,11 @@ class MainActivity : FlutterActivity() {
                     avanzarSinRespuesta()
                     return
                 }
+                if (bleChunkSize > 20) {
+                    bleChunkSize = 20
+                    writeNextChunk()
+                    return
+                }
                 completeBlePrint(
                     false,
                     "onCharacteristicWrite status=$status; NO_RESPONSE status=$st; " +
@@ -585,6 +634,15 @@ class MainActivity : FlutterActivity() {
                 "onCharacteristicWrite status=$status; offset=$bleWriteOffset",
             )
         }
+    }
+
+    private fun finishBleConnection() {
+        if (bleConexionCompletada || bleWriteChar == null) return
+        bleConexionCompletada = true
+        bleConnected = true
+        val result = bleConnectResult
+        bleConnectResult = null
+        result?.success(true)
     }
 
     private fun writeNextChunk() {
@@ -606,6 +664,10 @@ class MainActivity : FlutterActivity() {
         val fin = minOf(bleWriteOffset + bleChunkSize, data.size)
         val chunk = data.copyOfRange(bleWriteOffset, fin)
         bleLastChunk = chunk.size
+        Log.d(
+            "PrinterBLE",
+            "write offset=$bleWriteOffset/${data.size} chunk=${chunk.size}",
+        )
         // 1) Con respuesta (permite detectar errores).
         val stDefault = try {
             writeChunkStatus(gatt, char, chunk, withResponse = true)
@@ -621,6 +683,11 @@ class MainActivity : FlutterActivity() {
         }
         if (stNoResp == 0) {
             avanzarSinRespuesta()
+        } else if (bleChunkSize > 20) {
+            // Algunas térmicas no aceptan chunks grandes aunque el MTU lo
+            // permita; se vuelve a 20 bytes sin perder el avance.
+            bleChunkSize = 20
+            writeNextChunk()
         } else {
             completeBlePrint(
                 false,
@@ -743,6 +810,8 @@ class MainActivity : FlutterActivity() {
 
     private fun disconnectBle() {
         bleConnected = false
+        bleConexionCompletada = false
+        bleChunkSize = 20
         bleWriteChar = null
         if (blePrintResult != null) {
             completeBlePrint(false, "Desconectado antes de terminar la impresión.")

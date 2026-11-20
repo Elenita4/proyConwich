@@ -190,10 +190,26 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   corte parcial) para que imprima antes de cortar. La comprobación real es el papel, no el
   callback. La configuración (`impresora_mac`/`impresora_nombre`) vive en `app_meta` y se edita
   en la pantalla **"Impresora"** (admin), que permite escanear BLE, probar y guardar.
-- La nota de venta **no lleva precios ni total**: solo `#pedido`, fecha/hora, lista de
-  cantidades + productos y agradecimiento (tanto ESC/POS como PDF). Al cobrar se mantiene el
-  diálogo "¿Imprimir nota de venta?": si hay impresora configurada, imprime por Bluetooth; si no,
-  abre el PDF. Al cerrar caja se ofrece imprimir el **movimiento del turno** por la misma vía.
+- La venta se imprime en **dos fichas** dentro de un solo buffer ESC/POS:
+  `imprimir → cortar → imprimir → cortar`.
+  - **Cliente:** logo, `PEDIDO #` a 3x y una línea `Fecha: … Hora: …`. Sin precios.
+  - **Vendedor:** logo, `PEDIDO #` a 2x, la misma línea de fecha/hora, detalle con
+    cantidad y subtotal por línea, y cajero. Sin total, sin turno y sin "Gracias".
+  El logo (`assets/images/logo_ticket.png`, recortado a 1 bit) usa el **mismo ancho**
+  en ambas fichas (120 px en ESC/POS, 18 mm en PDF) y se envía como raster `GS v 0`.
+  Si no carga, la venta se imprime igual sin logo. El PDF de 80 mm replica las dos
+  fichas en dos páginas.
+- Velocidad BLE: al descubrir servicios se pide **MTU 247** y se usa un chunk de
+  `(mtu − 3)` hasta **96 bytes** con una pausa de ~8 ms entre escrituras (y respaldo a
+  20 si la térmica rechaza el chunk). No se cambia la prioridad de conexión porque en
+  esta impresora provocaba desconexiones `status=22`. La conexión se mantiene abierta
+  después de imprimir para reutilizarla en la siguiente venta. El logo raster se cachea
+  de forma estática y se envía una sola vez por tamaño. Si la impresora se desconecta
+  a mitad de la impresión, la app pregunta **Reintentar / Abrir PDF / Cancelar** en vez
+  de abrir el PDF automáticamente.
+- Al cobrar se mantiene el diálogo "¿Imprimir las fichas del pedido?": si hay impresora
+  configurada, imprime por Bluetooth; si no, abre el PDF. Al cerrar caja se ofrece imprimir
+  el **movimiento del turno** por la misma vía.
 
 ## Convenciones / gotchas
 - **Regla: el sistema nunca depende de que los productos tengan receta.** Un `PREPARADO` sin

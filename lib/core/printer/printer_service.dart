@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -28,7 +30,7 @@ class ImpresoraDispositivo {
   };
 }
 
-/// Impresión de la nota de venta en una térmica de 80 mm por Bluetooth.
+/// Impresión de las fichas de venta en una térmica de 80 mm por Bluetooth.
 ///
 /// Usa un canal nativo de Android (`MainActivity.kt`) que conecta por **BLE
 /// GATT** (Golden Sky GS-FJ80M-UB) o SPP como respaldo, y recibe los bytes
@@ -38,6 +40,10 @@ class PrinterService {
     'com.example.test_code_02/bluetooth_printer',
   );
   static const int _ancho = 48;
+  static const String _logoAsset = 'assets/images/logo_ticket.png';
+
+  /// Raster del logo por ancho. Es estático para reutilizarlo entre ventas.
+  static final Map<int, Uint8List> _logoCache = <int, Uint8List>{};
 
   // Comando exacto verificado en la Golden Sky GS-FJ80M-UB. Se envía en un
   // único buffer para que la impresora procese primero el texto y luego el
@@ -148,23 +154,47 @@ class PrinterService {
     }
   }
 
+  /// Imprime las dos fichas de la venta en un solo envío:
+  /// cliente (pedido + fecha) → corte → vendedor (detalle + cajero) → corte.
   Future<void> imprimirNotaVenta({
     required PedidoDetalle detalle,
     required String turno,
     required String cajero,
     required String mac,
   }) async {
-    final meta = await AppDatabase.instance.leerAppMeta();
-    final negocio = (meta?['nombre_negocio'] as String?) ?? 'Conwich';
-    await _enviar(
-      _construirNota(
-        detalle: detalle,
-        turno: turno,
-        cajero: cajero,
-        negocio: negocio,
-      ),
-      mac,
+    final reloj = Stopwatch()..start();
+    final logo = await _logoRaster(120);
+    final bytes = construirBytesNotaVenta(
+      detalle: detalle,
+      cajero: cajero,
+      logoCliente: logo,
+      logoPedido: logo,
     );
+    await _enviar(bytes, mac, mantenerConexion: true);
+    reloj.stop();
+    debugPrint(
+      'Fichas #${detalle.pedido.id}: ${bytes.length} bytes en '
+      '${reloj.elapsedMilliseconds} ms',
+    );
+  }
+
+  /// Bytes de las dos fichas. Se expone para probar el orden de impresión y
+  /// corte sin depender de la impresora física.
+  @visibleForTesting
+  Uint8List construirBytesNotaVenta({
+    required PedidoDetalle detalle,
+    required String cajero,
+    Uint8List? logoCliente,
+    Uint8List? logoPedido,
+  }) {
+    return Uint8List.fromList([
+      ..._construirFichaCliente(detalle: detalle, logo: logoCliente),
+      ..._construirFichaPedido(
+        detalle: detalle,
+        cajero: cajero,
+        logo: logoPedido,
+      ),
+    ]);
   }
 
   /// Imprime el resumen del cierre de caja con la misma térmica que las notas.
@@ -200,12 +230,16 @@ class PrinterService {
     }
   }
 
-  Future<void> _enviar(Uint8List bytes, String mac) async {
+  Future<void> _enviar(
+    Uint8List bytes,
+    String mac, {
+    bool mantenerConexion = false,
+  }) async {
     await conectar(mac);
     try {
       await enviarBytes(bytes);
     } finally {
-      await desconectar();
+      if (!mantenerConexion) await desconectar();
     }
   }
 
@@ -246,48 +280,161 @@ class PrinterService {
     return error.toString();
   }
 
-  Uint8List _construirNota({
+  /// Ficha corta para el cliente: pedido y fecha/hora.
+  Uint8List _construirFichaCliente({
     required PedidoDetalle detalle,
-    required String turno,
-    required String cajero,
-    required String negocio,
+    Uint8List? logo,
   }) {
     final pedido = detalle.pedido;
     final fecha = parseSqlDateTime(pedido.fecha);
     final fechaTexto = fecha == null
         ? pedido.fecha
-        : formatDateTimeShort(fecha);
+        : formatDateShort(fecha);
+    final horaTexto = fecha == null ? '' : formatTimeShort(fecha);
 
     final b = _Ticket();
     b.init();
+    if (logo != null) {
+      b.alignCenter();
+      b.raster(logo);
+      b.feed(1);
+    }
     b.alignCenter();
-    b.big(true);
-    b.line(_truncar(negocio, 24));
-    b.big(false);
+    b.size(3, 3);
     b.bold(true);
-    b.line('NOTA DE VENTA');
+    b.line('PEDIDO #${pedido.id}');
+    b.size(1, 1);
     b.bold(false);
-    b.alignLeft();
-    b.line(b.separador(_ancho));
-    b.line(_fila('Pedido', '#${pedido.id}', _ancho));
-    b.line(_fila('Fecha', fechaTexto, _ancho));
-    if (turno.isNotEmpty) b.line(_fila('Turno', turno, _ancho));
-    b.line(_fila('Cajero', cajero, _ancho));
-    if ((pedido.referencia ?? '').isNotEmpty) {
-      b.line(_fila('Referencia', pedido.referencia!, _ancho));
-    }
-    b.line(b.separador(_ancho));
-    // La nota que se entrega al cliente no lleva precios: solo la lista.
-    for (final linea in detalle.lineas.where((l) => !l.esComponente)) {
-      b.line('${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}');
-    }
-    b.line(b.separador(_ancho));
-    b.alignCenter();
-    b.line('Gracias por su compra');
-    b.alignLeft();
-    b.feed(2);
+    b.line(
+      horaTexto.isEmpty
+          ? 'Fecha: $fechaTexto'
+          : 'Fecha: $fechaTexto   Hora: $horaTexto',
+    );
+    // El corte ya avanza el papel; no se agrega feed extra para ahorrar.
     b.cut();
     return b.toBytes();
+  }
+
+  /// Ficha del vendedor: pedido, detalle con subtotales y cajero.
+  Uint8List _construirFichaPedido({
+    required PedidoDetalle detalle,
+    required String cajero,
+    Uint8List? logo,
+  }) {
+    final pedido = detalle.pedido;
+    final fecha = parseSqlDateTime(pedido.fecha);
+    final fechaTexto = fecha == null
+        ? pedido.fecha
+        : formatDateShort(fecha);
+    final horaTexto = fecha == null ? '' : formatTimeShort(fecha);
+
+    final b = _Ticket();
+    b.init();
+    if (logo != null) {
+      b.alignCenter();
+      b.raster(logo);
+      b.feed(1);
+    }
+    b.alignCenter();
+    b.size(2, 2);
+    b.bold(true);
+    b.line('PEDIDO #${pedido.id}');
+    b.size(1, 1);
+    b.bold(false);
+    b.line(
+      horaTexto.isEmpty
+          ? 'Fecha: $fechaTexto'
+          : 'Fecha: $fechaTexto   Hora: $horaTexto',
+    );
+    b.alignLeft();
+    b.line(b.separador(_ancho));
+    for (final linea in detalle.lineas.where((l) => !l.esComponente)) {
+      final principal = linea.modalidadVenta == 'COMPLETO'
+          ? '${linea.nombre} completo'
+          : linea.nombre;
+      final izquierda = '${_cantidad(linea.cantidad)} x $principal';
+      final derecha = formatMoney(linea.subtotal);
+      // Si el nombre es muy largo, se imprime en dos líneas para no perderlo.
+      if (izquierda.length + derecha.length + 1 <= _ancho) {
+        b.line(_fila(izquierda, derecha, _ancho));
+      } else {
+        b.line(izquierda);
+        b.line(_fila('', derecha, _ancho));
+      }
+      if (linea.modalidadVenta == 'COMPLETO' &&
+          (linea.nombreSopa ?? '').isNotEmpty) {
+        b.line('   incluye ${linea.nombreSopa}');
+      }
+    }
+    b.line(b.separador(_ancho));
+    b.line('Cajero: $cajero');
+    b.cut();
+    return b.toBytes();
+  }
+
+  /// Carga el logo, lo reduce al ancho indicado y lo convierte a raster
+  /// ESC/POS de 1 bit. Si falla, la venta se imprime sin logo.
+  Future<Uint8List?> _logoRaster(int ancho) async {
+    final cache = _logoCache[ancho];
+    if (cache != null) return cache;
+    try {
+      final data = await rootBundle.load(_logoAsset);
+      final codec = await ui.instantiateImageCodec(
+        data.buffer.asUint8List(),
+        targetWidth: ancho,
+      );
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final width = image.width;
+      final height = image.height;
+      final byteData = await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      image.dispose();
+      if (byteData == null) return null;
+      final raster = _empaquetarRaster(
+        byteData.buffer.asUint8List(
+          byteData.offsetInBytes,
+          byteData.lengthInBytes,
+        ),
+        width,
+        height,
+      );
+      _logoCache[ancho] = raster;
+      return raster;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Uint8List _empaquetarRaster(
+    Uint8List rgba,
+    int width,
+    int height,
+  ) {
+    final bytesPerRow = (width + 7) ~/ 8;
+    final data = Uint8List(bytesPerRow * height);
+    for (var y = 0; y < height; y++) {
+      final fila = y * width * 4;
+      final salida = y * bytesPerRow;
+      for (var x = 0; x < width; x++) {
+        final i = fila + x * 4;
+        if (rgba[i + 3] < 40) continue;
+        final lum =
+            0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+        if (lum < 160) {
+          data[salida + (x >> 3)] |= 0x80 >> (x & 7);
+        }
+      }
+    }
+    final header = <int>[
+      0x1D, 0x76, 0x30, 0x00, // GS v 0
+      bytesPerRow & 0xFF,
+      (bytesPerRow >> 8) & 0xFF,
+      height & 0xFF,
+      (height >> 8) & 0xFF,
+    ];
+    return Uint8List.fromList([...header, ...data]);
   }
 
   String _cantidad(double value) {
@@ -362,6 +509,13 @@ class _Ticket {
   void alignCenter() => _bytes.addAll(const [0x1B, 0x61, 0x01]);
   void bold(bool on) => _bytes.addAll([0x1B, 0x45, on ? 1 : 0]);
   void big(bool on) => _bytes.addAll([0x1D, 0x21, on ? 0x11 : 0x00]);
+  void size(int ancho, int alto) {
+    final w = ancho.clamp(1, 8) - 1;
+    final h = alto.clamp(1, 8) - 1;
+    _bytes.addAll([0x1D, 0x21, (w << 4) | h]);
+  }
+
+  void raster(Uint8List bytes) => _bytes.addAll(bytes);
   void text(String value) => _bytes.addAll(_latin1(value));
   void line(String value) {
     text(value);

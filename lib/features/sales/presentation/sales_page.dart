@@ -448,9 +448,10 @@ class _SalesPageState extends State<SalesPage> {
     final imprimir = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Nota de venta'),
+        title: const Text('Fichas del pedido'),
         content: Text(
-          '¿Deseas imprimir la nota de venta del pedido #${detalle.pedido.id}?',
+          '¿Deseas imprimir las dos fichas del pedido #${detalle.pedido.id}? '
+          'La primera es para el cliente y la segunda para el vendedor.',
         ),
         actions: [
           TextButton(
@@ -469,7 +470,12 @@ class _SalesPageState extends State<SalesPage> {
     final meta = await AppDatabase.instance.leerAppMeta();
     final mac = (meta?['impresora_mac'] as String?) ?? '';
     final printer = PrinterService();
-    if (mac.isNotEmpty && printer.disponible) {
+    if (mac.isEmpty || !printer.disponible) {
+      await _abrirPdf(detalle, caja);
+      return;
+    }
+    while (true) {
+      _mostrarEnviandoImpresora();
       try {
         await printer.imprimirNotaVenta(
           detalle: detalle,
@@ -477,16 +483,22 @@ class _SalesPageState extends State<SalesPage> {
           cajero: widget.usuario.nombre,
           mac: mac,
         );
+        _cerrarProgreso();
         return;
       } catch (error) {
+        _cerrarProgreso();
         if (!mounted) return;
-        showAppMessage(
-          context,
-          'No se pudo imprimir por Bluetooth: $error. Se abrirá el PDF.',
-          error: true,
-        );
+        final accion = await _preguntarFalloImpresora('$error');
+        if (accion == 'retry') continue;
+        if (accion == 'pdf') {
+          await _abrirPdf(detalle, caja);
+        }
+        return;
       }
     }
+  }
+
+  Future<void> _abrirPdf(PedidoDetalle detalle, Caja caja) async {
     try {
       await ReceiptService().imprimirNotaVenta(
         detalle: detalle,
@@ -501,6 +513,62 @@ class _SalesPageState extends State<SalesPage> {
         error: true,
       );
     }
+  }
+
+  Future<String?> _preguntarFalloImpresora(String error) {
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('No se pudo terminar la impresión'),
+        content: Text(
+          'La primera ficha pudo haber salido. Verifica el papel antes de '
+          'reintentar para no duplicarla.\n\nDetalle: $error',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'pdf'),
+            child: const Text('Abrir PDF'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, 'retry'),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarEnviandoImpresora() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('Enviando a la impresora…')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _cerrarProgreso() {
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
   }
 
   /// Marca o rehabilita un producto. El cambio se guarda en `productos` y,
