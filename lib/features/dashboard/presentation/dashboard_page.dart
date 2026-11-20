@@ -14,6 +14,9 @@ class DashboardPage extends StatefulWidget {
     required this.usuario,
     required this.refreshToken,
     this.onEmpezarDia,
+    this.onIrAReportes,
+    this.onIrACaja,
+    this.onIrAMenu,
   });
 
   final Usuario usuario;
@@ -21,6 +24,11 @@ class DashboardPage extends StatefulWidget {
 
   /// Flujo de inicio del día: lleva a la pantalla de Menú.
   final VoidCallback? onEmpezarDia;
+
+  /// Accesos rápidos del tablero.
+  final VoidCallback? onIrAReportes;
+  final VoidCallback? onIrACaja;
+  final VoidCallback? onIrAMenu;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -34,6 +42,7 @@ class _DashboardData {
     required this.alertas,
     required this.menu,
     required this.itemsMenu,
+    required this.devoluciones,
   });
 
   final ResumenFinanciero resumen;
@@ -42,6 +51,7 @@ class _DashboardData {
   final List<InventarioReporte> alertas;
   final MenuDia? menu;
   final int itemsMenu;
+  final DevolucionesResumen devoluciones;
 }
 
 class _DashboardPageState extends State<DashboardPage> {
@@ -79,6 +89,10 @@ class _DashboardPageState extends State<DashboardPage> {
     final caja = await _cashRepository.getCajaAbierta();
     final abiertos = await _salesRepository.getPedidosAbiertos();
     final alertas = await _reportRepository.getAlertasStock();
+    final devoluciones = await _reportRepository.getDevolucionesResumen(
+      today,
+      today.add(const Duration(days: 1)),
+    );
     final menu = await _menuRepository.getMenu(today, MenuRepository.tipoMenu);
     final items = menu == null
         ? 0
@@ -90,6 +104,7 @@ class _DashboardPageState extends State<DashboardPage> {
       alertas: alertas,
       menu: menu,
       itemsMenu: items,
+      devoluciones: devoluciones,
     );
   }
 
@@ -247,17 +262,24 @@ class _DashboardPageState extends State<DashboardPage> {
           StatGrid(
             children: [
               StatCard(
-                label: 'Ventas del día',
+                label: 'Ingresos del día',
                 value: formatMoney(data.resumen.ventas),
                 caption:
                     'Efectivo ${formatMoney(data.resumen.cobrosEfectivo)} · QR ${formatMoney(data.resumen.cobrosQr)}',
                 icon: Icons.trending_up,
               ),
               StatCard(
-                label: 'Gasto en insumos',
-                value: formatMoney(data.resumen.gastoInsumos),
-                caption: 'Lo que entró de insumos al stock',
-                icon: Icons.shopping_basket_outlined,
+                label: 'Cobros en efectivo',
+                value: formatMoney(data.resumen.cobrosEfectivo),
+                caption: 'Pagos confirmados del día',
+                icon: Icons.payments_outlined,
+                color: scheme.primary,
+              ),
+              StatCard(
+                label: 'Cobros QR',
+                value: formatMoney(data.resumen.cobrosQr),
+                caption: 'Pagos confirmados del día',
+                icon: Icons.qr_code_2,
                 color: scheme.secondary,
               ),
               StatCard(
@@ -268,11 +290,13 @@ class _DashboardPageState extends State<DashboardPage> {
                 color: scheme.tertiary,
               ),
               StatCard(
-                label: 'Ganancia',
-                value: formatMoney(data.resumen.ganancia),
-                caption: 'Ventas − gasto en insumos − salidas',
-                icon: Icons.insights,
-                color: data.resumen.ganancia >= 0 ? scheme.primary : scheme.error,
+                label: 'Devoluciones en efectivo',
+                value: formatMoney(data.devoluciones.efectivo),
+                caption:
+                    '${data.devoluciones.cantidad} venta(s) anulada(s) · '
+                    'Total ${formatMoney(data.devoluciones.total)}',
+                icon: Icons.assignment_return_outlined,
+                color: scheme.error,
               ),
             ],
           )
@@ -302,41 +326,62 @@ class _DashboardPageState extends State<DashboardPage> {
             ],
           ),
         const SizedBox(height: 20),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final horizontal = constraints.maxWidth >= 980;
-            final caja = _cajaCard(context, data.caja);
-            final alertas = _alertasCard(context, data.alertas);
-            final menu = _menuCard(context, data.menu, data.itemsMenu);
-            if (horizontal) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: caja),
-                  const SizedBox(width: 16),
-                  Expanded(child: menu),
-                  const SizedBox(width: 16),
-                  Expanded(child: alertas),
-                ],
-              );
-            }
-            return Column(
-              children: [
-                caja,
-                const SizedBox(height: 12),
-                menu,
-                const SizedBox(height: 12),
-                alertas,
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 20),
-        if (puedeReportes) _resumenDetallado(context, data.resumen),
+        _accesosRapidos(context, puedeReportes),
       ],
     );
   }
 
+  Widget _accesosRapidos(BuildContext context, bool puedeReportes) {
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Accesos rápidos',
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              if (puedeReportes)
+                FilledButton.icon(
+                  onPressed: widget.onIrAReportes,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppActionColors.info,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.bar_chart_outlined),
+                  label: const Text('Reportes'),
+                ),
+              FilledButton.icon(
+                onPressed: widget.onIrACaja,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppActionColors.success,
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.account_balance_wallet_outlined),
+                label: const Text('Caja'),
+              ),
+              FilledButton.icon(
+                onPressed: widget.onIrAMenu,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppActionColors.warning,
+                  foregroundColor: Colors.black87,
+                ),
+                icon: const Icon(Icons.restaurant_menu),
+                label: const Text('Menú del día'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ignore: unused_element
   Widget _cajaCard(BuildContext context, Caja? caja) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
@@ -388,6 +433,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _menuCard(BuildContext context, MenuDia? menu, int items) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
@@ -430,6 +476,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _alertasCard(BuildContext context, List<InventarioReporte> alertas) {
     final scheme = Theme.of(context).colorScheme;
     return AppCard(
@@ -495,8 +542,8 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _resumenDetallado(BuildContext context, ResumenFinanciero resumen) {
-    final scheme = Theme.of(context).colorScheme;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -517,8 +564,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   strong: true,
                 ),
                 LabelValue(
-                  label: 'Gasto en insumos',
-                  value: formatMoney(resumen.gastoInsumos),
+                  label: 'Cobros en efectivo',
+                  value: formatMoney(resumen.cobrosEfectivo),
+                ),
+                LabelValue(
+                  label: 'Cobros QR',
+                  value: formatMoney(resumen.cobrosQr),
                 ),
                 LabelValue(
                   label: 'Salidas de emergencia',
@@ -545,24 +596,6 @@ class _DashboardPageState extends State<DashboardPage> {
                 ],
               );
             },
-          ),
-          const Divider(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Ganancia (ventas − gasto en insumos − salidas)',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
-              ),
-              Text(
-                formatMoney(resumen.ganancia),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: resumen.ganancia >= 0 ? scheme.primary : scheme.error,
-                ),
-              ),
-            ],
           ),
         ],
       ),

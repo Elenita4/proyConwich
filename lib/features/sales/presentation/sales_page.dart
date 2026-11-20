@@ -29,6 +29,8 @@ class _SaleProduct {
     this.advertencia,
     required this.stock,
     required this.enMenu,
+    this.activo = true,
+    this.agotado = false,
     this.costoUnitario = 0,
     this.imagen,
     this.presentaciones = const [],
@@ -48,6 +50,8 @@ class _SaleProduct {
   final double stock;
   final double costoUnitario;
   final bool enMenu;
+  final bool activo;
+  final bool agotado;
   final Uint8List? imagen;
 
   /// Presentaciones/variantes del producto (por ejemplo, tamaños de refresco).
@@ -63,10 +67,17 @@ class _SaleProduct {
       : '$categoriaPadreNombre · $categoriaNombre';
 
   /// Solo lo que está en el menú habilitado se puede vender.
-  bool get vendible => enMenu && disponible && (!esDirecto || stock > 0);
+  bool get vendible =>
+      activo &&
+      enMenu &&
+      disponible &&
+      !agotado &&
+      (!esDirecto || stock > 0);
 
   String get razon {
+    if (!activo) return 'Producto inactivo';
     if (!enMenu) return 'Fuera del menú de hoy';
+    if (agotado) return 'Agotado';
     if (!disponible) return motivo ?? 'Agotado';
     if (esDirecto && stock <= 0) return 'Sin stock';
     return '';
@@ -78,6 +89,7 @@ class _SalesData {
     required this.caja,
     required this.menu,
     required this.productos,
+    required this.pedidos,
     required this.sopaDelDia,
     required this.precioAlmuerzo,
   });
@@ -85,6 +97,7 @@ class _SalesData {
   final Caja? caja;
   final MenuDia? menu;
   final List<_SaleProduct> productos;
+  final List<Pedido> pedidos;
   final _SaleProduct? sopaDelDia;
 
   /// Precio fijo del almuerzo completo del día, si se definió en el menú.
@@ -165,6 +178,7 @@ class _SalesPageState extends State<SalesPage> {
     final presentaciones = await _catalogRepository.getPresentaciones();
     for (final item in menuItems) {
       final producto = productoPorId[item.productoId];
+      if (producto == null || !producto.activo) continue;
       final advertencia = await _catalogRepository.advertenciaInsumos(
         item.productoId,
         1,
@@ -176,16 +190,18 @@ class _SalesPageState extends State<SalesPage> {
         nombre: item.nombre,
         precio: item.precio,
         categoriaNombre: item.categoriaNombre,
-        categoriaPadreNombre: producto?.categoriaParentNombre,
+        categoriaPadreNombre: producto.categoriaParentNombre,
         categoriaColor: item.categoriaColor,
         tipo: item.tipoProducto,
         disponible: item.disponible,
         motivo: item.motivoAgotado,
         advertencia: advertencia,
-        stock: producto?.stock ?? 0,
+        stock: producto.stock,
         enMenu: true,
-        costoUnitario: producto?.costoUnitario ?? 0,
-        imagen: producto?.imagen,
+        activo: producto.activo,
+        agotado: producto.agotado,
+        costoUnitario: producto.costoUnitario,
+        imagen: producto.imagen,
         presentaciones: presentaciones[item.productoId] ?? const [],
       );
     }
@@ -229,6 +245,8 @@ class _SalesPageState extends State<SalesPage> {
         advertencia: advertencia,
         stock: producto.stock,
         enMenu: siempre,
+        activo: producto.activo,
+        agotado: producto.agotado,
         costoUnitario: producto.costoUnitario,
         imagen: producto.imagen,
         presentaciones: presentaciones[producto.id!] ?? const [],
@@ -237,10 +255,12 @@ class _SalesPageState extends State<SalesPage> {
     final sopas = productos.values
         .where((producto) => producto.esSopa)
         .toList();
+    final pedidos = await _salesRepository.getPedidosDelDia(now);
     return _SalesData(
       caja: caja,
       menu: menu,
       productos: productos.values.toList(),
+      pedidos: pedidos,
       sopaDelDia: sopas.isEmpty ? null : sopas.first,
       precioAlmuerzo: menu?.precioAlmuerzo,
     );
@@ -483,22 +503,128 @@ class _SalesPageState extends State<SalesPage> {
     }
   }
 
-  Future<void> _agotar(_SaleProduct producto) async {
+  /// Marca o rehabilita un producto. El cambio se guarda en `productos` y,
+  /// si está en el menú de hoy, también en `menu_dia_items`; Ventas y Menú
+  /// leen esos dos lugares.
+  Future<void> _cambiarAgotado(_SaleProduct producto, bool agotado) async {
+    if (agotado) {
+      final confirmado = await confirmAction(
+        context,
+        title: 'Marcar como agotado',
+        message:
+            '${producto.nombre} dejará de mostrarse para la venta de hoy. '
+            'Podrás rehabilitarlo desde el Menú del día.',
+        confirmLabel: 'Marcar agotado',
+        destructive: true,
+      );
+      if (!confirmado) return;
+    }
+    await _catalogRepository.setProductoAgotado(
+      producto.productoId,
+      agotado,
+    );
     final menuItemId = producto.menuDiaItemId;
-    if (menuItemId == null) return;
+    if (menuItemId != null) {
+      await _menuRepository.setDisponible(
+        menuItemId,
+        !agotado,
+        motivo: agotado ? 'Agotado' : null,
+      );
+    }
+    if (!mounted) return;
+    setState(_reload);
+    showAppMessage(
+      context,
+      agotado
+          ? '${producto.nombre} marcado como agotado.'
+          : '${producto.nombre} habilitado de nuevo.',
+    );
+  }
+
+  Widget _historialVentas(BuildContext context, _SalesData data) {
+    final scheme = Theme.of(context).colorScheme;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.receipt_long_outlined, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Ventas del día',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${data.pedidos.length} pedido(s)',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (data.pedidos.isEmpty)
+            const EmptyState(
+              icon: Icons.receipt_long_outlined,
+              title: 'Aún no hay ventas',
+              message: 'Las ventas de hoy aparecerán aquí.',
+            )
+          else
+            ...data.pedidos.map(
+              (pedido) => _VentaTile(
+                key: ValueKey(
+                  '${pedido.id}-${pedido.estadoPago}-${pedido.total}',
+                ),
+                pedido: pedido,
+                puedeAnular:
+                    widget.usuario.puede(Permiso.ventas) && !pedido.anulado,
+                onAnular: () => _anularVenta(pedido),
+                cargarDetalle: () =>
+                    _salesRepository.getPedido(pedido.id),
+                cargarDevoluciones: () =>
+                    _salesRepository.getDevolucionesPedido(pedido.id),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _anularVenta(Pedido pedido) async {
     final confirmado = await confirmAction(
       context,
-      title: 'Reportar agotamiento',
+      title: 'Anular venta',
       message:
-          '${producto.nombre} dejará de estar disponible para la venta de hoy.',
-      confirmLabel: 'Marcar agotado',
+          'Se anulará el pedido #${pedido.id} por ${formatMoney(pedido.total)}. '
+          'La venta y su anulación quedarán registradas en el historial, y el '
+          'monto se descontará de la caja del turno.',
+      confirmLabel: 'Anular venta',
       destructive: true,
     );
     if (!confirmado) return;
-    await _menuRepository.setDisponible(menuItemId, false, motivo: 'Agotado');
-    if (!mounted) return;
-    setState(_reload);
-    showAppMessage(context, '${producto.nombre} marcado como agotado.');
+    setState(() => _saving = true);
+    try {
+      await _salesRepository.anularPedido(
+        pedido.id,
+        usuarioId: widget.usuario.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _reload();
+      });
+      showAppMessage(context, 'Venta #${pedido.id} anulada.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showAppMessage(context, 'No se pudo anular la venta: $error', error: true);
+    }
   }
 
   @override
@@ -560,26 +686,43 @@ class _SalesPageState extends State<SalesPage> {
                 const SizedBox(height: 14),
                 LayoutBuilder(
                   builder: (context, constraints) {
-                    // En tablet/escritorio el pedido queda fijo a la derecha;
+                    // En tablet/escritorio el pedido queda fijo a la izquierda;
                     // solo en teléfono se acomoda abajo.
                     final horizontal = !esAngosto(
                       MediaQuery.sizeOf(context).width,
                       limite: 860,
                     );
-                    final catalogo = _catalogo(context, data);
+                    final catalogo = Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _catalogo(context, data),
+                        const SizedBox(height: 16),
+                        _historialVentas(context, data),
+                      ],
+                    );
                     final carrito = _carrito(context, data);
                     if (horizontal) {
+                      final pedidoWidth = (constraints.maxWidth * 0.30).clamp(
+                        320.0,
+                        420.0,
+                      );
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(child: catalogo),
+                          SizedBox(width: pedidoWidth, child: carrito),
                           const SizedBox(width: 16),
-                          SizedBox(width: 390, child: carrito),
+                          Expanded(child: catalogo),
                         ],
                       );
                     }
                     return Column(
-                      children: [catalogo, const SizedBox(height: 16), carrito],
+                      children: [
+                        _catalogo(context, data),
+                        const SizedBox(height: 16),
+                        carrito,
+                        const SizedBox(height: 16),
+                        _historialVentas(context, data),
+                      ],
                     );
                   },
                 ),
@@ -678,15 +821,27 @@ class _SalesPageState extends State<SalesPage> {
       );
     }
 
-    final enMenu = filtrados.where((producto) => producto.enMenu).toList();
-    final fueraMenu = filtrados.where((producto) => !producto.enMenu).toList();
+    final vendibles = filtrados
+        .where((producto) => producto.vendible)
+        .toList();
+    final noDisponibles = filtrados
+        .where((producto) => !producto.vendible)
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (enMenu.isNotEmpty) _gridProductos(context, data, enMenu),
-        if (fueraMenu.isNotEmpty) ...[
-          if (enMenu.isNotEmpty) const SizedBox(height: 16),
-          _fueraDelMenu(context, data, fueraMenu),
+        if (vendibles.isNotEmpty)
+          _gridProductos(context, data, vendibles)
+        else
+          const EmptyState(
+            icon: Icons.no_food_outlined,
+            title: 'No hay productos disponibles',
+            message:
+                'Revisa el menú del día o rehabilita un producto agotado.',
+          ),
+        if (noDisponibles.isNotEmpty) ...[
+          if (vendibles.isNotEmpty) const SizedBox(height: 16),
+          _fueraDelMenu(context, data, noDisponibles),
         ],
       ],
     );
@@ -699,9 +854,9 @@ class _SalesPageState extends State<SalesPage> {
   ) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 900
+        final columns = constraints.maxWidth >= 620
             ? 3
-            : constraints.maxWidth >= 560
+            : constraints.maxWidth >= 380
             ? 2
             : 1;
         final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
@@ -794,14 +949,24 @@ class _SalesPageState extends State<SalesPage> {
                     : null,
                 pie: pie,
                 advertencia: producto.vendible ? producto.advertencia : null,
+                agotado:
+                    producto.agotado ||
+                    (producto.enMenu && !producto.disponible),
                 accion:
-                    producto.menuDiaItemId != null &&
+                    producto.enMenu &&
                         widget.usuario.puede(Permiso.agotamiento)
-                    ? IconButton(
-                        tooltip: 'Reportar agotado',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => _agotar(producto),
-                        icon: const Icon(Icons.block, size: 18),
+                    ? Tooltip(
+                        message: producto.agotado || !producto.disponible
+                            ? 'Rehabilitar producto'
+                            : 'Marcar como agotado',
+                        child: Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: !producto.agotado && producto.disponible,
+                            onChanged: (value) =>
+                                _cambiarAgotado(producto, !value),
+                          ),
+                        ),
                       )
                     : null,
               ),
@@ -834,11 +999,11 @@ class _SalesPageState extends State<SalesPage> {
               color: scheme.onSurfaceVariant,
             ),
             title: const Text(
-              'Productos fuera del menú de hoy',
+              'Productos agotados o fuera del menú',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             subtitle: Text(
-              '${productos.length} producto(s) no seleccionado(s). No se pueden vender.',
+              '${productos.length} producto(s) no disponible(s) para vender hoy.',
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
             trailing: Icon(
@@ -1294,6 +1459,335 @@ class _PresentacionPicker extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _VentaDetalle {
+  const _VentaDetalle({required this.detalle, required this.devoluciones});
+
+  final PedidoDetalle detalle;
+  final List<Devolucion> devoluciones;
+}
+
+/// Fila del historial de ventas del día. El encabezado muestra el pedido y el
+/// botón ANULAR; al desplegarlo se cargan las líneas, los pagos y la
+/// devolución registrada.
+class _VentaTile extends StatefulWidget {
+  const _VentaTile({
+    super.key,
+    required this.pedido,
+    required this.puedeAnular,
+    required this.onAnular,
+    required this.cargarDetalle,
+    required this.cargarDevoluciones,
+  });
+
+  final Pedido pedido;
+  final bool puedeAnular;
+  final VoidCallback onAnular;
+  final Future<PedidoDetalle> Function() cargarDetalle;
+  final Future<List<Devolucion>> Function() cargarDevoluciones;
+
+  @override
+  State<_VentaTile> createState() => _VentaTileState();
+}
+
+class _VentaTileState extends State<_VentaTile> {
+  bool _abierto = false;
+  Future<_VentaDetalle>? _futuro;
+
+  void _toggle() {
+    setState(() {
+      _abierto = !_abierto;
+      if (_abierto) _futuro ??= _cargar();
+    });
+  }
+
+  Future<_VentaDetalle> _cargar() async {
+    final detalle = await widget.cargarDetalle();
+    final devoluciones = await widget.cargarDevoluciones();
+    return _VentaDetalle(detalle: detalle, devoluciones: devoluciones);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final anulada = widget.pedido.anulado;
+    final fecha = parseSqlDateTime(widget.pedido.fecha);
+    final hora = fecha == null
+        ? widget.pedido.fecha
+        : formatTimeShort(fecha);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: anulada ? scheme.errorContainer.withValues(alpha: 0.18) : null,
+        border: Border.all(
+          color: anulada
+              ? scheme.error.withValues(alpha: 0.5)
+              : scheme.outlineVariant.withValues(alpha: 0.7),
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: _toggle,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.receipt_long_outlined,
+                    size: 20,
+                    color: anulada ? scheme.error : scheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              '#${widget.pedido.id}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            if (anulada) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: scheme.error,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  'ANULADA',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: scheme.onError,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '$hora · ${widget.pedido.usuarioNombre}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        formatMoney(widget.pedido.total),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      if (widget.puedeAnular)
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: scheme.error,
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            minimumSize: const Size(0, 28),
+                          ),
+                          onPressed: widget.onAnular,
+                          child: const Text('ANULAR'),
+                        )
+                      else
+                        Text(
+                          anulada ? 'Anulada' : 'Pagada',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                    ],
+                  ),
+                  Icon(_abierto ? Icons.expand_less : Icons.expand_more),
+                ],
+              ),
+            ),
+          ),
+          if (_abierto) _detalle(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _detalle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FutureBuilder<_VentaDetalle>(
+      future: _futuro,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(12),
+            child: LinearProgressIndicator(),
+          );
+        }
+        if (snapshot.hasError) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Text(
+              'No se pudo cargar el detalle: ${snapshot.error}',
+              style: TextStyle(color: scheme.error),
+            ),
+          );
+        }
+        final data = snapshot.data;
+        if (data == null) return const SizedBox.shrink();
+        final lineas = data.detalle.lineas
+            .where((linea) => !linea.esComponente)
+            .toList();
+        final motivo = data.devoluciones
+            .map((devolucion) => devolucion.motivo ?? '')
+            .firstWhere((texto) => texto.isNotEmpty, orElse: () => '');
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              ...lineas.map(
+                (linea) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${formatQty(linea.cantidad)} x ${linea.nombre}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (linea.modalidadVenta == 'COMPLETO' &&
+                                linea.nombreSopa != null)
+                              Text(
+                                'Incluye ${linea.nombreSopa}',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Text(formatMoney(linea.subtotal)),
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 16),
+              Row(
+                children: [
+                  const Text(
+                    'Total',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const Spacer(),
+                  Text(
+                    formatMoney(data.detalle.pedido.total),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Pagos',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              ...data.detalle.pagos.map(
+                (pago) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Text(
+                        pago.metodo == 'EFECTIVO' ? 'Efectivo' : 'QR',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const Spacer(),
+                      Text(
+                        formatMoney(pago.monto),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        pago.estado == 'ANULADO' ? 'Anulado' : 'Confirmado',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: pago.estado == 'ANULADO'
+                              ? scheme.error
+                              : scheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (data.devoluciones.isNotEmpty) ...[
+                const Divider(height: 16),
+                Text(
+                  'Devolución registrada',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.error,
+                  ),
+                ),
+                ...data.devoluciones.map(
+                  (devolucion) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        Text(
+                          '${devolucion.metodo == 'EFECTIVO' ? 'Efectivo' : 'QR'}'
+                          '${(devolucion.usuarioNombre ?? '').isEmpty ? '' : ' · ${devolucion.usuarioNombre}'}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const Spacer(),
+                        Text(
+                          formatMoney(devolucion.monto),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.error),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (motivo.isNotEmpty)
+                  Text(
+                    'Motivo: $motivo',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

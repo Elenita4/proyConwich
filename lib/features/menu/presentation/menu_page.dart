@@ -63,6 +63,7 @@ class _MenuPageState extends State<MenuPage> {
   late Future<_MenuData> _future;
   String _search = '';
   int? _categoriaId;
+  bool _mostrarDeshabilitados = false;
 
   bool get _esAdmin => widget.usuario.puede(Permiso.menu);
 
@@ -118,7 +119,7 @@ class _MenuPageState extends State<MenuPage> {
     final hayCombosLegacy = menu != null
         ? await _repository.tieneCombosLegacy(menu.id)
         : false;
-    final productos = await _catalog.getProductos(soloActivos: true);
+    final productos = await _catalog.getProductos();
     final categorias = await _catalog.getCategorias();
     final caja = await _cash.getCajaAbierta();
     return _MenuData(
@@ -248,25 +249,6 @@ class _MenuPageState extends State<MenuPage> {
         await _repository.crearMenu(_fecha, _tipo, widget.usuario.id);
   }
 
-  Future<void> _crearMenu() async {
-    try {
-      final previos = await _repository.getProductosMenuAnterior(_fecha, _tipo);
-      await _crearConAnterior();
-      if (!mounted) return;
-      setState(_reload);
-      showAppMessage(
-        context,
-        previos.isEmpty
-            ? 'Menú creado vacío. Elige la sopa y los platos del día.'
-            : 'Menú creado con ${previos.length} producto(s) del día anterior. '
-                  'Ajusta lo que haga falta o usa "Limpiar".',
-      );
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, 'No se pudo crear el menú: $error', error: true);
-    }
-  }
-
   Future<void> _limpiar(_MenuData data) async {
     final menu = data.menu;
     if (menu == null) return;
@@ -358,6 +340,7 @@ class _MenuPageState extends State<MenuPage> {
         disponible,
         motivo: disponible ? null : 'Agotado',
       );
+      await _catalog.setProductoAgotado(item.productoId, !disponible);
       if (!mounted) return;
       setState(() {
         final index = data.items.indexWhere((otro) => otro.id == item.id);
@@ -385,23 +368,6 @@ class _MenuPageState extends State<MenuPage> {
       );
       setState(_reload);
     }
-  }
-
-  Future<void> _habilitar(_MenuData data) async {
-    final menu = data.menu;
-    if (menu == null) return;
-    if (data.items.isEmpty) {
-      showAppMessage(
-        context,
-        'Agrega al menos una sopa o un plato antes de publicar.',
-        error: true,
-      );
-      return;
-    }
-    await _repository.habilitar(menu.id);
-    if (!mounted) return;
-    setState(_reload);
-    showAppMessage(context, 'Menú abierto. Ya se puede vender.');
   }
 
   Future<void> _elegirFecha() async {
@@ -599,6 +565,7 @@ class _MenuPageState extends State<MenuPage> {
         data.productos
             .where(
               (producto) =>
+                  producto.activo &&
                   !producto.esCompuesto &&
                   MenuRepository.esCategoriaSopa(producto.categoriaNombre),
             )
@@ -668,27 +635,25 @@ class _MenuPageState extends State<MenuPage> {
               style: TextStyle(color: scheme.onSurfaceVariant),
             )
           else
-            DropdownButtonFormField<int>(
-              key: ValueKey('sopa-del-dia-$_fecha-$valorActual'),
-              initialValue: valorActual,
-              isExpanded: true,
-              decoration: appInput(label: 'Elige una sopa (opcional)'),
-              items: [
-                const DropdownMenuItem<int>(
-                  value: -1,
-                  child: Text('Hoy no habrá sopa'),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _sopaOpcion(
+                  context,
+                  data,
+                  null,
+                  seleccionada: valorActual == -1,
                 ),
-                for (final sopa in sopas)
-                  DropdownMenuItem<int>(
-                    value: sopa.id!,
-                    child: Text('${sopa.nombre} · ${formatMoney(sopa.precio)}'),
+                ...sopas.map(
+                  (sopa) => _sopaOpcion(
+                    context,
+                    data,
+                    sopa,
+                    seleccionada: valorActual == sopa.id,
                   ),
+                ),
               ],
-              onChanged: _esAdmin
-                  ? (value) {
-                      if (value != null) _seleccionarSopa(data, value);
-                    }
-                  : null,
             ),
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -741,14 +706,112 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
+  /// Tarjeta de una sopa para el selector visual del menú.
+  Widget _sopaOpcion(
+    BuildContext context,
+    _MenuData data,
+    Producto? sopa, {
+    required bool seleccionada,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final esNinguna = sopa == null;
+    final item = esNinguna ? null : _itemDe(data.items, sopa.id!);
+    final agotada =
+        sopa != null && (sopa.agotado || (item != null && !item.disponible));
+    final borde = seleccionada
+        ? scheme.primary
+        : agotada
+        ? scheme.error
+        : scheme.outlineVariant.withValues(alpha: 0.7);
+    final contenido = SizedBox(
+      width: 160,
+      child: Material(
+        color: seleccionada
+            ? scheme.primaryContainer.withValues(alpha: 0.35)
+            : scheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: _esAdmin && !agotada
+              ? () => _seleccionarSopa(data, esNinguna ? -1 : sopa.id!)
+              : null,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: borde,
+                width: seleccionada || agotada ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    height: 64,
+                    child: esNinguna
+                        ? Container(
+                            color: scheme.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.no_food_outlined,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          )
+                        : _miniatura(sopa),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  esNinguna ? 'Hoy no habrá sopa' : sopa.nombre,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                if (!esNinguna)
+                  Text(
+                    formatMoney(sopa.precio),
+                    style: TextStyle(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                if (agotada)
+                  Text(
+                    'Agotada',
+                    style: TextStyle(
+                      color: scheme.error,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!agotada || !_esAdmin) return contenido;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        contenido,
+        TextButton.icon(
+          onPressed: () => _reactivarProducto(data, sopa),
+          icon: const Icon(Icons.restart_alt, size: 18),
+          label: const Text('Rehabilitar'),
+        ),
+      ],
+    );
+  }
+
   /// Buscador + chips de categorías (con su color) para filtrar el catálogo.
   Widget _filtros(BuildContext context, _MenuData data) {
     final relevantes = <int>{};
     for (final producto in data.productos) {
-      if (producto.esCompuesto ||
-          MenuRepository.esCategoriaSopa(producto.categoriaNombre) ||
-          producto.categoriaSiempreDisponible ||
-          producto.esVentaDirecta) {
+      if (!producto.activo ||
+          producto.esCompuesto ||
+          !MenuRepository.esCategoriaPlatoSuelto(producto.categoriaNombre)) {
         continue;
       }
       relevantes.add(producto.categoriaId);
@@ -811,7 +874,6 @@ class _MenuPageState extends State<MenuPage> {
   Widget _estadoCard(BuildContext context, _MenuData data) {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
-    final habilitado = menu?.habilitado == true;
     final items = data.items;
     final cantidadSopas = items.where((item) => item.esSopa).length;
     final cantidadPlatos = items
@@ -860,23 +922,11 @@ class _MenuPageState extends State<MenuPage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                if (menu == null)
-                  FilledButton.icon(
-                    onPressed: _crearMenu,
-                    icon: const Icon(Icons.history),
-                    label: const Text('Crear menú con lo de ayer'),
-                  ),
                 if (data.items.isNotEmpty || data.hayCombosLegacy)
                   OutlinedButton.icon(
                     onPressed: () => _limpiar(data),
                     icon: const Icon(Icons.delete_sweep_outlined),
                     label: const Text('Limpiar'),
-                  ),
-                if (menu != null && !habilitado)
-                  FilledButton.icon(
-                    onPressed: () => _habilitar(data),
-                    icon: const Icon(Icons.lock_open_outlined),
-                    label: const Text('Publicar menú'),
                   ),
                 if (menu != null)
                   OutlinedButton.icon(
@@ -1067,37 +1117,48 @@ class _MenuPageState extends State<MenuPage> {
 
   Widget _catalogo(BuildContext context, _MenuData data) {
     final term = _search.trim().toLowerCase();
-    final productosMenu = data.productos.where((producto) {
-      return !producto.esCompuesto &&
-          !producto.categoriaSiempreDisponible &&
-          !producto.esVentaDirecta &&
-          !MenuRepository.esCategoriaSopa(producto.categoriaNombre);
-    }).toList();
-    final filtrados = productosMenu.where((producto) {
+    bool coincide(Producto producto) {
       if (_categoriaId != null && producto.categoriaId != _categoriaId) {
         return false;
       }
       return term.isEmpty || producto.nombre.toLowerCase().contains(term);
-    }).toList();
-    final directos = data.productos.where((producto) {
-      if (!producto.categoriaSiempreDisponible && !producto.esVentaDirecta) {
-        return false;
-      }
-      if (_categoriaId != null && producto.categoriaId != _categoriaId) {
-        return false;
-      }
-      return term.isEmpty || producto.nombre.toLowerCase().contains(term);
-    }).toList()..sort(_compararProductos);
-    if (filtrados.isEmpty && directos.isEmpty) {
+    }
+
+    // El menú solo gestiona platos sueltos y sopas. Las bebidas y los combos
+    // se venden como "siempre disponibles" desde Ventas.
+    final platos = data.productos
+        .where(
+          (producto) =>
+              producto.activo &&
+              !producto.esCompuesto &&
+              MenuRepository.esCategoriaPlatoSuelto(producto.categoriaNombre),
+        )
+        .where(coincide)
+        .toList();
+    final deshabilitados = data.productos
+        .where(
+          (producto) =>
+              !producto.activo &&
+              !producto.esCompuesto &&
+              (MenuRepository.esCategoriaPlatoSuelto(
+                    producto.categoriaNombre,
+                  ) ||
+                  MenuRepository.esCategoriaSopa(producto.categoriaNombre)) &&
+              coincide(producto),
+        )
+        .toList()
+      ..sort(_compararProductos);
+
+    if (platos.isEmpty && deshabilitados.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
         title: 'Sin productos',
-        message: 'No hay productos activos que coincidan con la búsqueda.',
+        message: 'No hay platos sueltos o sopas activas que coincidan.',
       );
     }
 
     final grupos = <int, List<Producto>>{};
-    for (final producto in filtrados) {
+    for (final producto in platos) {
       grupos.putIfAbsent(producto.categoriaId, () => []).add(producto);
     }
     final ordenCategorias = {
@@ -1119,11 +1180,10 @@ class _MenuPageState extends State<MenuPage> {
     for (final categoriaId in categorias) {
       final categoria = ordenCategorias[categoriaId];
       final productosVisibles = grupos[categoriaId]!..sort(_compararProductos);
-      final todosCategoria =
-          productosMenu
-              .where((producto) => producto.categoriaId == categoriaId)
-              .toList()
-            ..sort(_compararProductos);
+      final todosCategoria = platos
+          .where((producto) => producto.categoriaId == categoriaId)
+          .toList()
+        ..sort(_compararProductos);
       final todoSeleccionado =
           todosCategoria.isNotEmpty &&
           todosCategoria.every((producto) => idsEnMenu.contains(producto.id));
@@ -1161,30 +1221,122 @@ class _MenuPageState extends State<MenuPage> {
           ),
         ),
       );
-      children.add(_gridProductos(context, data, productosVisibles));
+      children.add(
+        _gridProductos(context, data, productosVisibles, directo: false),
+      );
       children.add(const SizedBox(height: 16));
     }
 
-    if (directos.isNotEmpty) {
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            'SIEMPRE DISPONIBLES',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: Theme.of(context).colorScheme.tertiary,
-            ),
-          ),
-        ),
-      );
-      children.add(_gridProductos(context, data, directos, directo: true));
+    if (deshabilitados.isNotEmpty) {
+      children.add(_productosDeshabilitados(context, data, deshabilitados));
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
     );
+  }
+
+  /// Desplegable con los productos que fueron desactivados desde Productos.
+  Widget _productosDeshabilitados(
+    BuildContext context,
+    _MenuData data,
+    List<Producto> productos,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            leading: Icon(
+              Icons.visibility_off_outlined,
+              color: scheme.onSurfaceVariant,
+            ),
+            title: const Text(
+              'Productos deshabilitados',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${productos.length} producto(s) inactivo(s) en Productos.',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+            trailing: Icon(
+              _mostrarDeshabilitados
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+            ),
+            onTap: () => setState(
+              () => _mostrarDeshabilitados = !_mostrarDeshabilitados,
+            ),
+          ),
+          if (_mostrarDeshabilitados)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                children: productos
+                    .map(
+                      (producto) => ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                        ),
+                        leading: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 40,
+                            height: 40,
+                            child: _miniatura(producto),
+                          ),
+                        ),
+                        title: Text(
+                          producto.nombre,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        subtitle: Text(producto.categoriaEtiqueta),
+                        trailing: FilledButton.tonalIcon(
+                          onPressed: () => _reactivarProducto(data, producto),
+                          icon: const Icon(Icons.restart_alt, size: 18),
+                          label: const Text('Rehabilitar'),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _reactivarProducto(
+    _MenuData data,
+    Producto producto,
+  ) async {
+    if (!_esAdmin || producto.id == null) return;
+    try {
+      await _catalog.setProductoActivo(producto.id!, true);
+      final menu = await _asegurarMenu(data);
+      await _repository.agregarProducto(menu.id, producto.id!);
+      if (!mounted) return;
+      setState(_reload);
+      showAppMessage(
+        context,
+        '${producto.nombre} reactivado y habilitado en el menú.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo reactivar el producto: $error',
+        error: true,
+      );
+    }
   }
 
   int _compararProductos(Producto a, Producto b) =>
@@ -1196,12 +1348,16 @@ class _MenuPageState extends State<MenuPage> {
     final scheme = Theme.of(context).colorScheme;
     final menu = data.menu;
     final habilitado = menu?.habilitado == true;
-    final items = data.items;
-    final sopasDelMenu = items.where((item) => item.esSopa).toList();
-    final precioSopa = sopasDelMenu.isEmpty ? null : sopasDelMenu.first.precio;
     final productosPorId = {
       for (final producto in data.productos) producto.id: producto,
     };
+    final items = data.items
+        .where(
+          (item) => productosPorId[item.productoId]?.activo ?? true,
+        )
+        .toList();
+    final sopasDelMenu = items.where((item) => item.esSopa).toList();
+    final precioSopa = sopasDelMenu.isEmpty ? null : sopasDelMenu.first.precio;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1365,19 +1521,7 @@ class _MenuPageState extends State<MenuPage> {
               ),
             ),
           const SizedBox(height: 12),
-          if (menu == null)
-            FilledButton.icon(
-              onPressed: () => _crearMenu(),
-              icon: const Icon(Icons.history),
-              label: const Text('Crear menú con lo de ayer'),
-            )
-          else if (!habilitado)
-            FilledButton.icon(
-              onPressed: () => _habilitar(data),
-              icon: const Icon(Icons.lock_open_outlined),
-              label: const Text('Publicar menú'),
-            )
-          else
+          if (habilitado)
             Container(
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
@@ -1631,7 +1775,7 @@ class _MenuPageState extends State<MenuPage> {
   }) {
     final item = _itemDe(data.items, producto.id!);
     final enMenu = item != null;
-    final agotado = item != null && !item.disponible;
+    final agotado = producto.agotado || (item != null && !item.disponible);
     final seleccionado = enMenu && !agotado;
 
     final String mensaje;
@@ -1641,7 +1785,7 @@ class _MenuPageState extends State<MenuPage> {
       mensaje = !enMenu
           ? 'Toca para agregar'
           : agotado
-          ? 'Agotado · reactívalo con el control'
+          ? 'Agotado · toca para rehabilitar'
           : 'En el menú de hoy · toca para quitar';
     } else {
       mensaje = !enMenu
@@ -1652,27 +1796,21 @@ class _MenuPageState extends State<MenuPage> {
     }
 
     // Con un toque se agrega o se quita del menú y el cambio se guarda al
-    // instante. Un producto agotado se reactiva con el control de la tarjeta.
+    // instante. Un producto agotado se rehabilita desde la misma tarjeta.
     VoidCallback? onTap;
     if (_esAdmin && !directo) {
       onTap = agotado
-          ? () => showAppMessage(
-              context,
-              '${producto.nombre} está agotado. Reactívalo con el control de la tarjeta.',
-            )
+          ? () => _reactivarProducto(data, producto)
           : () => _toggleProducto(data, producto);
     }
 
     Widget? botonAgotado;
-    if (_esAdmin && !directo && item != null) {
+    if (_esAdmin && !directo && item != null && !agotado) {
       botonAgotado = IconButton(
-        tooltip: !agotado ? 'Marcar agotado' : 'Marcar disponible',
+        tooltip: 'Marcar agotado',
         visualDensity: VisualDensity.compact,
-        onPressed: () => _toggleDisponible(data, item, !item.disponible),
-        icon: Icon(
-          !agotado ? Icons.block : Icons.check_circle_outline,
-          size: 18,
-        ),
+        onPressed: () => _toggleDisponible(data, item, false),
+        icon: const Icon(Icons.block, size: 18),
       );
     }
 
@@ -1690,6 +1828,13 @@ class _MenuPageState extends State<MenuPage> {
       mensaje: mensaje,
       onTap: onTap,
       accion: botonAgotado,
+      pie: agotado && _esAdmin
+          ? FilledButton.tonalIcon(
+              onPressed: () => _reactivarProducto(data, producto),
+              icon: const Icon(Icons.restart_alt, size: 18),
+              label: const Text('Rehabilitar'),
+            )
+          : null,
     );
   }
 }

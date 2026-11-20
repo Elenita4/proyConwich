@@ -69,6 +69,8 @@ class Producto {
     required this.costoUnitario,
     required this.activo,
     required this.stock,
+    this.agotado = false,
+    this.esCombo = false,
     this.categoriaSiempreDisponible = false,
     this.insumoVinculadoId,
     this.esCompuesto = false,
@@ -89,6 +91,13 @@ class Producto {
   final double costoUnitario;
   final bool activo;
   final double stock;
+
+  /// Marcado como agotado desde Ventas. Se oculta de la venta y se puede
+  /// rehabilitar desde el Menú del día.
+  final bool agotado;
+
+  /// Combo armado desde Productos. No descuenta stock ni insumos.
+  final bool esCombo;
 
   /// Si la categoría se vende siempre (sin depender del menú del día).
   final bool categoriaSiempreDisponible;
@@ -369,6 +378,7 @@ class CatalogRepository {
       'stock_minimo': producto.esDirecto ? producto.stockMinimo : 0,
       'costo_unitario': producto.costoUnitario,
       'activo': producto.activo ? 1 : 0,
+      'agotado': producto.agotado ? 1 : 0,
     };
     if (producto.id == null) {
       values['creado_en'] = sqlNow();
@@ -393,9 +403,38 @@ class CatalogRepository {
 
   Future<void> setProductoActivo(int id, bool activo) async {
     final db = await AppDatabase.instance.database;
+    final values = <String, Object?>{'activo': activo ? 1 : 0};
+    // Al reactivar, el producto vuelve a estar disponible para la venta.
+    if (activo) values['agotado'] = 0;
     await db.update(
       'productos',
-      {'activo': activo ? 1 : 0},
+      values,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (activo) {
+      // Si el producto ya estaba en el menú de hoy, se rehabilita solo.
+      await db.rawUpdate(
+        '''
+        UPDATE menu_dia_items
+        SET disponible = 1, motivo_agotado = NULL
+        WHERE producto_id = ?
+          AND menu_dia_id IN (
+            SELECT id FROM menus_dia WHERE fecha = ?
+          )
+        ''',
+        [id, sqlDate(DateTime.now())],
+      );
+    }
+  }
+
+  /// Marca o limpia la bandera de agotado. Se usa desde Ventas (marcar) y
+  /// desde el Menú del día (rehabilitar).
+  Future<void> setProductoAgotado(int id, bool agotado) async {
+    final db = await AppDatabase.instance.database;
+    await db.update(
+      'productos',
+      {'agotado': agotado ? 1 : 0},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -452,6 +491,35 @@ class CatalogRepository {
         });
       }
     });
+  }
+
+  /// Crea un combo como producto normal: no descuenta stock ni insumos. Los
+  /// componentes se guardan solo para mostrarlos en la ficha del combo.
+  Future<int> crearCombo({
+    required String nombre,
+    required int categoriaId,
+    required double precio,
+    required List<int> componenteIds,
+    Uint8List? imagen,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    final id = await db.insert('productos', {
+      'nombre': nombre.trim(),
+      'categoria_id': categoriaId,
+      'descripcion': 'Combo armado con varios productos. No descuenta stock.',
+      'precio': precio,
+      'imagen': imagen,
+      'tipo': 'PREPARADO',
+      'es_compuesto': 0,
+      'es_combo': 1,
+      'stock_minimo': 0,
+      'costo_unitario': 0,
+      'activo': 1,
+      'agotado': 0,
+      'creado_en': sqlNow(),
+    });
+    await saveComponentes(id, componenteIds);
+    return id;
   }
 
   Future<int> crearProductoCompuesto({
@@ -832,6 +900,7 @@ class CatalogRepository {
     if (!visitados.add(productoId)) return null;
     final actual = producto ?? await getProducto(productoId);
     if (actual == null || !actual.activo) return 'Producto inactivo';
+    if (actual.agotado) return 'Agotado';
     if (actual.esDirecto) {
       if (actual.stock < cantidad) {
         return 'Sin stock (quedan ${actual.stock.toStringAsFixed(0)})';
@@ -1024,6 +1093,10 @@ class CatalogRepository {
     costoUnitario: (row['costo_unitario'] as num).toDouble(),
     activo: (row['activo'] as num).toInt() == 1,
     stock: (row['stock'] as num?)?.toDouble() ?? 0,
+    agotado: (row['agotado'] as num?)?.toInt() == 1,
+    esCombo:
+        (row['es_combo'] as num?)?.toInt() == 1 ||
+        (row['categoria_nombre'] as String?)?.trim().toUpperCase() == 'COMBOS',
     categoriaSiempreDisponible:
         (row['categoria_siempre_disponible'] as num?)?.toInt() == 1,
     insumoVinculadoId: row['insumo_vinculado_id'] as int?,

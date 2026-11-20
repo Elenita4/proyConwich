@@ -283,10 +283,10 @@ void main() {
     // Gasto en insumos: la carga inicial de stock (10 und de Papa × Bs 3).
     expect(resumen.gastoInsumos, 30);
     expect(resumen.salidas, 10);
-    expect(
-      resumen.ganancia,
-      resumen.ventas - resumen.gastoInsumos - resumen.salidas,
-    );
+    // Los gastos de insumos se registran, pero por ahora no se descuentan
+    // del neto: solo se restan las salidas de emergencia.
+    expect(resumen.ganancia, resumen.ventas - resumen.salidas);
+    expect(resumen.ganancia, 25);
     final productos = await reports.getProductos(inicio, fin);
     expect(productos.length, 2);
     final pedidosReporte = await reports.getPedidos(inicio, fin);
@@ -313,14 +313,25 @@ void main() {
 
     await sales.anularPedido(pedidoId);
     expect(await catalog.getStockProducto(cocaId), 5);
+    final devolucionesPedido = await sales.getDevolucionesPedido(pedidoId);
+    expect(devolucionesPedido.length, 2);
+    expect(
+      devolucionesPedido.fold<double>(0, (suma, item) => suma + item.monto),
+      35,
+    );
+    final historialVentas = await sales.getPedidosDelDia(DateTime.now());
+    expect(
+      historialVentas.any(
+        (pedido) => pedido.id == pedidoId && pedido.anulado,
+      ),
+      isTrue,
+    );
     final resumenAnulado = await reports.getResumen(inicio, fin);
     expect(resumenAnulado.ventas, 0);
     expect(resumenAnulado.cobros, 0);
     expect(
       resumenAnulado.ganancia,
-      resumenAnulado.ventas -
-          resumenAnulado.gastoInsumos -
-          resumenAnulado.salidas,
+      resumenAnulado.ventas - resumenAnulado.salidas,
     );
 
     final pendienteId = await sales.crearPedido(
@@ -343,11 +354,15 @@ void main() {
 
     await cash.cerrarCaja(
       cajaId: caja.id,
-      efectivoContado: 95,
-      qrVerificado: 30,
       usuarioId: admin.id,
+      sobrante: 0,
     );
     expect(await cash.getCajaAbierta(), isNull);
+    final historialHoy = await cash.getCajasDelDia(DateTime.now());
+    expect(historialHoy.length, 1);
+    expect(historialHoy.first.caja.estado, 'CERRADA');
+    expect(historialHoy.first.caja.sobrante, 0);
+    expect(historialHoy.first.caja.totalEsperado, isNotNull);
     final menuTrasCierre = await menuRepo.getMenu(DateTime.now(), 'ALMUERZO');
     expect(menuTrasCierre?.estado, 'HABILITADO');
 
@@ -382,7 +397,7 @@ void main() {
     expect(resumenFinal.cobros, 5);
     expect(
       resumenFinal.ganancia,
-      resumenFinal.ventas - resumenFinal.gastoInsumos - resumenFinal.salidas,
+      resumenFinal.ventas - resumenFinal.salidas,
     );
 
     final usuarios = await auth.getUsuarios();
@@ -1494,10 +1509,9 @@ void main() {
     final resumen = await reports.getResumen(inicio, fin);
     expect(resumen.ventas, 30);
     expect(resumen.gastoInsumos, 20); // 5 unidades × Bs 4
-    expect(
-      resumen.ganancia,
-      resumen.ventas - resumen.gastoInsumos - resumen.salidas,
-    );
+    // El gasto de insumos queda registrado pero no se descuenta del neto.
+    expect(resumen.ganancia, resumen.ventas - resumen.salidas);
+    expect(resumen.ganancia, 30);
 
     final productos = await reports.getProductos(inicio, fin);
     expect(productos.length, 1);
@@ -2088,12 +2102,12 @@ void main() {
       DateTime(fecha.year, fecha.month, fecha.day + 1),
     );
     final ventasPorNombre = {for (final item in reporte) item.nombre: item};
-    expect(ventasPorNombre['Milaneza']!.ventas, 12);
-    expect(ventasPorNombre['Milaneza']!.completos, 1);
-    expect(ventasPorNombre['Silpancho']!.ventas, 10);
-    expect(ventasPorNombre['Silpancho']!.sueltos, 1);
-    expect(ventasPorNombre['Sopa de maní']!.ventas, 4);
-    expect(ventasPorNombre['Sopa de maní']!.completos, 1);
+    expect(ventasPorNombre['Milaneza (completo)']!.ventas, 16);
+    expect(ventasPorNombre['Milaneza (completo)']!.completos, 1);
+    expect(ventasPorNombre['Silpancho (suelto)']!.ventas, 10);
+    expect(ventasPorNombre['Silpancho (suelto)']!.sueltos, 1);
+    expect(ventasPorNombre['Sopa de maní (incluida)']!.ventas, 0);
+    expect(ventasPorNombre['Sopa de maní (incluida)']!.completos, 1);
     expect(reporte.fold<double>(0, (suma, item) => suma + item.ventas), 26);
 
     await menuRepo.limpiarMenu(menu.id);

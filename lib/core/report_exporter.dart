@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'cash_repository.dart';
 import 'date_utils.dart';
 import 'report_repository.dart';
 
@@ -21,6 +22,8 @@ class ReportExportData {
     required this.pedidos,
     this.faltantes = const [],
     this.compras = const [],
+    this.cajas = const [],
+    this.devoluciones = const [],
     this.negocio = 'Conwich',
   });
 
@@ -32,6 +35,8 @@ class ReportExportData {
   final List<PedidoReporte> pedidos;
   final List<FaltanteInsumoReporte> faltantes;
   final List<CompraReporte> compras;
+  final List<CajaHistorial> cajas;
+  final List<DevolucionReporte> devoluciones;
   final String negocio;
 
   DateTime get finMostrar => hasta.subtract(const Duration(seconds: 1));
@@ -237,7 +242,7 @@ class ReportExporter {
               ),
               pw.SizedBox(width: 8),
               pw.Expanded(
-                child: dato('Ganancia', formatMoney(resumen.ganancia)),
+                child: dato('Neto del período', formatMoney(resumen.ganancia)),
               ),
             ],
           ),
@@ -553,6 +558,112 @@ class ReportExporter {
                 6: pw.Alignment.centerRight,
               },
             ),
+          if (data.cajas.isNotEmpty) ...[
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Cajas',
+              style: pw.TextStyle(
+                fontSize: 13,
+                fontWeight: pw.FontWeight.bold,
+                color: scheme,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Fecha',
+                'Turno',
+                'Cajero',
+                'Rol',
+                'Efectivo',
+                'QR',
+                'Salidas',
+                'Esperado',
+                'Sobrante',
+                'Estado',
+              ],
+              data: data.cajas
+                  .map(
+                    (item) => [
+                      formatDateShort(parseSqlDate(item.caja.fecha)),
+                      item.caja.turnoLabel,
+                      item.caja.usuarioApertura,
+                      switch (item.caja.perfilApertura) {
+                        'ADMIN' => 'Administrador',
+                        'CAJERO' => 'Cajero',
+                        'VENDEDOR' => 'Vendedor',
+                        _ => item.caja.perfilApertura,
+                      },
+                      formatMoney(item.resumen.ventasEfectivo),
+                      formatMoney(item.resumen.ventasQr),
+                      formatMoney(
+                        item.resumen.salidasEfectivo +
+                            item.resumen.salidasQr,
+                      ),
+                      formatMoney(item.resumen.totalEsperado),
+                      formatMoney(item.caja.sobrante ?? 0),
+                      item.caja.abierta ? 'ABIERTA' : 'CERRADA',
+                    ],
+                  )
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                fontSize: 7,
+                fontWeight: pw.FontWeight.bold,
+                color: blanco,
+              ),
+              headerDecoration: pw.BoxDecoration(color: scheme),
+              cellStyle: const pw.TextStyle(fontSize: 7),
+              cellAlignments: {
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.centerRight,
+                6: pw.Alignment.centerRight,
+                7: pw.Alignment.centerRight,
+                8: pw.Alignment.centerRight,
+              },
+            ),
+          ],
+          if (data.devoluciones.isNotEmpty) ...[
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Ventas anuladas / devueltas',
+              style: pw.TextStyle(
+                fontSize: 13,
+                fontWeight: pw.FontWeight.bold,
+                color: scheme,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Pedido',
+                'Fecha',
+                'Usuario',
+                'Método',
+                'Monto',
+                'Motivo',
+              ],
+              data: data.devoluciones
+                  .map(
+                    (devolucion) => [
+                      '#${devolucion.pedidoId}',
+                      _fechaHora(devolucion.fecha),
+                      devolucion.usuarioNombre,
+                      devolucion.metodo,
+                      formatMoney(devolucion.monto),
+                      devolucion.motivo ?? '',
+                    ],
+                  )
+                  .toList(),
+              headerStyle: pw.TextStyle(
+                fontSize: 8,
+                fontWeight: pw.FontWeight.bold,
+                color: blanco,
+              ),
+              headerDecoration: pw.BoxDecoration(color: scheme),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignments: {4: pw.Alignment.centerRight},
+            ),
+          ],
           if (data.faltantes.isNotEmpty) ...[
             pw.SizedBox(height: 16),
             pw.Text(
@@ -623,9 +734,8 @@ class ReportExporter {
     fila('Ticket promedio', r.ticketPromedio);
     fila('Cobros en efectivo', r.cobrosEfectivo);
     fila('Cobros QR', r.cobrosQr);
-    fila('Gasto en insumos', r.gastoInsumos);
     fila('Salidas de caja', r.salidas);
-    fila('Ganancia', r.ganancia);
+    fila('Neto del período (ventas − salidas)', r.ganancia);
 
     final productos = excel['Productos'];
     productos.appendRow([
@@ -753,6 +863,70 @@ class ReportExporter {
     }
     for (var i = 0; i < 8; i++) {
       pedidos.setColumnWidth(i, 20);
+    }
+
+    String rol(String perfil) => switch (perfil) {
+      'ADMIN' => 'Administrador',
+      'CAJERO' => 'Cajero',
+      'VENDEDOR' => 'Vendedor',
+      _ => perfil,
+    };
+
+    final cajas = excel['Cajas'];
+    cajas.appendRow([
+      TextCellValue('Fecha'),
+      TextCellValue('Turno'),
+      TextCellValue('Cajero'),
+      TextCellValue('Rol'),
+      TextCellValue('Ventas efectivo'),
+      TextCellValue('Ventas QR'),
+      TextCellValue('Salidas'),
+      TextCellValue('Total esperado'),
+      TextCellValue('Sobrante'),
+      TextCellValue('Estado'),
+    ]);
+    for (final item in data.cajas) {
+      final caja = item.caja;
+      cajas.appendRow([
+        TextCellValue(formatDateShort(parseSqlDate(caja.fecha))),
+        TextCellValue(caja.turnoLabel),
+        TextCellValue(caja.usuarioApertura),
+        TextCellValue(rol(caja.perfilApertura)),
+        DoubleCellValue(item.resumen.ventasEfectivo),
+        DoubleCellValue(item.resumen.ventasQr),
+        DoubleCellValue(
+          item.resumen.salidasEfectivo + item.resumen.salidasQr,
+        ),
+        DoubleCellValue(item.resumen.totalEsperado),
+        DoubleCellValue(caja.sobrante ?? 0),
+        TextCellValue(caja.abierta ? 'ABIERTA' : 'CERRADA'),
+      ]);
+    }
+    for (var i = 0; i < 10; i++) {
+      cajas.setColumnWidth(i, 18);
+    }
+
+    final anulados = excel['Anulados'];
+    anulados.appendRow([
+      TextCellValue('Pedido'),
+      TextCellValue('Fecha'),
+      TextCellValue('Usuario'),
+      TextCellValue('Método'),
+      TextCellValue('Monto'),
+      TextCellValue('Motivo'),
+    ]);
+    for (final devolucion in data.devoluciones) {
+      anulados.appendRow([
+        TextCellValue('#${devolucion.pedidoId}'),
+        TextCellValue(_fechaHora(devolucion.fecha)),
+        TextCellValue(devolucion.usuarioNombre),
+        TextCellValue(devolucion.metodo),
+        DoubleCellValue(devolucion.monto),
+        TextCellValue(devolucion.motivo ?? ''),
+      ]);
+    }
+    for (var i = 0; i < 6; i++) {
+      anulados.setColumnWidth(i, 18);
     }
 
     final estiloBarra = CellStyle(

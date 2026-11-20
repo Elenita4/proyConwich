@@ -4,6 +4,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../data/database/app_database.dart';
+import 'cash_repository.dart';
 import 'date_utils.dart';
 import 'sales_repository.dart';
 
@@ -40,12 +41,6 @@ class ReceiptService {
     final fechaTexto = fecha == null
         ? pedido.fecha
         : formatDateTimeShort(fecha);
-
-    double sumar(String metodo) => detalle.pagos
-        .where((pago) => pago.metodo == metodo && pago.estado == 'CONFIRMADO')
-        .fold<double>(0, (suma, pago) => suma + pago.monto);
-    final efectivo = sumar('EFECTIVO');
-    final qr = sumar('QR');
 
     final lineas = detalle.lineas.where((linea) => !linea.esComponente).toList();
 
@@ -111,27 +106,14 @@ class ReceiptService {
           ...lineas.map(
             (linea) => pw.Padding(
               padding: const pw.EdgeInsets.only(bottom: 2),
-              child: pw.Row(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Expanded(
-                    child: pw.Text(
-                      '${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}',
-                      style: pequeno,
-                    ),
-                  ),
-                  pw.SizedBox(width: 6),
-                  pw.Text(formatMoney(linea.subtotal), style: pequeno),
-                ],
+              child: pw.Text(
+                '${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}',
+                style: pequeno,
               ),
             ),
           ),
           pw.Divider(),
-          fila('TOTAL', formatMoney(pedido.total), fuerte: true),
           pw.SizedBox(height: 3),
-          if (efectivo > 0) fila('Efectivo', formatMoney(efectivo)),
-          if (qr > 0) fila('QR', formatMoney(qr)),
-          pw.Divider(),
           pw.Center(child: pw.Text('Gracias por su compra', style: negrita)),
         ],
       ),
@@ -151,6 +133,108 @@ class ReceiptService {
     );
     await Printing.layoutPdf(
       name: 'nota_venta_${detalle.pedido.id}.pdf',
+      onLayout: (_) async => bytes,
+    );
+  }
+
+  Future<Uint8List> generarMovimientoTurno({
+    required Caja caja,
+    required CajaResumen resumen,
+    required double sobrante,
+    required String cajero,
+  }) async {
+    await _cargarFuentes();
+    final regular = _regular!;
+    final bold = _bold!;
+    final meta = await AppDatabase.instance.leerAppMeta();
+    final negocio = (meta?['nombre_negocio'] as String?) ?? 'Conwich';
+    final pequeno = pw.TextStyle(font: regular, fontSize: 8);
+    final negrita = pw.TextStyle(font: bold, fontSize: 8);
+
+    pw.Widget fila(String etiqueta, String valor, {bool fuerte = false}) =>
+        pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 2),
+          child: pw.Row(
+            children: [
+              pw.Expanded(
+                child: pw.Text(etiqueta, style: fuerte ? negrita : pequeno),
+              ),
+              pw.Text(valor, style: fuerte ? negrita : pequeno),
+            ],
+          ),
+        );
+
+    final doc = pw.Document();
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat(
+          80 * PdfPageFormat.mm,
+          140 * PdfPageFormat.mm,
+          marginAll: 4 * PdfPageFormat.mm,
+        ),
+        theme: pw.ThemeData.withFont(base: regular, bold: bold),
+        build: (context) => [
+          pw.Center(
+            child: pw.Text(
+              negocio,
+              style: pw.TextStyle(
+                font: bold,
+                fontSize: 13,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+          ),
+          pw.Center(
+            child: pw.Text(
+              'MOVIMIENTO DE TURNO',
+              style: pw.TextStyle(
+                font: bold,
+                fontSize: 9,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Divider(),
+          fila('Turno', caja.turnoLabel),
+          fila('Fecha', formatDateShort(parseSqlDate(caja.fecha))),
+          fila('Cajero', cajero),
+          pw.Divider(),
+          fila('Ventas efectivo', formatMoney(resumen.ventasEfectivo)),
+          fila('Ventas QR', formatMoney(resumen.ventasQr)),
+          fila('Salida efectivo', formatMoney(resumen.salidasEfectivo)),
+          if (resumen.salidasQr > 0)
+            fila('Salida QR', formatMoney(resumen.salidasQr)),
+          fila('Sobrante del turno', formatMoney(sobrante)),
+          pw.Divider(),
+          fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), fuerte: true),
+          fila(
+            'TOTAL EN CAJA',
+            formatMoney(resumen.totalEsperado + sobrante),
+            fuerte: true,
+          ),
+          pw.Divider(),
+          pw.Center(child: pw.Text('Gracias por su trabajo', style: negrita)),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  Future<void> imprimirMovimientoTurno({
+    required Caja caja,
+    required CajaResumen resumen,
+    required double sobrante,
+    required String cajero,
+  }) async {
+    final bytes = await generarMovimientoTurno(
+      caja: caja,
+      resumen: resumen,
+      sobrante: sobrante,
+      cajero: cajero,
+    );
+    await Printing.layoutPdf(
+      name: 'movimiento_turno_${caja.id}.pdf',
       onLayout: (_) async => bytes,
     );
   }

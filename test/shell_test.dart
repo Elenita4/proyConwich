@@ -130,6 +130,34 @@ void main() {
     expect(find.byIcon(Icons.logout), findsOneWidget);
     expect(find.byIcon(Icons.lock_reset_outlined), findsOneWidget);
 
+    // Al contraer, la barra no desaparece: queda un rail de iconos.
+    await tester.tap(find.byIcon(Icons.menu_open));
+    await tester.pumpAndSettle();
+    final railCompacto = find.byKey(const Key('rail-sidebar'));
+    expect(tester.getSize(railCompacto).width, 76);
+    expect(
+      find.descendant(of: railCompacto, matching: find.text('Ventas')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: railCompacto,
+        matching: find.byIcon(Icons.point_of_sale_outlined),
+      ),
+      findsOneWidget,
+    );
+
+    // Y se vuelve a expandir con el mismo botón.
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('rail-sidebar')),
+        matching: find.text('Ventas'),
+      ),
+      findsOneWidget,
+    );
+
     await cerrar(tester);
   });
 }

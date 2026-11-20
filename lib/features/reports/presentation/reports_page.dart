@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../core/cash_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/receipt_service.dart';
 import '../../../core/report_exporter.dart';
@@ -9,6 +10,20 @@ import '../../../core/report_repository.dart';
 import '../../../core/sales_repository.dart';
 import '../../../core/session.dart';
 import '../../../ui/common.dart';
+
+/// Paleta con más variedad para los gráficos del reporte.
+const _chartPalette = <Color>[
+  Color(0xFFEA580C),
+  Color(0xFF2563EB),
+  Color(0xFF16A34A),
+  Color(0xFF9333EA),
+  Color(0xFFDB2777),
+  Color(0xFF0891B2),
+  Color(0xFFCA8A04),
+  Color(0xFFDC2626),
+  Color(0xFF4F46E5),
+  Color(0xFF059669),
+];
 
 class _ReportData {
   const _ReportData({
@@ -20,6 +35,8 @@ class _ReportData {
     required this.pedidos,
     required this.faltantes,
     required this.compras,
+    required this.cajas,
+    required this.devoluciones,
   });
 
   final ResumenFinanciero resumen;
@@ -30,6 +47,8 @@ class _ReportData {
   final List<PedidoReporte> pedidos;
   final List<FaltanteInsumoReporte> faltantes;
   final List<CompraReporte> compras;
+  final List<CajaHistorial> cajas;
+  final List<DevolucionReporte> devoluciones;
 }
 
 /// Porción del pastel de ingresos. Permite agrupar los productos con menos
@@ -46,6 +65,19 @@ class _ProductoSlice {
   final Color color;
 }
 
+class _CajaGrupo {
+  _CajaGrupo({required this.etiqueta});
+
+  final String etiqueta;
+  int turnos = 0;
+  double efectivo = 0;
+  double qr = 0;
+  double salidas = 0;
+  double esperado = 0;
+  double sobrante = 0;
+  final Set<String> cajeros = <String>{};
+}
+
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key, required this.refreshToken, this.usuario});
 
@@ -58,6 +90,7 @@ class ReportsPage extends StatefulWidget {
 
 class _ReportsPageState extends State<ReportsPage> {
   static const _periodos = ['DIA', 'SEMANA', 'MES', 'TRIMESTRE', 'ANIO'];
+  String _agrupacionCajas = 'DIA';
   final _repository = ReportRepository();
   late Future<_ReportData> _future;
   late Future<List<PedidoReporte>> _misPedidosFuture;
@@ -232,6 +265,14 @@ class _ReportsPageState extends State<ReportsPage> {
     final pedidos = await _repository.getPedidos(range.start, range.end);
     final faltantes = await _repository.getFaltantes(range.start, range.end);
     final compras = await _repository.getCompras(range.start, range.end);
+    final cajas = await CashRepository().getCajasEntre(
+      range.start,
+      range.end,
+    );
+    final devoluciones = await _repository.getDevoluciones(
+      range.start,
+      range.end,
+    );
     return _ReportData(
       resumen: resumen,
       productos: productos,
@@ -241,6 +282,8 @@ class _ReportsPageState extends State<ReportsPage> {
       pedidos: pedidos,
       faltantes: faltantes,
       compras: compras,
+      cajas: cajas,
+      devoluciones: devoluciones,
     );
   }
 
@@ -254,6 +297,8 @@ class _ReportsPageState extends State<ReportsPage> {
         pedidos: data.pedidos,
         faltantes: data.faltantes,
         compras: data.compras,
+        cajas: data.cajas,
+        devoluciones: data.devoluciones,
       );
 
   Widget _misPedidosPage(BuildContext context) {
@@ -442,7 +487,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final range = _range;
     final finMostrar = range.end.subtract(const Duration(days: 1));
     return DefaultTabController(
-      length: 6,
+      length: 8,
       child: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
@@ -458,7 +503,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 children: [
                   PageHeader(
                     title: 'Reportes',
-                    subtitle: 'Ganancia = ventas − gasto en insumos − salidas de emergencia.',
+                    subtitle: 'Ventas, cobros en efectivo/QR y salidas de emergencia del período.',
                     actions: [
                       PopupMenuButton<String>(
                         tooltip: 'Reporte PDF',
@@ -548,11 +593,21 @@ class _ReportsPageState extends State<ReportsPage> {
             pinned: true,
             delegate: _TabBarHeader(
               tabBar: const TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
                 tabs: [
                   Tab(icon: Icon(Icons.summarize_outlined), text: 'Resumen'),
                   Tab(
                     icon: Icon(Icons.lunch_dining_outlined),
                     text: 'Productos',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.point_of_sale_outlined),
+                    text: 'Cajas',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.assignment_return_outlined),
+                    text: 'Anulados',
                   ),
                   Tab(
                     icon: Icon(Icons.inventory_2_outlined),
@@ -590,6 +645,8 @@ class _ReportsPageState extends State<ReportsPage> {
               children: [
                 _resumenTab(context, data),
                 _productosTab(context, data),
+                _cajasTab(context, data),
+                _anuladosTab(context, data),
                 _inventarioTab(context, data),
                 _comprasTab(context, data),
                 _faltantesTab(context, data),
@@ -615,10 +672,17 @@ class _ReportsPageState extends State<ReportsPage> {
         StatGrid(
           children: [
             StatCard(
-              label: 'Gasto en insumos',
-              value: formatMoney(resumen.gastoInsumos),
-              caption: 'Lo que entró de insumos al stock',
-              icon: Icons.shopping_basket_outlined,
+              label: 'Cobros en efectivo',
+              value: formatMoney(resumen.cobrosEfectivo),
+              caption: 'Pagos confirmados del período',
+              icon: Icons.payments_outlined,
+              color: scheme.primary,
+            ),
+            StatCard(
+              label: 'Cobros QR',
+              value: formatMoney(resumen.cobrosQr),
+              caption: 'Pagos confirmados del período',
+              icon: Icons.qr_code_2,
               color: scheme.secondary,
             ),
             StatCard(
@@ -628,13 +692,6 @@ class _ReportsPageState extends State<ReportsPage> {
                   'Efectivo ${formatMoney(resumen.salidasEfectivo)} · QR ${formatMoney(resumen.salidasQr)}',
               icon: Icons.outbox,
               color: scheme.tertiary,
-            ),
-            StatCard(
-              label: 'Ganancia',
-              value: formatMoney(resumen.ganancia),
-              caption: 'Ventas − gasto en insumos − salidas',
-              icon: Icons.insights,
-              color: resumen.ganancia >= 0 ? scheme.primary : scheme.error,
             ),
           ],
         ),
@@ -1010,7 +1067,7 @@ class _ReportsPageState extends State<ReportsPage> {
           if (platos.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(
-              'Platos sueltos',
+              'Platos sueltos y completos',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             SingleChildScrollView(
@@ -1018,16 +1075,16 @@ class _ReportsPageState extends State<ReportsPage> {
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Plato')),
-                  DataColumn(label: Text('Sueltos'), numeric: true),
-                  DataColumn(label: Text('Completos'), numeric: true),
+                  DataColumn(label: Text('Cantidad'), numeric: true),
+                  DataColumn(label: Text('Ventas'), numeric: true),
                 ],
                 rows: platos
                     .map(
                       (producto) => DataRow(
                         cells: [
                           DataCell(Text(producto.nombre)),
-                          DataCell(Text(cantidad(producto.sueltos))),
-                          DataCell(Text(cantidad(producto.completos))),
+                          DataCell(Text(cantidad(producto.cantidad))),
+                          DataCell(Text(formatMoney(producto.ventas))),
                         ],
                       ),
                     )
@@ -1043,16 +1100,16 @@ class _ReportsPageState extends State<ReportsPage> {
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Sopa')),
-                  DataColumn(label: Text('Solas'), numeric: true),
-                  DataColumn(label: Text('Incluidas'), numeric: true),
+                  DataColumn(label: Text('Cantidad'), numeric: true),
+                  DataColumn(label: Text('Ventas'), numeric: true),
                 ],
                 rows: sopas
                     .map(
                       (producto) => DataRow(
                         cells: [
                           DataCell(Text(producto.nombre)),
-                          DataCell(Text(cantidad(producto.sueltos))),
-                          DataCell(Text(cantidad(producto.completos))),
+                          DataCell(Text(cantidad(producto.cantidad))),
+                          DataCell(Text(formatMoney(producto.ventas))),
                         ],
                       ),
                     )
@@ -1071,12 +1128,13 @@ class _ReportsPageState extends State<ReportsPage> {
     final ordenados = [...productos.where((producto) => producto.ventas > 0)]
       ..sort((a, b) => b.ventas.compareTo(a.ventas));
     if (ordenados.length <= 8) {
+      var indice = 0;
       return ordenados
           .map(
             (producto) => _ProductoSlice(
               nombre: producto.nombre,
               valor: producto.ventas,
-              color: Color(producto.color),
+              color: _chartPalette[indice++ % _chartPalette.length],
             ),
           )
           .toList();
@@ -1085,12 +1143,13 @@ class _ReportsPageState extends State<ReportsPage> {
     final resto = ordenados
         .skip(7)
         .fold<double>(0, (suma, producto) => suma + producto.ventas);
+    var indice = 0;
     return [
       ...top.map(
         (producto) => _ProductoSlice(
           nombre: producto.nombre,
           valor: producto.ventas,
-          color: Color(producto.color),
+          color: _chartPalette[indice++ % _chartPalette.length],
         ),
       ),
       _ProductoSlice(
@@ -1210,6 +1269,279 @@ class _ReportsPageState extends State<ReportsPage> {
           );
         },
       ),
+    );
+  }
+
+  Widget _cajasTab(BuildContext context, _ReportData data) {
+    final scheme = Theme.of(context).colorScheme;
+    if (data.cajas.isEmpty) {
+      return const EmptyState(
+        icon: Icons.point_of_sale_outlined,
+        title: 'Sin cajas en el período',
+        message: 'No hay turnos de caja registrados para estas fechas.',
+      );
+    }
+    final grupos = <String, _CajaGrupo>{};
+    for (final item in data.cajas) {
+      final fecha = parseSqlDate(item.caja.fecha);
+      final etiqueta = switch (_agrupacionCajas) {
+        'SEMANA' =>
+          'Semana del ${formatDateShort(fecha.subtract(Duration(days: fecha.weekday - 1)))}',
+        'MES' => '${fecha.month.toString().padLeft(2, '0')}/${fecha.year}',
+        'ANIO' => '${fecha.year}',
+        _ => formatDateShort(fecha),
+      };
+      final grupo = grupos.putIfAbsent(
+        etiqueta,
+        () => _CajaGrupo(etiqueta: etiqueta),
+      );
+      grupo.turnos++;
+      grupo.efectivo += item.resumen.ventasEfectivo;
+      grupo.qr += item.resumen.ventasQr;
+      grupo.salidas +=
+          item.resumen.salidasEfectivo + item.resumen.salidasQr;
+      grupo.esperado += item.resumen.totalEsperado;
+      grupo.sobrante += item.caja.sobrante ?? 0;
+      final rol = Perfil.nombres[item.caja.perfilApertura] ??
+          item.caja.perfilApertura;
+      grupo.cajeros.add(
+        '${item.caja.usuarioApertura}${rol.isEmpty ? '' : ' ($rol)'}',
+      );
+    }
+    final filas = grupos.values.toList();
+    return ListView(
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
+      children: [
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Reporte de cajas',
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Ventas en efectivo/QR, salidas y total esperado por turno.',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final opcion in const [
+                    ('DIA', 'Día'),
+                    ('SEMANA', 'Semana'),
+                    ('MES', 'Mes'),
+                    ('ANIO', 'Año'),
+                  ])
+                    ChoiceChip(
+                      label: Text(opcion.$2),
+                      selected: _agrupacionCajas == opcion.$1,
+                      onSelected: (_) =>
+                          setState(() => _agrupacionCajas = opcion.$1),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  columns: const [
+                    DataColumn(label: Text('Período')),
+                    DataColumn(label: Text('Turnos'), numeric: true),
+                    DataColumn(label: Text('Efectivo'), numeric: true),
+                    DataColumn(label: Text('QR'), numeric: true),
+                    DataColumn(label: Text('Salidas'), numeric: true),
+                    DataColumn(label: Text('Esperado'), numeric: true),
+                    DataColumn(label: Text('Sobrante'), numeric: true),
+                    DataColumn(label: Text('Cajero(s)')),
+                  ],
+                  rows: filas
+                      .map(
+                        (grupo) => DataRow(
+                          cells: [
+                            DataCell(Text(grupo.etiqueta)),
+                            DataCell(Text('${grupo.turnos}')),
+                            DataCell(Text(formatMoney(grupo.efectivo))),
+                            DataCell(Text(formatMoney(grupo.qr))),
+                            DataCell(Text(formatMoney(grupo.salidas))),
+                            DataCell(Text(formatMoney(grupo.esperado))),
+                            DataCell(Text(formatMoney(grupo.sobrante))),
+                            DataCell(
+                              Text(
+                                grupo.cajeros.join(', '),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Detalle por turno',
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        ...data.cajas.map((item) {
+          final caja = item.caja;
+          final rol = Perfil.nombres[caja.perfilApertura] ??
+              caja.perfilApertura;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        caja.abierta
+                            ? Icons.lock_open
+                            : Icons.check_circle_outline,
+                        color: caja.abierta
+                            ? scheme.tertiary
+                            : scheme.primary,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${formatDateShort(parseSqlDate(caja.fecha))} · '
+                          '${caja.turnoLabel} · '
+                          '${caja.usuarioApertura}'
+                          '${rol.isEmpty ? '' : ' ($rol)'}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Chip(
+                        label: Text(caja.abierta ? 'ABIERTA' : 'CERRADA'),
+                        side: BorderSide.none,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Efectivo ${formatMoney(item.resumen.ventasEfectivo)} · '
+                    'QR ${formatMoney(item.resumen.ventasQr)} · '
+                    'Salidas ${formatMoney(item.resumen.salidasEfectivo + item.resumen.salidasQr)} · '
+                    'Esperado ${formatMoney(item.resumen.totalEsperado)}',
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _anuladosTab(BuildContext context, _ReportData data) {
+    final scheme = Theme.of(context).colorScheme;
+    final total = data.devoluciones.fold<double>(
+      0,
+      (suma, devolucion) => suma + devolucion.monto,
+    );
+    final pedidosAnulados = data.devoluciones
+        .map((devolucion) => devolucion.pedidoId)
+        .toSet()
+        .length;
+    return ListView(
+      padding: EdgeInsets.all(
+        esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+      ),
+      children: [
+        StatGrid(
+          children: [
+            StatCard(
+              label: 'Ventas anuladas',
+              value: '$pedidosAnulados',
+              icon: Icons.assignment_return_outlined,
+              color: scheme.error,
+            ),
+            StatCard(
+              label: 'Total devuelto',
+              value: formatMoney(total),
+              icon: Icons.payments_outlined,
+              color: scheme.error,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (data.devoluciones.isEmpty)
+          const EmptyState(
+            icon: Icons.assignment_return_outlined,
+            title: 'Sin anulaciones',
+            message: 'No hay ventas anuladas ni devueltas en el período.',
+          )
+        else
+          AppCard(
+            padding: EdgeInsets.zero,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Pedido')),
+                  DataColumn(label: Text('Fecha')),
+                  DataColumn(label: Text('Usuario')),
+                  DataColumn(label: Text('Método')),
+                  DataColumn(label: Text('Monto'), numeric: true),
+                  DataColumn(label: Text('Motivo')),
+                ],
+                rows: data.devoluciones
+                    .map(
+                      (devolucion) => DataRow(
+                        cells: [
+                          DataCell(Text('#${devolucion.pedidoId}')),
+                          DataCell(
+                            Text(
+                              formatDateTimeShort(
+                                parseSqlDateTime(devolucion.fecha) ??
+                                    DateTime.now(),
+                              ),
+                            ),
+                          ),
+                          DataCell(Text(devolucion.usuarioNombre)),
+                          DataCell(
+                            Text(
+                              devolucion.metodo == 'EFECTIVO'
+                                  ? 'Efectivo'
+                                  : 'QR',
+                            ),
+                          ),
+                          DataCell(Text(formatMoney(devolucion.monto))),
+                          DataCell(
+                            Text(
+                              (devolucion.motivo ?? '').isEmpty
+                                  ? '—'
+                                  : devolucion.motivo!,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1616,7 +1948,6 @@ class _PedidoSoloLecturaDialog extends StatelessWidget {
               const Divider(height: 22),
               LabelValue(label: 'Total', value: formatMoney(pedido.total)),
               LabelValue(label: 'Pagado', value: formatMoney(pedido.pagado)),
-              LabelValue(label: 'Saldo', value: formatMoney(pedido.saldo)),
               const Divider(height: 22),
               Text(
                 'Pagos',

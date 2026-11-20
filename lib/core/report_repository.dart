@@ -23,8 +23,44 @@ class ResumenFinanciero {
   final int pedidos;
 
   double get cobros => cobrosEfectivo + cobrosQr;
-  double get ganancia => ventas - gastoInsumos - salidas;
+  /// Por ahora los gastos de insumos no se descuentan del resultado: el
+  /// tablero y los reportes solo restan las salidas de emergencia.
+  double get ganancia => ventas - salidas;
   double get ticketPromedio => pedidos == 0 ? 0 : ventas / pedidos;
+}
+
+/// Cantidad y montos de las ventas anuladas/devueltas en un período.
+class DevolucionesResumen {
+  const DevolucionesResumen({
+    required this.cantidad,
+    required this.total,
+    required this.efectivo,
+    required this.qr,
+  });
+
+  final int cantidad;
+  final double total;
+  final double efectivo;
+  final double qr;
+}
+
+/// Fila del reporte de ventas anuladas/devueltas.
+class DevolucionReporte {
+  const DevolucionReporte({
+    required this.pedidoId,
+    required this.fecha,
+    required this.usuarioNombre,
+    required this.monto,
+    required this.metodo,
+    this.motivo,
+  });
+
+  final int pedidoId;
+  final String fecha;
+  final String usuarioNombre;
+  final double monto;
+  final String metodo;
+  final String? motivo;
 }
 
 class ProductoReporte {
@@ -246,6 +282,61 @@ class ReportRepository {
     );
   }
 
+  Future<DevolucionesResumen> getDevolucionesResumen(
+    DateTime desde,
+    DateTime hasta,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(DISTINCT pedido_id) AS cantidad,
+             COALESCE(SUM(monto), 0) AS total,
+             COALESCE(SUM(CASE WHEN metodo_pago = 'EFECTIVO' THEN monto ELSE 0 END), 0) AS efectivo,
+             COALESCE(SUM(CASE WHEN metodo_pago = 'QR' THEN monto ELSE 0 END), 0) AS qr
+      FROM devoluciones
+      WHERE fecha >= ? AND fecha < ?
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
+    final row = rows.first;
+    return DevolucionesResumen(
+      cantidad: ((row['cantidad'] as num?) ?? 0).toInt(),
+      total: (row['total'] as num?)?.toDouble() ?? 0,
+      efectivo: (row['efectivo'] as num?)?.toDouble() ?? 0,
+      qr: (row['qr'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  Future<List<DevolucionReporte>> getDevoluciones(
+    DateTime desde,
+    DateTime hasta,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT d.pedido_id, d.fecha, d.monto, d.metodo_pago, d.motivo,
+             u.nombre AS usuario_nombre
+      FROM devoluciones d
+      INNER JOIN usuarios u ON u.id = d.usuario_id
+      WHERE d.fecha >= ? AND d.fecha < ?
+      ORDER BY d.fecha DESC, d.id DESC
+    ''',
+      [sqlDateTime(desde), sqlDateTime(hasta)],
+    );
+    return rows
+        .map(
+          (row) => DevolucionReporte(
+            pedidoId: row['pedido_id']! as int,
+            fecha: row['fecha']! as String,
+            usuarioNombre: row['usuario_nombre']! as String,
+            monto: (row['monto'] as num).toDouble(),
+            metodo: row['metodo_pago']! as String,
+            motivo: row['motivo'] as String?,
+          ),
+        )
+        .toList();
+  }
+
   Future<List<ProductoReporte>> getProductos(
     DateTime desde,
     DateTime hasta,
@@ -254,25 +345,27 @@ class ReportRepository {
     final rows = await db.rawQuery(
       '''
       WITH ventas_producto AS (
-        SELECT dp.nombre_producto AS nombre,
+        SELECT dp.nombre_producto ||
+                 CASE dp.modalidad_venta
+                   WHEN 'COMPLETO' THEN ' (completo)'
+                   WHEN 'SUELTO' THEN ' (suelto)'
+                   WHEN 'SOPA' THEN ' (suelta)'
+                   ELSE ''
+                 END AS nombre,
                SUM(dp.cantidad) AS cantidad,
-               SUM(dp.subtotal - CASE
-                 WHEN dp.modalidad_venta = 'COMPLETO'
-                   AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS'
-                 THEN dp.precio_sopa_unitario * dp.cantidad
-                 ELSE 0 END) AS ventas,
+               SUM(dp.subtotal) AS ventas,
                SUM(
-                 COALESCE(NULLIF(dp.costo_unitario, 0), COALESCE(pr.costo_unitario, 0))
-                 * dp.cantidad
+                 (
+                   COALESCE(NULLIF(dp.costo_unitario, 0), COALESCE(pr.costo_unitario, 0))
+                   + CASE WHEN dp.modalidad_venta = 'COMPLETO'
+                       THEN COALESCE(dp.costo_sopa_unitario, 0)
+                       ELSE 0 END
+                 ) * dp.cantidad
                ) AS costo,
                SUM(CASE WHEN dp.modalidad_venta = 'COMPLETO'
-                   AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS'
                    THEN dp.cantidad ELSE 0 END) AS completos,
-               SUM(CASE
-                 WHEN UPPER(TRIM(c.nombre)) IN ('PLATOS SUELTOS', 'SOPAS')
-                   AND NOT (dp.modalidad_venta = 'COMPLETO'
-                     AND UPPER(TRIM(c.nombre)) = 'PLATOS SUELTOS')
-                 THEN dp.cantidad ELSE 0 END) AS sueltos,
+               SUM(CASE WHEN dp.modalidad_venta IN ('SUELTO', 'SOPA')
+                   THEN dp.cantidad ELSE 0 END) AS sueltos,
                COALESCE(c.nombre, '') AS categoria_nombre,
                COALESCE(c.color, 4280391418) AS categoria_color
         FROM detalle_pedido dp
@@ -283,14 +376,16 @@ class ReportRepository {
           AND p.estado_entrega <> 'ANULADO'
           AND dp.es_componente = 0
           AND p.fecha >= ? AND p.fecha < ?
-        GROUP BY dp.nombre_producto, c.nombre, c.color
+        GROUP BY dp.nombre_producto, dp.modalidad_venta, c.nombre, c.color
 
         UNION ALL
 
-        SELECT dp.nombre_sopa AS nombre,
+        -- La sopa incluida en un completo se cuenta aparte, pero no suma
+        -- ingresos: el precio completo ya está en la línea del plato.
+        SELECT dp.nombre_sopa || ' (incluida)' AS nombre,
                SUM(dp.cantidad) AS cantidad,
-               SUM(dp.precio_sopa_unitario * dp.cantidad) AS ventas,
-               SUM(dp.costo_sopa_unitario * dp.cantidad) AS costo,
+               0 AS ventas,
+               0 AS costo,
                SUM(dp.cantidad) AS completos,
                0 AS sueltos,
                'SOPAS' AS categoria_nombre,
@@ -323,7 +418,7 @@ class ReportRepository {
              categoria_color
       FROM ventas_producto
       GROUP BY nombre, categoria_nombre, categoria_color
-      ORDER BY ventas DESC
+      ORDER BY ventas DESC, nombre
     ''',
       [
         sqlDateTime(desde),

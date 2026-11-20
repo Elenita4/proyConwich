@@ -29,3 +29,6 @@ String formatDateShort(DateTime value) =>
 
 String formatDateTimeShort(DateTime value) =>
     '${formatDateShort(value)} ${_two(value.hour)}:${_two(value.minute)}';
+
+String formatTimeShort(DateTime value) =>
+    '${_two(value.hour)}:${_two(value.minute)}';

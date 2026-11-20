@@ -16,7 +16,7 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   /// Versión de esquema actual. Subir junto con `onUpgrade`.
-  static const int schemaVersion = 18;
+  static const int schemaVersion = 19;
 
   static const String nombreArchivo = 'sazon_restaurante_v2.db';
 
@@ -102,6 +102,7 @@ class AppDatabase {
         await _migrarV15(db);
         await _migrarV17(db);
         await _migrarV18(db);
+        await _migrarV19(db);
         await _afterOpen(db);
       },
     );
@@ -113,6 +114,23 @@ class AppDatabase {
     await _seedCategorias(db);
     await _seedDefaultAdmin(db);
     await _seedAppMeta(db);
+    // El índice depende de `es_componente`, una columna que las bases antiguas
+    // reciben en `_migrarV13`. Por eso se crea aquí y no en `_createSchema`
+    // (que corre antes de las migraciones).
+    if (await _tieneColumna(db, 'detalle_pedido', 'es_componente')) {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_detalle_componente '
+        'ON detalle_pedido(pedido_id, es_componente)',
+      );
+    }
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_devoluciones_fecha '
+      'ON devoluciones(fecha)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_devoluciones_pedido '
+      'ON devoluciones(pedido_id)',
+    );
   }
 
   /// Categorías base del catálogo. Solo los productos de PLATOS SUELTOS pueden
@@ -146,6 +164,22 @@ class AppDatabase {
         whereArgs: [categoria['nombre']],
       );
     }
+    // Los combos se venden sin pasar por el menú del día, igual que las
+    // bebidas: la categoría queda marcada como siempre disponible.
+    await db.insert('categorias_producto', {
+      'nombre': 'COMBOS',
+      'color': 0xFFDB2777,
+      'parent_id': null,
+      'siempre_disponible': 1,
+      'orden': 6,
+      'activo': 1,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await db.update(
+      'categorias_producto',
+      {'parent_id': null, 'siempre_disponible': 1, 'activo': 1},
+      where: 'nombre = ? COLLATE NOCASE',
+      whereArgs: ['COMBOS'],
+    );
   }
 
   Future<void> _createSchema(Database db, int version) async {
@@ -251,6 +285,8 @@ class AppDatabase {
         stock_minimo REAL NOT NULL DEFAULT 0,
         costo_unitario REAL NOT NULL DEFAULT 0,
         activo INTEGER NOT NULL DEFAULT 1,
+        agotado INTEGER NOT NULL DEFAULT 0,
+        es_combo INTEGER NOT NULL DEFAULT 0,
         creado_en TEXT NOT NULL,
         FOREIGN KEY (categoria_id) REFERENCES categorias_producto(id)
       )
@@ -378,6 +414,8 @@ class AppDatabase {
         fondo_inicial REAL NOT NULL DEFAULT 0,
         efectivo_contado REAL,
         qr_verificado REAL,
+        sobrante REAL,
+        total_esperado REAL,
         estado TEXT NOT NULL DEFAULT 'ABIERTA' CHECK (estado IN ('ABIERTA','CERRADA')),
         observacion TEXT,
         UNIQUE (fecha, numero_turno),
@@ -442,6 +480,24 @@ class AppDatabase {
         metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
         estado TEXT NOT NULL DEFAULT 'CONFIRMADO' CHECK (estado IN ('CONFIRMADO','ANULADO')),
         referencia TEXT,
+        FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
+        FOREIGN KEY (caja_id) REFERENCES cajas(id),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      )
+    ''');
+
+    // Anulaciones y devoluciones: se guarda el rastro del dinero devuelto sin
+    // borrar la venta original. El pedido y sus pagos quedan marcados ANULADO.
+    batch.execute('''
+      CREATE TABLE IF NOT EXISTS devoluciones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_id INTEGER NOT NULL,
+        caja_id INTEGER NOT NULL,
+        usuario_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        monto REAL NOT NULL,
+        metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+        motivo TEXT,
         FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
         FOREIGN KEY (caja_id) REFERENCES cajas(id),
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
@@ -647,9 +703,8 @@ class AppDatabase {
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_menu_combos ON menu_dia_combos(menu_dia_id)',
     );
-    batch.execute(
-      'CREATE INDEX IF NOT EXISTS idx_detalle_componente ON detalle_pedido(pedido_id, es_componente)',
-    );
+    // `idx_detalle_componente` se crea en `_afterOpen`: depende de una columna
+    // que las bases antiguas reciben durante las migraciones.
     batch.execute(
       'CREATE INDEX IF NOT EXISTS idx_presentaciones_producto ON producto_presentaciones(producto_id)',
     );
@@ -1271,6 +1326,54 @@ class AppDatabase {
       }
     } catch (error) {
       debugPrint('No se pudo migrar el esquema v18: $error');
+    }
+  }
+
+  /// v19: arqueo de caja con sobrante, bandera de agotado en productos y
+  /// registro de anulaciones/devoluciones. Solo agrega columnas y tablas.
+  Future<void> _migrarV19(Database db) async {
+    try {
+      if (!await _tieneColumna(db, 'cajas', 'sobrante')) {
+        await db.execute('ALTER TABLE cajas ADD COLUMN sobrante REAL');
+      }
+      if (!await _tieneColumna(db, 'cajas', 'total_esperado')) {
+        await db.execute('ALTER TABLE cajas ADD COLUMN total_esperado REAL');
+      }
+      if (!await _tieneColumna(db, 'productos', 'agotado')) {
+        await db.execute(
+          'ALTER TABLE productos ADD COLUMN agotado INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tieneColumna(db, 'productos', 'es_combo')) {
+        await db.execute(
+          'ALTER TABLE productos ADD COLUMN es_combo INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS devoluciones (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pedido_id INTEGER NOT NULL,
+          caja_id INTEGER NOT NULL,
+          usuario_id INTEGER NOT NULL,
+          fecha TEXT NOT NULL,
+          monto REAL NOT NULL,
+          metodo_pago TEXT NOT NULL CHECK (metodo_pago IN ('EFECTIVO','QR')),
+          motivo TEXT,
+          FOREIGN KEY (pedido_id) REFERENCES pedidos(id),
+          FOREIGN KEY (caja_id) REFERENCES cajas(id),
+          FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_devoluciones_fecha '
+        'ON devoluciones(fecha)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_devoluciones_pedido '
+        'ON devoluciones(pedido_id)',
+      );
+    } catch (error) {
+      debugPrint('No se pudo migrar el esquema v19: $error');
     }
   }
 

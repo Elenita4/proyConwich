@@ -154,17 +154,15 @@ class _PrinterPageState extends State<PrinterPage> {
     try {
       await _printer.conectar(mac);
       if (!mounted) return;
-      setState(() => _estadoPrueba = 'Enviando prueba de impresión…');
-      // 1B 40 (init) + "CONWICH" + 0A 0A (dos líneas).
+      setState(
+        () => _estadoPrueba = 'Enviando prueba de impresión y corte…',
+      );
+      // Un solo buffer: init + "CONWICH" + dos líneas + avance + corte.
+      // Así la impresora imprime primero y corta después.
       await _printer.enviarBytes(const <int>[
         0x1B, 0x40,
         0x43, 0x4F, 0x4E, 0x57, 0x49, 0x43, 0x48,
         0x0A, 0x0A,
-      ]);
-      if (!mounted) return;
-      setState(() => _estadoPrueba = 'Enviando comando de corte…');
-      // 1B 64 03 (avanzar 3) + 1D 56 01 (corte parcial).
-      await _printer.enviarBytes(const <int>[
         0x1B, 0x64, 0x03, 0x1D, 0x56, 0x01,
       ]);
       if (!mounted) return;

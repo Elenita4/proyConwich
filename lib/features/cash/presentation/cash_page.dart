@@ -5,7 +5,10 @@ import 'package:flutter/material.dart';
 import '../../../core/backup/drive_backup_service.dart';
 import '../../../core/cash_repository.dart';
 import '../../../core/date_utils.dart';
+import '../../../core/printer/printer_service.dart';
+import '../../../core/receipt_service.dart';
 import '../../../core/session.dart';
+import '../../../data/database/app_database.dart';
 import '../../../ui/common.dart';
 
 class _CashData {
@@ -18,7 +21,7 @@ class _CashData {
 
   final Caja? caja;
   final CajaResumen? resumen;
-  final List<Caja> historial;
+  final List<CajaHistorial> historial;
   final int proximoTurno;
 }
 
@@ -40,8 +43,7 @@ class _CashPageState extends State<CashPage> {
   final _repository = CashRepository();
   late Future<_CashData> _future;
   late final TextEditingController _fondo;
-  late final TextEditingController _efectivo;
-  late final TextEditingController _qr;
+  late final TextEditingController _sobrante;
   late final TextEditingController _observacion;
   late DateTime _fecha;
   int? _resumenCajaId;
@@ -53,8 +55,7 @@ class _CashPageState extends State<CashPage> {
     final now = DateTime.now();
     _fecha = DateTime(now.year, now.month, now.day);
     _fondo = TextEditingController(text: '0');
-    _efectivo = TextEditingController();
-    _qr = TextEditingController();
+    _sobrante = TextEditingController(text: '0');
     _observacion = TextEditingController();
     _reload();
   }
@@ -68,8 +69,7 @@ class _CashPageState extends State<CashPage> {
   @override
   void dispose() {
     _fondo.dispose();
-    _efectivo.dispose();
-    _qr.dispose();
+    _sobrante.dispose();
     _observacion.dispose();
     super.dispose();
   }
@@ -87,13 +87,12 @@ class _CashPageState extends State<CashPage> {
       resumen = await _repository.getResumen(caja.id);
       if (_resumenCajaId != caja.id) {
         _resumenCajaId = caja.id;
-        _efectivo.text = resumen.esperadoEfectivo.toStringAsFixed(2);
-        _qr.text = resumen.esperadoQr.toStringAsFixed(2);
+        _sobrante.text = '0';
       }
     } else {
       _resumenCajaId = null;
     }
-    final historial = await _repository.getCajas();
+    final historial = await _repository.getCajasDelDia(_fecha);
     final proximoTurno = await _repository.proximoTurno(_fecha);
     return _CashData(
       caja: caja,
@@ -133,20 +132,23 @@ class _CashPageState extends State<CashPage> {
     final caja = data.caja;
     final resumen = data.resumen;
     if (caja == null || resumen == null) return;
-    final errorEfectivo = validateDecimalAmount(
-      _efectivo.text,
-      label: 'El efectivo contado',
+    final error = validateSignedAmount(
+      _sobrante.text,
+      label: 'El sobrante del turno',
     );
-    final errorQr = validateDecimalAmount(_qr.text, label: 'El QR verificado');
-    if (errorEfectivo != null || errorQr != null) {
-      showAppMessage(context, errorEfectivo ?? errorQr!, error: true);
+    if (error != null) {
+      showAppMessage(context, error, error: true);
       return;
     }
+    final sobrante = parseAmount(_sobrante.text);
     final confirmado = await confirmAction(
       context,
       title: 'Cerrar caja',
       message:
-          'Se cerrará la caja del ${caja.turnoLabel}. El menú del día seguirá abierto para los próximos turnos. ¿Continuar?',
+          'Se cerrará la caja del ${caja.turnoLabel}. '
+          'Total esperado: ${formatMoney(resumen.totalEsperado)} · '
+          'Sobrante: ${formatMoney(sobrante)}. '
+          'El menú del día seguirá abierto para los próximos turnos. ¿Continuar?',
       confirmLabel: 'Cerrar caja',
       destructive: true,
     );
@@ -155,23 +157,116 @@ class _CashPageState extends State<CashPage> {
     try {
       await _repository.cerrarCaja(
         cajaId: caja.id,
-        efectivoContado: parseAmount(_efectivo.text),
-        qrVerificado: parseAmount(_qr.text),
         usuarioId: widget.usuario.id,
+        sobrante: sobrante,
         observacion: _observacion.text,
       );
       if (!mounted) return;
       setState(() {
         _saving = false;
         _observacion.clear();
+        _sobrante.text = '0';
         _reload();
       });
       showAppMessage(context, 'Caja cerrada correctamente.');
       _respaldarDriveEnSegundoPlano();
+      await _ofrecerImprimirMovimiento(caja, resumen, sobrante);
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
       showAppMessage(context, 'No se pudo cerrar la caja: $error', error: true);
+    }
+  }
+
+  Future<void> _ofrecerImprimirMovimiento(
+    Caja caja,
+    CajaResumen resumen,
+    double sobrante,
+  ) async {
+    final imprimir = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Movimiento del turno'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LabelValue(
+              label: 'Ventas efectivo',
+              value: formatMoney(resumen.ventasEfectivo),
+            ),
+            LabelValue(
+              label: 'Ventas QR',
+              value: formatMoney(resumen.ventasQr),
+            ),
+            LabelValue(
+              label: 'Salida efectivo',
+              value: formatMoney(resumen.salidasEfectivo),
+            ),
+            LabelValue(
+              label: 'Sobrante del turno',
+              value: formatMoney(sobrante),
+            ),
+            const Divider(height: 18),
+            LabelValue(
+              label: 'Total esperado',
+              value: formatMoney(resumen.totalEsperado),
+              strong: true,
+            ),
+            const SizedBox(height: 8),
+            const Text('¿Deseas imprimir el movimiento del turno?'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.print_outlined),
+            label: const Text('Imprimir'),
+          ),
+        ],
+      ),
+    );
+    if (imprimir != true) return;
+    final meta = await AppDatabase.instance.leerAppMeta();
+    final mac = (meta?['impresora_mac'] as String?) ?? '';
+    final printer = PrinterService();
+    if (mac.isNotEmpty && printer.disponible) {
+      try {
+        await printer.imprimirMovimientoTurno(
+          caja: caja,
+          resumen: resumen,
+          sobrante: sobrante,
+          cajero: widget.usuario.nombre,
+          mac: mac,
+        );
+        return;
+      } catch (error) {
+        if (!mounted) return;
+        showAppMessage(
+          context,
+          'No se pudo imprimir por Bluetooth: $error. Se abrirá el PDF.',
+          error: true,
+        );
+      }
+    }
+    try {
+      await ReceiptService().imprimirMovimientoTurno(
+        caja: caja,
+        resumen: resumen,
+        sobrante: sobrante,
+        cajero: widget.usuario.nombre,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo generar el movimiento del turno: $error',
+        error: true,
+      );
     }
   }
 
@@ -265,7 +360,7 @@ class _CashPageState extends State<CashPage> {
                   _cajaAbierta(context, data),
                 const SizedBox(height: 22),
                 Text(
-                  'Historial de cajas (${data.historial.length})',
+                  'Historial de cajas de hoy (${data.historial.length})',
                   style: Theme.of(context).textTheme.titleMedium
                       ?.copyWith(fontWeight: FontWeight.w700),
                 ),
@@ -274,9 +369,9 @@ class _CashPageState extends State<CashPage> {
                   const Text('Todavía no hay cajas registradas.')
                 else
                   ...data.historial.map(
-                    (caja) => Padding(
+                    (item) => Padding(
                       padding: const EdgeInsets.only(bottom: 8),
-                      child: _CajaHistorialRow(caja: caja),
+                      child: _CajaHistorialRow(item: item),
                     ),
                   ),
               ],
@@ -498,9 +593,9 @@ class _CashPageState extends State<CashPage> {
                     color: scheme.secondary,
                   ),
                   StatCard(
-                    label: 'Efectivo esperado',
-                    value: formatMoney(resumen.esperadoEfectivo),
-                    caption: 'Fondo + ventas − salidas',
+                    label: 'Total esperado del turno',
+                    value: formatMoney(resumen.totalEsperado),
+                    caption: 'Efectivo + QR − salidas',
                     icon: Icons.calculate_outlined,
                     color: scheme.secondary,
                   ),
@@ -560,13 +655,8 @@ class _CashPageState extends State<CashPage> {
           ),
           const Divider(height: 22),
           LabelValue(
-            label: 'Esperado efectivo',
-            value: formatMoney(resumen.esperadoEfectivo),
-            strong: true,
-          ),
-          LabelValue(
-            label: 'Esperado QR',
-            value: formatMoney(resumen.esperadoQr),
+            label: 'Total esperado del turno',
+            value: formatMoney(resumen.totalEsperado),
             strong: true,
           ),
         ],
@@ -588,32 +678,37 @@ class _CashPageState extends State<CashPage> {
           ),
           const SizedBox(height: 10),
           TextField(
-            controller: _efectivo,
-            inputFormatters: [decimalAmountInputFormatter],
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            controller: _sobrante,
+            inputFormatters: [signedDecimalAmountInputFormatter],
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
             decoration: appInput(
-              label: 'Efectivo contado (Bs)',
+              label: 'Sobrante del turno (Bs)',
               icon: Icons.payments_outlined,
+              hint: 'Positivo si sobra, negativo si falta',
             ),
             onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 8),
-          _Diferencia(
-            diferencia: parseAmount(_efectivo.text) - resumen.esperadoEfectivo,
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _qr,
-            inputFormatters: [decimalAmountInputFormatter],
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: appInput(
-              label: 'QR verificado (Bs)',
-              icon: Icons.qr_code_2,
-            ),
-            onChanged: (_) => setState(() {}),
+          LabelValue(
+            label: 'Total esperado',
+            value: formatMoney(resumen.totalEsperado),
+            strong: true,
           ),
-          const SizedBox(height: 8),
-          _Diferencia(diferencia: parseAmount(_qr.text) - resumen.esperadoQr),
+          LabelValue(
+            label: 'Sobrante / faltante',
+            value: formatMoney(parseAmount(_sobrante.text)),
+          ),
+          const Divider(height: 18),
+          LabelValue(
+            label: 'Total en caja',
+            value: formatMoney(
+              resumen.totalEsperado + parseAmount(_sobrante.text),
+            ),
+            strong: true,
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: _observacion,
@@ -747,78 +842,69 @@ class _SalidaDialogState extends State<_SalidaDialog> {
   }
 }
 
-class _Diferencia extends StatelessWidget {
-  const _Diferencia({required this.diferencia});
-
-  final double diferencia;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final color = diferencia == 0
-        ? scheme.onSurfaceVariant
-        : diferencia > 0
-        ? scheme.primary
-        : scheme.error;
-    return Row(
-      children: [
-        Text(
-          diferencia == 0
-              ? 'Sin diferencia'
-              : diferencia > 0
-              ? 'Sobrante'
-              : 'Faltante',
-          style: TextStyle(color: color),
-        ),
-        const Spacer(),
-        Text(
-          formatMoney(diferencia.abs()),
-          style: TextStyle(color: color, fontWeight: FontWeight.w700),
-        ),
-      ],
-    );
-  }
-}
-
 class _CajaHistorialRow extends StatelessWidget {
-  const _CajaHistorialRow({required this.caja});
+  const _CajaHistorialRow({required this.item});
 
-  final Caja caja;
+  final CajaHistorial item;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final caja = item.caja;
+    final resumen = item.resumen;
+    final rol = Perfil.nombres[caja.perfilApertura] ?? caja.perfilApertura;
+    final cierre = parseSqlDateTime(caja.fechaCierre);
     final icono = Icon(
       caja.abierta ? Icons.lock_open : Icons.check_circle_outline,
       color: caja.abierta ? scheme.tertiary : scheme.primary,
     );
-    final fecha = Text(
-      '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turnoLabel}',
-      style: const TextStyle(fontWeight: FontWeight.w600),
+    final detalle = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '${formatDateShort(parseSqlDate(caja.fecha))} · ${caja.turnoLabel}',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        Text(
+          'Cajero: ${caja.usuarioApertura}${rol.isEmpty ? '' : ' · $rol'}',
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        ),
+        Text(
+          'Efectivo ${formatMoney(resumen.ventasEfectivo)} · '
+          'QR ${formatMoney(resumen.ventasQr)} · '
+          'Salida ${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        ),
+      ],
     );
-    final cajero = Text(
-      'Cajero: ${caja.usuarioApertura}',
-      style: TextStyle(color: scheme.onSurfaceVariant),
-    );
-    final fondo = Text(
-      'Fondo ${formatMoney(caja.fondoInicial)}',
-      style: TextStyle(color: scheme.onSurfaceVariant),
-    );
-    final cierre = Text(
-      caja.fechaCierre == null
-          ? 'Sin cerrar'
-          : 'Cierre ${formatDateTimeText(caja.fechaCierre!)}',
-      style: TextStyle(color: scheme.onSurfaceVariant),
-    );
-    final contado = caja.efectivoContado == null
-        ? null
-        : Text(
-            'Efectivo contado ${formatMoney(caja.efectivoContado!)}',
+    final totales = Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          'Esperado ${formatMoney(resumen.totalEsperado)}',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        if (!caja.abierta)
+          Text(
+            'Sobrante ${formatMoney(caja.sobrante ?? 0)}',
+            style: TextStyle(
+              color: (caja.sobrante ?? 0) < 0 ? scheme.error : scheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        if (cierre != null)
+          Text(
+            'Cierre ${formatTimeShort(cierre)}',
             style: TextStyle(color: scheme.onSurfaceVariant),
-          );
+          ),
+      ],
+    );
     final estado = Chip(
-      label: Text(caja.estado),
+      label: Text(caja.abierta ? 'ABIERTA' : 'CERRADA'),
       side: BorderSide.none,
+      backgroundColor: caja.abierta
+          ? scheme.primaryContainer
+          : scheme.surfaceContainerHighest,
       visualDensity: VisualDensity.compact,
     );
     return AppCard(
@@ -830,12 +916,10 @@ class _CajaHistorialRow extends StatelessWidget {
               children: [
                 icono,
                 const SizedBox(width: 12),
-                Expanded(flex: 2, child: fecha),
-                Expanded(flex: 2, child: cajero),
-                Expanded(flex: 2, child: fondo),
-                Expanded(flex: 2, child: cierre),
-                ?contado,
-                const SizedBox(width: 10),
+                Expanded(child: detalle),
+                const SizedBox(width: 12),
+                totales,
+                const SizedBox(width: 12),
                 estado,
               ],
             );
@@ -847,15 +931,12 @@ class _CajaHistorialRow extends StatelessWidget {
                 children: [
                   icono,
                   const SizedBox(width: 10),
-                  Expanded(child: fecha),
+                  Expanded(child: detalle),
                   estado,
                 ],
               ),
-              const SizedBox(height: 4),
-              cajero,
-              fondo,
-              cierre,
-              ?contado,
+              const SizedBox(height: 6),
+              totales,
             ],
           );
         },

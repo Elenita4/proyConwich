@@ -140,12 +140,14 @@ void main() {
 
     expect(find.text('Plato uno'), findsWidgets);
     expect(find.text('Bebida dos'), findsNothing);
-    expect(find.text('Productos fuera del menú de hoy'), findsOneWidget);
+    expect(find.text('Productos agotados o fuera del menú'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.ensureVisible(find.text('Productos fuera del menú de hoy'));
+    await tester.ensureVisible(
+      find.text('Productos agotados o fuera del menú'),
+    );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Productos fuera del menú de hoy'));
+    await tester.tap(find.text('Productos agotados o fuera del menú'));
     await tester.pumpAndSettle();
     expect(find.text('Bebida dos'), findsWidgets);
     expect(tester.takeException(), isNull);

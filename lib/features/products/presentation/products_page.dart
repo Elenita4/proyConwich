@@ -122,6 +122,23 @@ class _ProductsPageState extends State<ProductsPage> {
     }
   }
 
+  Future<void> _openCombo() async {
+    final data = await _future;
+    if (!mounted) return;
+    final saved = await showDialog<int>(
+      context: context,
+      builder: (_) => _ComboDialog(
+        repository: _repository,
+        productos: data.productos.where((producto) => producto.activo).toList(),
+        categorias: data.categorias,
+      ),
+    );
+    if (saved != null && mounted) {
+      setState(_reload);
+      showAppMessage(context, 'Combo creado correctamente.');
+    }
+  }
+
   Future<void> _toggle(Producto producto, bool activo) async {
     await _repository.setProductoActivo(producto.id!, activo);
     if (!mounted) return;
@@ -204,6 +221,11 @@ class _ProductsPageState extends State<ProductsPage> {
                 title: 'Productos',
                 subtitle: 'Platos y bebidas. La receta es opcional: si la configuras, descuenta insumos; si no, el producto se vende independiente. Los precios solo se cambian aquí y las categorías se crean desde esta misma pantalla.',
                 actions: [
+                  OutlinedButton.icon(
+                    onPressed: snapshot.hasData ? _openCombo : null,
+                    icon: const Icon(Icons.fastfood_outlined),
+                    label: const Text('Nuevo combo'),
+                  ),
                   FilledButton.icon(
                     onPressed: snapshot.hasData ? () => _openForm() : null,
                     icon: const Icon(Icons.add),
@@ -288,7 +310,10 @@ class _ProductsPageState extends State<ProductsPage> {
                     child: _ProductRow(
                       producto: producto,
                       onEdit: () => _openForm(producto),
-                      onRecipe: producto.esVentaDirecta || producto.esCompuesto
+                      onRecipe:
+                          producto.esVentaDirecta ||
+                              producto.esCompuesto ||
+                              producto.esCombo
                           ? null
                           : () => _openRecipe(producto),
                       onAjustarStock: producto.esDirecto
@@ -356,6 +381,8 @@ class _ProductRow extends StatelessWidget {
     );
     final etiqueta = producto.esVentaDirecta
         ? 'Venta directa'
+        : producto.esCombo
+        ? 'Combo'
         : producto.esCompuesto
         ? 'Almuerzo o combo armado'
         : producto.esDirecto
@@ -380,6 +407,14 @@ class _ProductRow extends StatelessWidget {
                 side: BorderSide.none,
                 visualDensity: VisualDensity.compact,
                 backgroundColor: scheme.primaryContainer,
+                labelStyle: Theme.of(context).textTheme.labelSmall,
+              ),
+            if (producto.esCombo)
+              Chip(
+                label: const Text('Combo'),
+                side: BorderSide.none,
+                visualDensity: VisualDensity.compact,
+                backgroundColor: scheme.tertiaryContainer,
                 labelStyle: Theme.of(context).textTheme.labelSmall,
               ),
             if (producto.esCompuesto)
@@ -502,6 +537,323 @@ class _ProductRow extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _ComboDialog extends StatefulWidget {
+  const _ComboDialog({
+    required this.repository,
+    required this.productos,
+    required this.categorias,
+  });
+
+  final CatalogRepository repository;
+  final List<Producto> productos;
+  final List<CategoriaProducto> categorias;
+
+  @override
+  State<_ComboDialog> createState() => _ComboDialogState();
+}
+
+class _ComboDialogState extends State<_ComboDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _picker = ImagePicker();
+  late final TextEditingController _nombre;
+  late final TextEditingController _precio;
+  late List<CategoriaProducto> _categorias;
+  late int? _categoriaId;
+  final _seleccionados = <int>{};
+  Uint8List? _imagen;
+  bool _saving = false;
+  String? _error;
+
+  bool get _hayCamara {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _nombre = TextEditingController();
+    _precio = TextEditingController();
+    _categorias = List.of(widget.categorias);
+    final combos = _categorias.where(
+      (categoria) => categoria.nombre.trim().toUpperCase() == 'COMBOS',
+    );
+    _categoriaId = combos.isEmpty
+        ? (_categorias.isEmpty ? null : _categorias.first.id)
+        : combos.first.id;
+  }
+
+  @override
+  void dispose() {
+    _nombre.dispose();
+    _precio.dispose();
+    super.dispose();
+  }
+
+  double get _base => widget.productos
+      .where((producto) => _seleccionados.contains(producto.id))
+      .fold<double>(0, (suma, producto) => suma + producto.precio);
+
+  void _alternar(Producto producto) {
+    setState(() {
+      if (!_seleccionados.remove(producto.id)) {
+        _seleccionados.add(producto.id!);
+        // Se toma la imagen del primer producto seleccionado; luego se puede
+        // reemplazar por una foto o una imagen de la galería.
+        if (_imagen == null && producto.imagen != null) {
+          _imagen = producto.imagen;
+        }
+      }
+      if (_seleccionados.isEmpty) _imagen = null;
+    });
+  }
+
+  Future<void> _cargarImagen(ImageSource source) async {
+    try {
+      final archivo = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 80,
+      );
+      if (archivo == null) return;
+      final bytes = await archivo.readAsBytes();
+      if (!mounted) return;
+      setState(() => _imagen = bytes);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo cargar la imagen: $error');
+    }
+  }
+
+  Future<void> _guardar() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_seleccionados.isEmpty) {
+      setState(() => _error = 'Selecciona al menos un producto para el combo.');
+      return;
+    }
+    if (_categoriaId == null) {
+      setState(() => _error = 'Selecciona una categoría.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final id = await widget.repository.crearCombo(
+        nombre: _nombre.text,
+        categoriaId: _categoriaId!,
+        precio: parseAmount(_precio.text),
+        componenteIds: _seleccionados.toList(),
+        imagen: _imagen,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, id);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'No se pudo crear el combo: $error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final vistaPrevia = Container(
+      height: 130,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF9F0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _imagen == null
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.image_outlined,
+                  size: 30,
+                  color: scheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Sin imagen (se usa la del producto)',
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
+            )
+          : Image.memory(_imagen!, fit: BoxFit.cover, gaplessPlayback: true),
+    );
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: const Text('Nuevo combo'),
+      content: DialogSurface(
+        maxWidth: 620,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _nombre,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: appInput(
+                    label: 'Nombre del combo',
+                    hint: 'Ej. Combo familiar',
+                  ),
+                  validator: (value) => (value ?? '').trim().isEmpty
+                      ? 'El nombre es obligatorio.'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _precio,
+                  inputFormatters: [decimalAmountInputFormatter],
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: appInput(
+                    label: 'Precio del combo (Bs)',
+                    hint: _base > 0
+                        ? 'Suma de productos: ${formatMoney(_base)}'
+                        : 'Precio final del combo',
+                    icon: Icons.sell_outlined,
+                  ),
+                  validator: (value) => validateDecimalAmount(
+                    value,
+                    allowZero: false,
+                    label: 'El precio',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: _categoriaId,
+                  isExpanded: true,
+                  decoration: appInput(label: 'Categoría'),
+                  items: _categorias
+                      .where((categoria) => categoria.id != null)
+                      .map(
+                        (categoria) => DropdownMenuItem<int>(
+                          value: categoria.id,
+                          child: Text(
+                            categoria.nombre,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setState(() => _categoriaId = value),
+                ),
+                const SizedBox(height: 12),
+                vistaPrevia,
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (_hayCamara)
+                      OutlinedButton.icon(
+                        onPressed: () => _cargarImagen(ImageSource.camera),
+                        icon: const Icon(Icons.photo_camera_outlined),
+                        label: const Text('Tomar foto'),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: () => _cargarImagen(ImageSource.gallery),
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: Text(_hayCamara ? 'Elegir imagen' : 'Buscar imagen'),
+                    ),
+                    if (_imagen != null)
+                      TextButton.icon(
+                        onPressed: () => setState(() => _imagen = null),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Quitar'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Productos del combo',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text(
+                      '${_seleccionados.length} seleccionado(s)',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: widget.productos
+                        .map(
+                          (producto) => CheckboxListTile(
+                            dense: true,
+                            value: _seleccionados.contains(producto.id),
+                            onChanged: (_) => _alternar(producto),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            secondary: producto.imagen != null
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.memory(
+                                      producto.imagen!,
+                                      width: 40,
+                                      height: 40,
+                                      fit: BoxFit.cover,
+                                      gaplessPlayback: true,
+                                    ),
+                                  )
+                                : Icon(
+                                    Icons.restaurant,
+                                    color: Color(producto.categoriaColor),
+                                  ),
+                            title: Text(producto.nombre),
+                            subtitle: Text(
+                              '${producto.categoriaNombre} · '
+                              '${formatMoney(producto.precio)}',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_error!, style: TextStyle(color: scheme.error)),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _guardar,
+          child: Text(_saving ? 'Guardando…' : 'Crear combo'),
+        ),
+      ],
     );
   }
 }

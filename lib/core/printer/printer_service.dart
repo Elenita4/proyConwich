@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../../data/database/app_database.dart';
+import '../cash_repository.dart';
 import '../date_utils.dart';
 import '../sales_repository.dart';
 
@@ -38,13 +39,13 @@ class PrinterService {
   );
   static const int _ancho = 48;
 
-  // Comandos exactos verificados en la Golden Sky GS-FJ80M-UB.
-  static const List<int> _testTexto = <int>[
+  // Comando exacto verificado en la Golden Sky GS-FJ80M-UB. Se envía en un
+  // único buffer para que la impresora procese primero el texto y luego el
+  // avance/corte (con dos envíos separados el corte podía adelantarse).
+  static const List<int> _testComando = <int>[
     0x1B, 0x40, // ESC @ inicializar
     0x43, 0x4F, 0x4E, 0x57, 0x49, 0x43, 0x48, // CONWICH
     0x0A, 0x0A, // dos líneas
-  ];
-  static const List<int> _testCorte = <int>[
     0x1B, 0x64, 0x03, // avanzar tres líneas
     0x1D, 0x56, 0x01, // corte parcial
   ];
@@ -166,12 +167,34 @@ class PrinterService {
     );
   }
 
-  /// Prueba real: imprime "CONWICH" y luego avanza y corta el papel.
+  /// Imprime el resumen del cierre de caja con la misma térmica que las notas.
+  Future<void> imprimirMovimientoTurno({
+    required Caja caja,
+    required CajaResumen resumen,
+    required double sobrante,
+    required String cajero,
+    required String mac,
+  }) async {
+    final meta = await AppDatabase.instance.leerAppMeta();
+    final negocio = (meta?['nombre_negocio'] as String?) ?? 'Conwich';
+    await _enviar(
+      _construirMovimiento(
+        caja: caja,
+        resumen: resumen,
+        sobrante: sobrante,
+        cajero: cajero,
+        negocio: negocio,
+      ),
+      mac,
+    );
+  }
+
+  /// Prueba real: imprime "CONWICH" y luego avanza y corta el papel, todo en
+  /// un solo envío para conservar el orden.
   Future<void> imprimirPrueba({required String mac}) async {
     await conectar(mac);
     try {
-      await enviarBytes(_testTexto);
-      await enviarBytes(_testCorte);
+      await enviarBytes(_testComando);
     } finally {
       await desconectar();
     }
@@ -206,8 +229,7 @@ class PrinterService {
       return pasos;
     }
     try {
-      await enviarBytes(_testTexto);
-      await enviarBytes(_testCorte);
+      await enviarBytes(_testComando);
       pasos.add('OK · Prueba enviada (verifica el papel y el corte)');
     } catch (error) {
       pasos.add('FALLA · Envío: ${_mensaje(error)}');
@@ -236,12 +258,6 @@ class PrinterService {
         ? pedido.fecha
         : formatDateTimeShort(fecha);
 
-    double sumar(String metodo) => detalle.pagos
-        .where((pago) => pago.metodo == metodo && pago.estado == 'CONFIRMADO')
-        .fold<double>(0, (suma, pago) => suma + pago.monto);
-    final efectivo = sumar('EFECTIVO');
-    final qr = sumar('QR');
-
     final b = _Ticket();
     b.init();
     b.alignCenter();
@@ -261,19 +277,10 @@ class PrinterService {
       b.line(_fila('Referencia', pedido.referencia!, _ancho));
     }
     b.line(b.separador(_ancho));
+    // La nota que se entrega al cliente no lleva precios: solo la lista.
     for (final linea in detalle.lineas.where((l) => !l.esComponente)) {
-      final nombre =
-          '${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}';
-      b.line(_fila(nombre, formatMoney(linea.subtotal), _ancho));
+      b.line('${_cantidad(linea.cantidad)} x ${linea.nombreParaMostrar}');
     }
-    b.line(b.separador(_ancho));
-    b.bold(true);
-    b.line(_fila('TOTAL', formatMoney(pedido.total), _ancho));
-    b.bold(false);
-    if (efectivo > 0) {
-      b.line(_fila('Efectivo', formatMoney(efectivo), _ancho));
-    }
-    if (qr > 0) b.line(_fila('QR', formatMoney(qr), _ancho));
     b.line(b.separador(_ancho));
     b.alignCenter();
     b.line('Gracias por su compra');
@@ -286,6 +293,63 @@ class PrinterService {
   String _cantidad(double value) {
     if (value == value.roundToDouble()) return value.toStringAsFixed(0);
     return value.toStringAsFixed(2);
+  }
+
+  Uint8List _construirMovimiento({
+    required Caja caja,
+    required CajaResumen resumen,
+    required double sobrante,
+    required String cajero,
+    required String negocio,
+  }) {
+    final b = _Ticket();
+    b.init();
+    b.alignCenter();
+    b.big(true);
+    b.line(_truncar(negocio, 24));
+    b.big(false);
+    b.bold(true);
+    b.line('MOVIMIENTO DE TURNO');
+    b.bold(false);
+    b.alignLeft();
+    b.line(b.separador(_ancho));
+    b.line(_fila('Turno', caja.turnoLabel, _ancho));
+    b.line(_fila('Fecha', formatDateShort(parseSqlDate(caja.fecha)), _ancho));
+    b.line(_fila('Cajero', cajero, _ancho));
+    b.line(b.separador(_ancho));
+    b.line(
+      _fila('Ventas efectivo', formatMoney(resumen.ventasEfectivo), _ancho),
+    );
+    b.line(_fila('Ventas QR', formatMoney(resumen.ventasQr), _ancho));
+    b.line(
+      _fila('Salida efectivo', formatMoney(resumen.salidasEfectivo), _ancho),
+    );
+    if (resumen.salidasQr > 0) {
+      b.line(_fila('Salida QR', formatMoney(resumen.salidasQr), _ancho));
+    }
+    b.line(
+      _fila('Sobrante del turno', formatMoney(sobrante), _ancho),
+    );
+    b.line(b.separador(_ancho));
+    b.bold(true);
+    b.line(
+      _fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), _ancho),
+    );
+    b.line(
+      _fila(
+        'TOTAL EN CAJA',
+        formatMoney(resumen.totalEsperado + sobrante),
+        _ancho,
+      ),
+    );
+    b.bold(false);
+    b.line(b.separador(_ancho));
+    b.alignCenter();
+    b.line('Gracias por su trabajo');
+    b.alignLeft();
+    b.feed(2);
+    b.cut();
+    return b.toBytes();
   }
 }
 

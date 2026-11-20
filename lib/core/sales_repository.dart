@@ -108,7 +108,6 @@ class Pedido {
   final int? menuDiaId;
   final String? observacion;
 
-  double get saldo => (total - pagado).clamp(0, double.infinity);
   bool get pagadoCompleto => estadoPago == 'PAGADO';
   bool get anulado => estadoPago == 'ANULADO' || estadoEntrega == 'ANULADO';
 }
@@ -175,6 +174,26 @@ class PedidoDetalle {
   final Pedido pedido;
   final List<PedidoLinea> lineas;
   final List<Pago> pagos;
+}
+
+/// Rastro del dinero devuelto al anular una venta. La venta original no se
+/// borra: queda marcada como ANULADA y esta fila explica la devolución.
+class Devolucion {
+  const Devolucion({
+    required this.id,
+    required this.monto,
+    required this.metodo,
+    required this.fecha,
+    this.motivo,
+    this.usuarioNombre,
+  });
+
+  final int id;
+  final double monto;
+  final String metodo;
+  final String fecha;
+  final String? motivo;
+  final String? usuarioNombre;
 }
 
 class SalesRepository {
@@ -460,7 +479,7 @@ class SalesRepository {
         pedido.pagado +
         validos.fold<double>(0, (sum, pago) => sum + pago.monto);
     if (nuevoPagado > pedido.total + 0.05) {
-      throw StateError('El pago supera el saldo del pedido.');
+      throw StateError('El pago supera el total del pedido.');
     }
     final ahora = sqlNow();
     await db.transaction((txn) async {
@@ -489,9 +508,57 @@ class SalesRepository {
     });
   }
 
-  Future<void> anularPedido(int pedidoId) async {
+  /// Anula una venta sin borrarla. Marca el pedido y sus pagos como ANULADO,
+  /// anula los consumos/faltantes y registra la devolución del dinero por
+  /// método de pago. Es idempotente: si ya estaba anulada, no hace nada.
+  Future<void> anularPedido(
+    int pedidoId, {
+    int? usuarioId,
+    String? motivo,
+  }) async {
     final db = await AppDatabase.instance.database;
+    final pedidoRows = await db.query(
+      'pedidos',
+      columns: ['usuario_id', 'caja_id', 'estado_pago', 'estado_entrega'],
+      where: 'id = ?',
+      whereArgs: [pedidoId],
+      limit: 1,
+    );
+    if (pedidoRows.isEmpty) throw StateError('El pedido no existe.');
+    final pedido = pedidoRows.first;
+    final estadoPago = pedido['estado_pago'] as String?;
+    final estadoEntrega = pedido['estado_entrega'] as String?;
+    if (estadoPago == 'ANULADO' || estadoEntrega == 'ANULADO') return;
+
+    final usuario = usuarioId ?? (pedido['usuario_id'] as num).toInt();
+    final cajaId = (pedido['caja_id'] as num).toInt();
+    final pagos = await db.query(
+      'pagos',
+      columns: ['monto', 'metodo_pago'],
+      where: "pedido_id = ? AND estado = 'CONFIRMADO'",
+      whereArgs: [pedidoId],
+    );
+    final devolucionesPorMetodo = <String, double>{};
+    for (final pago in pagos) {
+      final metodo = pago['metodo_pago'] as String;
+      devolucionesPorMetodo[metodo] =
+          (devolucionesPorMetodo[metodo] ?? 0) +
+          (pago['monto'] as num).toDouble();
+    }
+    final ahora = sqlNow();
     await db.transaction((txn) async {
+      for (final entry in devolucionesPorMetodo.entries) {
+        if (entry.value <= 0) continue;
+        await txn.insert('devoluciones', {
+          'pedido_id': pedidoId,
+          'caja_id': cajaId,
+          'usuario_id': usuario,
+          'fecha': ahora,
+          'monto': entry.value,
+          'metodo_pago': entry.key,
+          'motivo': _limpiar(motivo),
+        });
+      }
       await txn.update(
         'pedidos',
         {'estado_pago': 'ANULADO', 'estado_entrega': 'ANULADO'},
@@ -517,6 +584,32 @@ class SalesRepository {
         whereArgs: [pedidoId],
       );
     });
+  }
+
+  Future<List<Devolucion>> getDevolucionesPedido(int pedidoId) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT d.*, u.nombre AS usuario_nombre
+      FROM devoluciones d
+      INNER JOIN usuarios u ON u.id = d.usuario_id
+      WHERE d.pedido_id = ?
+      ORDER BY d.id
+    ''',
+      [pedidoId],
+    );
+    return rows
+        .map(
+          (row) => Devolucion(
+            id: row['id']! as int,
+            monto: (row['monto'] as num).toDouble(),
+            metodo: row['metodo_pago']! as String,
+            fecha: row['fecha']! as String,
+            motivo: row['motivo'] as String?,
+            usuarioNombre: row['usuario_nombre'] as String?,
+          ),
+        )
+        .toList();
   }
 
   Future<void> marcarEntrega(int pedidoId, String estado) async {

@@ -12,10 +12,14 @@ class Caja {
     required this.fondoInicial,
     this.efectivoContado,
     this.qrVerificado,
+    this.sobrante,
+    this.totalEsperado,
     required this.fechaApertura,
     this.fechaCierre,
     required this.usuarioApertura,
     this.usuarioCierre,
+    this.perfilApertura = '',
+    this.perfilCierre,
   });
 
   final int id;
@@ -25,10 +29,18 @@ class Caja {
   final double fondoInicial;
   final double? efectivoContado;
   final double? qrVerificado;
+
+  /// Diferencia ingresada al cerrar: positiva = sobrante, negativa = faltante.
+  final double? sobrante;
+
+  /// Total esperado congelado al cerrar la caja.
+  final double? totalEsperado;
   final String fechaApertura;
   final String? fechaCierre;
   final String usuarioApertura;
   final String? usuarioCierre;
+  final String perfilApertura;
+  final String? perfilCierre;
 
   bool get abierta => estado == 'ABIERTA';
   String get turnoLabel => 'Turno $numeroTurno';
@@ -45,6 +57,7 @@ class CajaResumen {
     required this.esperadoQr,
     this.efectivoContado,
     this.qrVerificado,
+    this.sobrante,
   });
 
   final double fondoInicial;
@@ -56,11 +69,20 @@ class CajaResumen {
   final double esperadoQr;
   final double? efectivoContado;
   final double? qrVerificado;
+  final double? sobrante;
 
   double get totalEsperado => esperadoEfectivo + esperadoQr;
-  double get diferenciaEfectivo =>
-      (efectivoContado ?? esperadoEfectivo) - esperadoEfectivo;
-  double get diferenciaQr => (qrVerificado ?? esperadoQr) - esperadoQr;
+
+  /// Total que debería quedar en caja sumando el sobrante/faltante informado.
+  double get totalActual => totalEsperado + (sobrante ?? 0);
+}
+
+/// Caja con sus totales calculados, usada por el historial del día.
+class CajaHistorial {
+  const CajaHistorial({required this.caja, required this.resumen});
+
+  final Caja caja;
+  final CajaResumen resumen;
 }
 
 class CashRepository {
@@ -68,7 +90,9 @@ class CashRepository {
     final db = await AppDatabase.instance.database;
     final rows = await db.rawQuery('''
       SELECT c.*, ua.nombre AS usuario_apertura,
-             uc.nombre AS usuario_cierre
+             ua.perfil AS usuario_apertura_perfil,
+             uc.nombre AS usuario_cierre,
+             uc.perfil AS usuario_cierre_perfil
       FROM cajas c
       INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
       LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
@@ -124,17 +148,21 @@ class CashRepository {
 
   Future<void> cerrarCaja({
     required int cajaId,
-    required double efectivoContado,
-    required double qrVerificado,
     required int usuarioId,
+    double? sobrante,
+    double? efectivoContado,
+    double? qrVerificado,
     String? observacion,
   }) async {
     final db = await AppDatabase.instance.database;
+    final resumen = await getResumen(cajaId);
     await db.update(
       'cajas',
       {
         'efectivo_contado': efectivoContado,
         'qr_verificado': qrVerificado,
+        'sobrante': sobrante,
+        'total_esperado': resumen.totalEsperado,
         'usuario_cierre_id': usuarioId,
         'fecha_cierre': sqlNow(),
         'estado': 'CERRADA',
@@ -189,6 +217,8 @@ class CashRepository {
         c.fondo_inicial,
         c.efectivo_contado,
         c.qr_verificado,
+        c.sobrante,
+        c.total_esperado,
         COALESCE((SELECT SUM(monto) FROM pagos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'CONFIRMADO'), 0) AS ventas_efectivo,
         COALESCE((SELECT SUM(monto) FROM pagos WHERE caja_id = c.id AND metodo_pago = 'QR' AND estado = 'CONFIRMADO'), 0) AS ventas_qr,
         COALESCE((SELECT SUM(monto) FROM gastos WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO' AND estado = 'REGISTRADO'), 0) AS salidas_efectivo,
@@ -220,6 +250,9 @@ class CashRepository {
       qrVerificado: row['qr_verificado'] == null
           ? null
           : (row['qr_verificado'] as num).toDouble(),
+      sobrante: row['sobrante'] == null
+          ? null
+          : (row['sobrante'] as num).toDouble(),
     );
   }
 
@@ -228,7 +261,9 @@ class CashRepository {
     final rows = await db.rawQuery(
       '''
       SELECT c.*, ua.nombre AS usuario_apertura,
-             uc.nombre AS usuario_cierre
+             ua.perfil AS usuario_apertura_perfil,
+             uc.nombre AS usuario_cierre,
+             uc.perfil AS usuario_cierre_perfil
       FROM cajas c
       INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
       LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
@@ -238,6 +273,118 @@ class CashRepository {
       [limite],
     );
     return rows.map(_fromRow).toList();
+  }
+
+  /// Historial del día: solo las cajas de la fecha indicada, con los totales
+  /// de cada turno calculados en la misma consulta.
+  Future<List<CajaHistorial>> getCajasDelDia(DateTime fecha) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT c.*, ua.nombre AS usuario_apertura,
+             ua.perfil AS usuario_apertura_perfil,
+             uc.nombre AS usuario_cierre,
+             uc.perfil AS usuario_cierre_perfil,
+             COALESCE((SELECT SUM(monto) FROM pagos
+               WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO'
+                 AND estado = 'CONFIRMADO'), 0) AS ventas_efectivo,
+             COALESCE((SELECT SUM(monto) FROM pagos
+               WHERE caja_id = c.id AND metodo_pago = 'QR'
+                 AND estado = 'CONFIRMADO'), 0) AS ventas_qr,
+             COALESCE((SELECT SUM(monto) FROM gastos
+               WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO'
+                 AND estado = 'REGISTRADO'), 0) AS salidas_efectivo,
+             COALESCE((SELECT SUM(monto) FROM gastos
+               WHERE caja_id = c.id AND metodo_pago = 'QR'
+                 AND estado = 'REGISTRADO'), 0) AS salidas_qr
+      FROM cajas c
+      INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
+      LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
+      WHERE c.fecha = ?
+      ORDER BY c.numero_turno DESC
+    ''',
+      [sqlDate(fecha)],
+    );
+    return rows.map((row) {
+      double value(String key) => (row[key] as num?)?.toDouble() ?? 0;
+      final fondo = value('fondo_inicial');
+      final ventasEfectivo = value('ventas_efectivo');
+      final ventasQr = value('ventas_qr');
+      final salidasEfectivo = value('salidas_efectivo');
+      final salidasQr = value('salidas_qr');
+      return CajaHistorial(
+        caja: _fromRow(row),
+        resumen: CajaResumen(
+          fondoInicial: fondo,
+          ventasEfectivo: ventasEfectivo,
+          ventasQr: ventasQr,
+          salidasEfectivo: salidasEfectivo,
+          salidasQr: salidasQr,
+          esperadoEfectivo: fondo + ventasEfectivo - salidasEfectivo,
+          esperadoQr: ventasQr - salidasQr,
+          sobrante: row['sobrante'] == null
+              ? null
+              : (row['sobrante'] as num).toDouble(),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Cajas de un rango (para el reporte histórico por día/semana/mes/año).
+  Future<List<CajaHistorial>> getCajasEntre(
+    DateTime desde,
+    DateTime hasta,
+  ) async {
+    final db = await AppDatabase.instance.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT c.*, ua.nombre AS usuario_apertura,
+             ua.perfil AS usuario_apertura_perfil,
+             uc.nombre AS usuario_cierre,
+             uc.perfil AS usuario_cierre_perfil,
+             COALESCE((SELECT SUM(monto) FROM pagos
+               WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO'
+                 AND estado = 'CONFIRMADO'), 0) AS ventas_efectivo,
+             COALESCE((SELECT SUM(monto) FROM pagos
+               WHERE caja_id = c.id AND metodo_pago = 'QR'
+                 AND estado = 'CONFIRMADO'), 0) AS ventas_qr,
+             COALESCE((SELECT SUM(monto) FROM gastos
+               WHERE caja_id = c.id AND metodo_pago = 'EFECTIVO'
+                 AND estado = 'REGISTRADO'), 0) AS salidas_efectivo,
+             COALESCE((SELECT SUM(monto) FROM gastos
+               WHERE caja_id = c.id AND metodo_pago = 'QR'
+                 AND estado = 'REGISTRADO'), 0) AS salidas_qr
+      FROM cajas c
+      INNER JOIN usuarios ua ON ua.id = c.usuario_apertura_id
+      LEFT JOIN usuarios uc ON uc.id = c.usuario_cierre_id
+      WHERE c.fecha >= ? AND c.fecha < ?
+      ORDER BY c.fecha DESC, c.numero_turno DESC
+    ''',
+      [sqlDate(desde), sqlDate(hasta)],
+    );
+    return rows.map((row) {
+      double value(String key) => (row[key] as num?)?.toDouble() ?? 0;
+      final fondo = value('fondo_inicial');
+      final ventasEfectivo = value('ventas_efectivo');
+      final ventasQr = value('ventas_qr');
+      final salidasEfectivo = value('salidas_efectivo');
+      final salidasQr = value('salidas_qr');
+      return CajaHistorial(
+        caja: _fromRow(row),
+        resumen: CajaResumen(
+          fondoInicial: fondo,
+          ventasEfectivo: ventasEfectivo,
+          ventasQr: ventasQr,
+          salidasEfectivo: salidasEfectivo,
+          salidasQr: salidasQr,
+          esperadoEfectivo: fondo + ventasEfectivo - salidasEfectivo,
+          esperadoQr: ventasQr - salidasQr,
+          sobrante: row['sobrante'] == null
+              ? null
+              : (row['sobrante'] as num).toDouble(),
+        ),
+      );
+    }).toList();
   }
 
   Caja _fromRow(Map<String, Object?> row) => Caja(
@@ -252,9 +399,17 @@ class CashRepository {
     qrVerificado: row['qr_verificado'] == null
         ? null
         : (row['qr_verificado'] as num).toDouble(),
+    sobrante: row['sobrante'] == null
+        ? null
+        : (row['sobrante'] as num).toDouble(),
+    totalEsperado: row['total_esperado'] == null
+        ? null
+        : (row['total_esperado'] as num).toDouble(),
     fechaApertura: row['fecha_apertura']! as String,
     fechaCierre: row['fecha_cierre'] as String?,
     usuarioApertura: (row['usuario_apertura'] as String?) ?? '',
     usuarioCierre: row['usuario_cierre'] as String?,
+    perfilApertura: (row['usuario_apertura_perfil'] as String?) ?? '',
+    perfilCierre: row['usuario_cierre_perfil'] as String?,
   );
 }

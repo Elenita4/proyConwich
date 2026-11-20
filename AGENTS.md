@@ -41,7 +41,7 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 
 ## Base de datos (SQLite / sqflite)
 - `lib/data/database/app_database.dart` — singleton `AppDatabase.instance`, schema versionado a mano.
-- `version: 18` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
+- `version: 19` (`AppDatabase.schemaVersion`); DB file `sazon_restaurante_v2.db`. Las claves
   foráneas se desactivan durante la migración y se activan en `onOpen` (`PRAGMA foreign_keys = ON`).
 - Para cambiar schema: subir `version`, añadir `onUpgrade`. Las vistas `v_stock_insumos` y
   `v_stock_productos` se dropean y recrean en cada upgrade (ya se hace en `_createSchema`).
@@ -57,6 +57,12 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   compra) e `insumos.consumible` (bandera de no consumible). Solo agrega columnas/tablas; no
   modifica datos.
 - La v18 agrega `app_meta.impresora_mac` e `impresora_nombre` (impresora térmica Bluetooth).
+- La v19 agrega `cajas.sobrante` y `cajas.total_esperado` (arqueo con sobrante),
+  `productos.agotado` (switch de Ventas/Menú), `productos.es_combo` (combos sin stock) y la
+  tabla `devoluciones` (anulaciones con monto, método, usuario y motivo). También siembra la
+  categoría `COMBOS` (`siempre_disponible = 1`). El índice `idx_detalle_componente` se crea en
+  `_afterOpen` porque depende de `detalle_pedido.es_componente`, columna que llega en una
+  migración.
 - `unidades_medida.familia`/`factor_base` permiten convertir L↔ml y kg↔g en las recetas.
 - La receta es opcional. Al vender, el consumo se limita al stock disponible (nunca deja
   negativos) y el faltante queda registrado en `faltantes_insumo` (se consulta en Reportes).
@@ -76,36 +82,47 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   stock sigue siendo del producto base; la presentación aporta nombre y precio (se conservan
   en el pedido vía `CartLine.presentacionId`).
 - `_afterOpen` siembra categorías planas: `PLATOS SUELTOS`, `SOPAS`, `BEBIDAS CALIENTES`,
-  `REFRESCOS` y `FRAPPES`. No hay categorías padre ni subcategorías (`parent_id` queda en NULL).
+  `REFRESCOS`, `FRAPPES` y `COMBOS` (esta última siempre disponible). No hay categorías padre ni
+  subcategorías (`parent_id` queda en NULL).
   Las categorías se guardan siempre en mayúsculas y se pueden crear nuevas desde Productos.
   Los insumos de venta directa guardan su foto en el producto.
 - `cajas` usa `numero_turno` consecutivo por día (`Turno 1, 2, 3…`), no `MAÑANA/TARDE`.
   Cerrar una caja ya no cierra el menú del día.
-- Menú del día replica el catálogo de Ventas agrupado por categoría plana, con chips de
-  categorías (por color) para filtrar. Se elige como máximo una sopa; cada categoría tiene un
-  checkbox binario para seleccionar o quitar todos sus productos y todavía se puede elegir cada
-  producto individualmente. SOPAS y siempre disponibles quedan fuera de esos checkboxes. Solo los
-  productos de `PLATOS SUELTOS` pueden ser completos. En Ventas se calcula
+- Menú del día gestiona **solo platos sueltos y sopas**. La sopa se elige con tarjetas que
+  muestran su imagen (máximo una); los platos de `PLATOS SUELTOS` se agregan o quitan con un
+  toque y el cambio se guarda **al instante** en la BD; el checkbox "Todos" de la categoría
+  sigue funcionando. Solo `PLATOS SUELTOS` puede ser completo. En Ventas se calcula
   `precio_plato + precio_sopa`, salvo que el menú defina `precio_almuerzo` (precio fijo del
   completo por día, editable junto al selector de sopa).
-  No hay modo "Editar" ni botón "Listo": tocar un plato lo agrega o quita del menú y el cambio
-  se guarda **al instante** en la BD (el mismo efecto tiene el checkbox "Todos" de cada
-  categoría y el selector de sopa). La tarjeta se actualiza sin recargar la página para no
-  perder el scroll. En tablet (ventana ≥ 860) el panel "MENÚ DE HOY" queda fijo a la derecha;
-  en teléfono se acomoda abajo (en Ventas igual con el panel "Pedido").
-  El reporte general no muestra modalidades para otras categorías; el desglose de almuerzos y sopas
-  se muestra en secciones separadas y omite los ceros. Al limpiar o reemplazar un menú, las filas
-  referenciadas por ventas se conservan ocultas para proteger el
-  historial. Al abrir un día sin menú se copia automáticamente la configuración del menú anterior
-  (una sopa y sus platos); los combos viejos no se copian ni venden en el flujo nuevo. "Programar
-  días" copia la configuración a los siguientes días. El menú solo se publica (`HABILITADO`); no se
-  cierra. La venta directa va en una
-  sección SIEMPRE DISPONIBLES. Si no hay caja abierta, Ventas muestra un botón "Ir a Caja".
-  En Ventas, los productos activos que no están en el menú del día se agrupan en una sección
-  colapsable ("Productos fuera del menú de hoy"), oculta por defecto y no vendible.
+  No hay modo "Editar/Listo", botón "Publicar menú" ni "Crear menú con lo de ayer". Al abrir un
+  día sin menú se copia automáticamente la configuración del menú anterior. "Programar días"
+  copia la configuración a los siguientes días. El menú solo se publica (`HABILITADO`); no se
+  cierra. Los productos desactivados desde Productos se guardan en un desplegable
+  "Productos deshabilitados" y se pueden reactivar; al reactivarlos quedan habilitados en el
+  menú del día. La venta directa y los combos van en la sección SIEMPRE DISPONIBLES.
+  En tablet (ventana ≥ 860) el panel "MENÚ DE HOY" queda fijo a la derecha; en teléfono se
+  acomoda abajo. Si no hay caja abierta, Ventas muestra un botón "Ir a Caja".
+  En Ventas, los productos activos que no están en el menú del día o están agotados se agrupan
+  en una sección colapsable ("Productos agotados o fuera del menú"), oculta por defecto y no
+  vendible.
 - Todas las ventas son **directas** (se cobran al momento): no hay pedidos pendientes ni
   reservas. Se eliminó el botón "Guardar pendiente de pago", el modo "Agregar al pedido" y la
   sección "Pedidos pendientes de pago".
+- Ventas (tablet): el panel **Pedido** queda fijo a la **izquierda** (~30%) y el catálogo ocupa
+  el resto (~65%) con **3 productos por columna**; en teléfono el pedido se apila abajo. Debajo
+  del catálogo está el **historial de ventas del día** con pedido, hora, usuario, total, botón
+  **ANULAR** y detalle desplegable (líneas, pagos y devolución). ANULAR no borra: marca el pedido
+  y sus pagos como `ANULADO`, registra la devolución en `devoluciones` y mantiene la venta en el
+  historial. Puede anular cualquiera con `Permiso.ventas`. El switch **Agotado** de cada tarjeta
+  oculta el producto de Ventas y se refleja en `productos.agotado` + `menu_dia_items`; desde el
+  Menú se rehabilita.
+- Caja: se muestra un único **"Total esperado del turno"** (`efectivo + QR − salidas`) y el
+  cierre pide un **"Sobrante del turno"** con signo (negativo = faltante). `cerrarCaja` guarda
+  `cajas.sobrante` y `cajas.total_esperado`; el efectivo contado y el QR verificado quedaron
+  fuera de la UI. Al cerrar se ofrece imprimir el **movimiento del turno** (ventas efectivo,
+  ventas QR, salida efectivo, sobrante y total esperado) por la misma vía que las notas. El
+  historial de cajas muestra solo el día seleccionado, con cajero + rol, ventas efectivo/QR,
+  salidas, total esperado y estado.
 - El estado del menú se llama `HABILITADO` (antes `PUBLICADO`) en BD, código y textos; la columna
   es `habilitado_en`. El tablero ofrece "Empezar el día" (lleva al menú y de ahí un atajo a Caja).
 - `app_meta` (fila única): `instalacion_id` (UUID estable de la instalación), fecha del último
@@ -115,8 +132,14 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   fecha viaja dentro del respaldo.
 - `detalle_pedido.modalidad_venta` distingue suelto/completo en `PLATOS SUELTOS` y guarda el snapshot de la sopa y su
   precio; una línea hija `es_componente` permite descontar también la sopa sin duplicar el ingreso.
-  Los reportes separan los ingresos del plato y de la sopa incluida. La receta de cada componente se
-  consume solo si existe. Los combos compuestos antiguos se conservan para el historial/backups.
+  Los reportes agrupan por **producto + modalidad** (`Producto (suelto)`, `Producto (completo)`),
+  muestran el precio real cobrado y cuentan la sopa incluida con **Bs 0** para que la suma de
+  filas coincida con el total vendido. La receta de cada componente se consume solo si existe.
+- Los combos nuevos se crean desde Productos con **"Nuevo combo"**: nombre, precio, selección
+  múltiple de productos, imagen propia o la del primer componente, y categoría `COMBOS` por
+  defecto (editable). Se guardan como producto normal (`es_compuesto = 0`) sin receta, por lo
+  que **no descuentan stock ni insumos**; los componentes quedan en `producto_componentes` solo
+  para mostrarlos. Los combos compuestos antiguos se conservan para el historial/backups.
 - Import condicional de factory: `database_factory_web.dart if (dart.library.io) database_factory_io.dart`
   (sqflite vs sqflite_common_ffi_web). No romper este patrón.
 
@@ -132,14 +155,19 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   `sazon_restaurante_v2.db`.
 - `excel_exporter.dart` genera una hoja por tabla; excluye `password_hash` y el BLOB `imagen`.
 - `report_exporter.dart` genera el reporte del período en PDF tamaño carta (resumen, gráfico de
-  ingresos, gráfico por cantidad, productos con precio unitario, salidas detalladas y pedidos) y
-  en Excel (hojas Resumen, Productos, Almuerzos, Sopas, Salidas, Pedidos, Gráfico, Gráfico
-  cantidades y Faltantes).
+  ingresos, gráfico por cantidad, productos con precio unitario, cajas, anulados, salidas
+  detalladas, pedidos y faltantes) y en Excel (hojas Resumen, Productos, Almuerzos, Sopas,
+  Cajas, Anulados, Salidas, Pedidos, Gráfico, Gráfico cantidades y Faltantes).
   Los gráficos de Excel usan barras de celdas coloreadas porque el paquete `excel` no soporta
   gráficos nativos.
 - En Reportes, administradores ven los reportes completos. Usuarios no administradores con acceso
   a Ventas solo ven sus propios pedidos en lectura, filtrados por `pedidos.usuario_id` y el rango
   elegido; no se agregan columnas ni tablas para esto.
+- La pestaña **Cajas** agrupa por día/semana/mes/año y muestra efectivo, QR, salidas, total
+  esperado y sobrante, con el cajero y su rol. La pestaña **Anulados** lista las devoluciones
+  (pedido, fecha, usuario, método, monto y motivo). El tablero muestra ingresos, efectivo, QR,
+  salidas, devoluciones y accesos rápidos a Reportes/Caja/Menú; los gastos de insumos no se
+  descuentan del neto por ahora.
 - Respaldo en Google Drive: se usa el selector de carpetas de Android (SAF), no Google Cloud ni
   OAuth. `android/.../MainActivity.kt` expone un `MethodChannel` con elegir carpeta, verificar
   permiso, escribir, listar y borrar. La carpeta elegida se guarda en `app_meta`. Las copias se
@@ -155,15 +183,17 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   arma los bytes (48 columnas) y usa el `MethodChannel`
   `com.example.test_code_02/bluetooth_printer` implementado en `MainActivity.kt`. La Golden Sky
   **GS-FJ80M-UB usa BLE GATT** (servicio `49535343-fe7d-4ae5-8fa9-9fafd205e455`, escritura
-  `49535343-8841-43f4-a8d4-ecbe34729bb3`, notificaciones
-  `49535343-1e4d-4bd9-ba61-23c647249616`); el canal conecta por BLE (chunk 20 B con
-  `onCharacteristicWrite`) y deja SPP como respaldo. "Probar impresora" envía
-  `1B 40 43 4F 4E 57 49 43 48 0A 0A` (CONWICH) y `1B 64 03 1D 56 01` (avance + corte parcial).
-  La comprobación real es el papel, no el callback. La configuración
-  (`impresora_mac`/`impresora_nombre`) vive en `app_meta` y se edita en la pantalla
-  **"Impresora"** (admin), que permite escanear BLE, probar y guardar. Al cobrar se mantiene el
+  `49535343-8841-43f4-a8d4-ecbe34729bb3`); el canal conecta por BLE (chunk 20 B con
+  `onCharacteristicWrite`) y deja SPP como respaldo. No se habilitan notificaciones: el
+  descriptor dejaba el GATT ocupado y la primera escritura fallaba. "Probar impresora" envía
+  **un solo buffer** `1B 40 43 4F 4E 57 49 43 48 0A 0A 1B 64 03 1D 56 01` (CONWICH + avance +
+  corte parcial) para que imprima antes de cortar. La comprobación real es el papel, no el
+  callback. La configuración (`impresora_mac`/`impresora_nombre`) vive en `app_meta` y se edita
+  en la pantalla **"Impresora"** (admin), que permite escanear BLE, probar y guardar.
+- La nota de venta **no lleva precios ni total**: solo `#pedido`, fecha/hora, lista de
+  cantidades + productos y agradecimiento (tanto ESC/POS como PDF). Al cobrar se mantiene el
   diálogo "¿Imprimir nota de venta?": si hay impresora configurada, imprime por Bluetooth; si no,
-  abre el PDF.
+  abre el PDF. Al cerrar caja se ofrece imprimir el **movimiento del turno** por la misma vía.
 
 ## Convenciones / gotchas
 - **Regla: el sistema nunca depende de que los productos tengan receta.** Un `PREPARADO` sin

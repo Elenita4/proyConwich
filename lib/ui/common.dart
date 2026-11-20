@@ -82,6 +82,16 @@ final TextInputFormatter decimalAmountInputFormatter =
       return oldValue;
     });
 
+/// Igual que `decimalAmountInputFormatter`, pero admite un signo negativo.
+/// Se usa en el sobrante del turno (puede ser un faltante).
+final TextInputFormatter signedDecimalAmountInputFormatter =
+    TextInputFormatter.withFunction((oldValue, newValue) {
+      if (RegExp(r'^-?\d*(?:[,.]\d*)?$').hasMatch(newValue.text)) {
+        return newValue;
+      }
+      return oldValue;
+    });
+
 /// Valida cantidades numéricas sin permitir texto, negativos ni valores no
 /// finitos. Los formularios de producto pueden permitir cero en costos/stock.
 String? validateDecimalAmount(
@@ -103,6 +113,33 @@ String? validateDecimalAmount(
   if (numero < 0) return '$nombre no puede ser negativo.';
   if (!allowZero && numero == 0) return '$nombre debe ser mayor a cero.';
   return null;
+}
+
+/// Valida un importe que puede ser positivo (sobrante) o negativo (faltante).
+String? validateSignedAmount(String? value, {String? label}) {
+  final text = (value ?? '').trim();
+  final nombre = label ?? 'El valor';
+  if (text.isEmpty) return '$nombre es obligatorio.';
+  final normalizado = text.replaceAll(',', '.');
+  if (!RegExp(r'^-?(?:\d+(?:\.\d*)?|\.\d+)$').hasMatch(normalizado)) {
+    return '$nombre debe ser un número válido.';
+  }
+  final numero = double.tryParse(normalizado);
+  if (numero == null || !numero.isFinite) {
+    return '$nombre debe ser un número válido.';
+  }
+  return null;
+}
+
+/// Colores de acción compartidos para que los botones no dependan solo del
+/// tema: verde confirma, rojo anula/cierra, ámbar advierte y azul informa.
+class AppActionColors {
+  const AppActionColors._();
+
+  static const Color success = Color(0xFF16A34A);
+  static const Color danger = Color(0xFFDC2626);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color info = Color(0xFF2563EB);
 }
 
 String formatQty(double value) {

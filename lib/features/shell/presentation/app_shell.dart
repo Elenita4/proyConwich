@@ -154,6 +154,20 @@ class _AppShellState extends State<AppShell> {
     if (index >= 0) _seleccionar(index);
   }
 
+  void _irAReportes() {
+    final destinations = _destinations();
+    final index = destinations.indexWhere((item) => item.label == 'Reportes');
+    if (index >= 0) _seleccionar(index);
+  }
+
+  void _irAMenu() {
+    final destinations = _destinations();
+    final index = destinations.indexWhere(
+      (item) => item.label == 'Menú del día',
+    );
+    if (index >= 0) _seleccionar(index);
+  }
+
   /// Flujo "Empezar el día": va al menú y activa el atajo hacia Caja.
   void _empezarDia() {
     setState(() => _flujoInicio = true);
@@ -181,6 +195,11 @@ class _AppShellState extends State<AppShell> {
             usuario: usuario,
             refreshToken: _token('Tablero'),
             onEmpezarDia: usuario.puede(Permiso.menu) ? _empezarDia : null,
+            onIrAReportes: usuario.puede(Permiso.reportes)
+                ? _irAReportes
+                : null,
+            onIrACaja: usuario.puede(Permiso.caja) ? _irACaja : null,
+            onIrAMenu: usuario.puede(Permiso.menu) ? _irAMenu : null,
           ),
         ),
       );
@@ -293,16 +312,22 @@ class _AppShellState extends State<AppShell> {
   /// Barra lateral fija para tablet/escritorio. Reemplaza al `NavigationRail`
   /// para que los destinos y los accesos de sesión se puedan desplazar de
   /// arriba hacia abajo cuando no caben (antes el rail se salía de pantalla).
-  Widget _railSidebar(List<_Destination> destinations, int index) {
+  /// En modo compacto solo muestra los iconos (con tooltip), sin desaparecer.
+  Widget _railSidebar(
+    List<_Destination> destinations,
+    int index, {
+    required bool compact,
+  }) {
     const espresso = Color(0xFF3D2419);
     const dorado = Color(0xFFE8C995);
     const crema = Color(0xFFF3E9D9);
     const caramelo = Color(0xFFC18A55);
     final scheme = Theme.of(context).colorScheme;
 
-    return Container(
+    return AnimatedContainer(
       key: const Key('rail-sidebar'),
-      width: 220,
+      duration: const Duration(milliseconds: 180),
+      width: compact ? 76 : 220,
       color: espresso,
       child: SafeArea(
         child: Column(
@@ -311,26 +336,42 @@ class _AppShellState extends State<AppShell> {
               onTap: _irATablero,
               borderRadius: BorderRadius.circular(12),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 12, 8, 20),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: scheme.primary,
-                        borderRadius: BorderRadius.circular(13),
+                padding: EdgeInsets.fromLTRB(8, 12, 8, compact ? 12 : 20),
+                child: compact
+                    ? Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: Icon(Icons.restaurant, color: scheme.onPrimary),
+                      )
+                    : Column(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: scheme.primary,
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Icon(
+                              Icons.restaurant,
+                              color: scheme.onPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            appNombre,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: crema,
+                                ),
+                          ),
+                        ],
                       ),
-                      child: Icon(Icons.restaurant, color: scheme.onPrimary),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      appNombre,
-                      style: Theme.of(context).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w800, color: crema),
-                    ),
-                  ],
-                ),
               ),
             ),
             const Divider(color: Color(0x33E8C995)),
@@ -346,6 +387,7 @@ class _AppShellState extends State<AppShell> {
                       dorado: dorado,
                       crema: crema,
                       caramelo: caramelo,
+                      compact: compact,
                     ),
                 ],
               ),
@@ -363,40 +405,49 @@ class _AppShellState extends State<AppShell> {
     required Color dorado,
     required Color crema,
     required Color caramelo,
+    required bool compact,
   }) {
     const textoOscuro = Color(0xFF2B1A12);
-    return InkWell(
+    final icono = Icon(
+      selected ? destination.selectedIcon : destination.icon,
+      size: 22,
+      color: selected ? textoOscuro : dorado,
+    );
+    final item = InkWell(
       onTap: () => _seleccionar(i),
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        margin: EdgeInsets.symmetric(horizontal: compact ? 10 : 8, vertical: 2),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           color: selected ? caramelo : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Row(
-          children: [
-            Icon(
-              selected ? destination.selectedIcon : destination.icon,
-              size: 22,
-              color: selected ? textoOscuro : dorado,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                destination.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected ? textoOscuro : crema,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-                ),
+        child: compact
+            ? Center(child: icono)
+            : Row(
+                children: [
+                  icono,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      destination.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected ? textoOscuro : crema,
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
       ),
     );
+    return compact
+        ? Tooltip(message: destination.label, child: item)
+        : item;
   }
 
   @override
@@ -430,7 +481,7 @@ class _AppShellState extends State<AppShell> {
             // lateral. En teléfono el menú lo abre el botón del drawer.
             leading: wide
                 ? IconButton(
-                    tooltip: _railOculto ? 'Mostrar menú' : 'Ocultar menú',
+                    tooltip: _railOculto ? 'Expandir menú' : 'Contraer menú',
                     onPressed: () => setState(() => _railOculto = !_railOculto),
                     icon: Icon(
                       _railOculto ? Icons.menu : Icons.menu_open,
@@ -584,10 +635,12 @@ class _AppShellState extends State<AppShell> {
           body: wide
               ? Row(
                   children: [
-                    if (!_railOculto) ...[
-                      _railSidebar(destinations, index),
-                      const VerticalDivider(width: 1),
-                    ],
+                    _railSidebar(
+                      destinations,
+                      index,
+                      compact: _railOculto,
+                    ),
+                    const VerticalDivider(width: 1),
                     Expanded(child: body),
                   ],
                 )
