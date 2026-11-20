@@ -266,7 +266,6 @@ void main() {
       cajaId: caja.id,
       usuarioId: admin.id,
       monto: 10,
-      metodoPago: 'EFECTIVO',
       descripcion: 'Luz',
     );
     resumenCaja = await cash.getResumen(caja.id);
@@ -311,7 +310,11 @@ void main() {
     );
     expect(await catalog.getStockInsumo(papaId), 8);
 
-    await sales.anularPedido(pedidoId);
+    await expectLater(
+      sales.anularPedido(pedidoId, motivo: '  '),
+      throwsArgumentError,
+    );
+    await sales.anularPedido(pedidoId, motivo: 'Venta anulada en prueba');
     expect(await catalog.getStockProducto(cocaId), 5);
     final devolucionesPedido = await sales.getDevolucionesPedido(pedidoId);
     expect(devolucionesPedido.length, 2);
@@ -352,10 +355,20 @@ void main() {
     expect((await sales.getPedido(pendienteId)).pedido.estadoPago, 'PENDIENTE');
     expect(await catalog.getStockProducto(cocaId), 4);
 
+    await expectLater(
+      cash.cerrarCaja(
+        cajaId: caja.id,
+        usuarioId: admin.id,
+        sobrante: 0,
+        observacion: '  ',
+      ),
+      throwsArgumentError,
+    );
     await cash.cerrarCaja(
       cajaId: caja.id,
       usuarioId: admin.id,
       sobrante: 0,
+      observacion: 'Cierre de prueba',
     );
     expect(await cash.getCajaAbierta(), isNull);
     final historialHoy = await cash.getCajasDelDia(DateTime.now());
@@ -1795,7 +1808,7 @@ void main() {
     expect(reporte.first.insumo, 'Insumo faltante');
     expect(reporte.first.faltante, 3);
 
-    await sales.anularPedido(pedidoId);
+    await sales.anularPedido(pedidoId, motivo: 'Venta anulada en prueba');
     expect(await catalog.getStockInsumo(insumoId), 2);
     final faltanteAnulado = await db.query('faltantes_insumo');
     expect(faltanteAnulado.first['estado'], 'ANULADO');

@@ -88,16 +88,17 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   Los insumos de venta directa guardan su foto en el producto.
 - `cajas` usa `numero_turno` consecutivo por día (`Turno 1, 2, 3…`), no `MAÑANA/TARDE`.
   Cerrar una caja ya no cierra el menú del día.
-- Menú del día gestiona **solo platos sueltos y sopas**. La sopa se elige con tarjetas que
-  muestran su imagen (máximo una); los platos de `PLATOS SUELTOS` se agregan o quitan con un
-  toque y el cambio se guarda **al instante** en la BD; el checkbox "Todos" de la categoría
+- Menú del día muestra todas las categorías de productos; las sopas se eligen con tarjetas que
+  muestran su imagen (máximo una), y los productos de las demás categorías se agregan o quitan con
+  un toque. El cambio se guarda **al instante** en la BD; el checkbox "Todos" de la categoría
   sigue funcionando. Solo `PLATOS SUELTOS` puede ser completo. En Ventas se calcula
   `precio_plato + precio_sopa`, salvo que el menú defina `precio_almuerzo` (precio fijo del
   completo por día, editable junto al selector de sopa).
-  No hay modo "Editar/Listo", botón "Publicar menú" ni "Crear menú con lo de ayer". Al abrir un
+  No hay modo "Editar/Listo", botón "Publicar menú", estado borrador ni "Crear menú con lo de ayer".
+  Todo menú se habilita automáticamente y los productos habilitados aparecen en Ventas. Al abrir un
   día sin menú se copia automáticamente la configuración del menú anterior. "Programar días"
-  copia la configuración a los siguientes días. El menú solo se publica (`HABILITADO`); no se
-  cierra. Los productos desactivados desde Productos se guardan en un desplegable
+  copia la configuración a los siguientes días. El menú no se cierra. Los productos desactivados
+  desde Productos se guardan en un desplegable
   "Productos deshabilitados" y se pueden reactivar; al reactivarlos quedan habilitados en el
   menú del día. La venta directa y los combos van en la sección SIEMPRE DISPONIBLES.
   En tablet (ventana ≥ 860) el panel "MENÚ DE HOY" queda fijo a la derecha; en teléfono se
@@ -108,7 +109,7 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 - Todas las ventas son **directas** (se cobran al momento): no hay pedidos pendientes ni
   reservas. Se eliminó el botón "Guardar pendiente de pago", el modo "Agregar al pedido" y la
   sección "Pedidos pendientes de pago".
-- Ventas (tablet): el panel **Pedido** queda fijo a la **izquierda** (~30%) y el catálogo ocupa
+- Ventas (tablet/escritorio): el panel **Pedido** queda fijo a la **derecha** (~25%) y el catálogo ocupa
   el resto (~65%) con **3 productos por columna**; en teléfono el pedido se apila abajo. Debajo
   del catálogo está el **historial de ventas del día** con pedido, hora, usuario, total, botón
   **ANULAR** y detalle desplegable (líneas, pagos y devolución). ANULAR no borra: marca el pedido
@@ -123,8 +124,9 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   ventas QR, salida efectivo, sobrante y total esperado) por la misma vía que las notas. El
   historial de cajas muestra solo el día seleccionado, con cajero + rol, ventas efectivo/QR,
   salidas, total esperado y estado.
-- El estado del menú se llama `HABILITADO` (antes `PUBLICADO`) en BD, código y textos; la columna
-  es `habilitado_en`. El tablero ofrece "Empezar el día" (lleva al menú y de ahí un atajo a Caja).
+- El estado activo del menú se llama `HABILITADO` (antes `PUBLICADO`) en BD, código y textos; no
+  hay estado borrador en el flujo. La columna es `habilitado_en`. El tablero ofrece "Empezar el día"
+  (lleva al menú y de ahí un atajo a Caja).
 - `app_meta` (fila única): `instalacion_id` (UUID estable de la instalación), fecha del último
   respaldo y configuración de respaldo en Drive (`drive_habilitado`, `drive_carpeta_uri`,
   `drive_carpeta_nombre`, `drive_retencion`, `drive_al_cerrar_caja`, `drive_frecuencia`,

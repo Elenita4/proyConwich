@@ -514,7 +514,7 @@ class SalesRepository {
   Future<void> anularPedido(
     int pedidoId, {
     int? usuarioId,
-    String? motivo,
+    required String motivo,
   }) async {
     final db = await AppDatabase.instance.database;
     final pedidoRows = await db.query(
@@ -529,6 +529,9 @@ class SalesRepository {
     final estadoPago = pedido['estado_pago'] as String?;
     final estadoEntrega = pedido['estado_entrega'] as String?;
     if (estadoPago == 'ANULADO' || estadoEntrega == 'ANULADO') return;
+    if (motivo.trim().isEmpty) {
+      throw ArgumentError('El motivo de anulación es obligatorio.');
+    }
 
     final usuario = usuarioId ?? (pedido['usuario_id'] as num).toInt();
     final cajaId = (pedido['caja_id'] as num).toInt();

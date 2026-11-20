@@ -132,6 +132,14 @@ class _CashPageState extends State<CashPage> {
     final caja = data.caja;
     final resumen = data.resumen;
     if (caja == null || resumen == null) return;
+    if (_observacion.text.trim().isEmpty) {
+      showAppMessage(
+        context,
+        'La observación de caja es obligatoria.',
+        error: true,
+      );
+      return;
+    }
     final error = validateSignedAmount(
       _sobrante.text,
       label: 'El sobrante del turno',
@@ -159,7 +167,7 @@ class _CashPageState extends State<CashPage> {
         cajaId: caja.id,
         usuarioId: widget.usuario.id,
         sobrante: sobrante,
-        observacion: _observacion.text,
+        observacion: _observacion.text.trim(),
       );
       if (!mounted) return;
       setState(() {
@@ -200,13 +208,12 @@ class _CashPageState extends State<CashPage> {
               value: formatMoney(resumen.ventasQr),
             ),
             LabelValue(
-              label: 'Salida efectivo',
-              value: formatMoney(resumen.salidasEfectivo),
+              label: 'Salidas de caja',
+              value: formatMoney(
+                resumen.salidasEfectivo + resumen.salidasQr,
+              ),
             ),
-            LabelValue(
-              label: 'Sobrante del turno',
-              value: formatMoney(sobrante),
-            ),
+            LabelValue(label: 'Sobrante del turno', value: formatMoney(sobrante)),
             const Divider(height: 18),
             LabelValue(
               label: 'Total esperado',
@@ -304,7 +311,6 @@ class _CashPageState extends State<CashPage> {
         cajaId: caja.id,
         usuarioId: widget.usuario.id,
         monto: salida.monto,
-        metodoPago: salida.metodo,
         descripcion: salida.descripcion,
       );
       if (!mounted) return;
@@ -587,8 +593,6 @@ class _CashPageState extends State<CashPage> {
                     value: formatMoney(
                       resumen.salidasEfectivo + resumen.salidasQr,
                     ),
-                    caption:
-                        'Efectivo ${formatMoney(resumen.salidasEfectivo)} · QR ${formatMoney(resumen.salidasQr)}',
                     icon: Icons.outbox,
                     color: scheme.secondary,
                   ),
@@ -646,12 +650,9 @@ class _CashPageState extends State<CashPage> {
           ),
           LabelValue(label: 'Ventas QR', value: formatMoney(resumen.ventasQr)),
           LabelValue(
-            label: 'Salidas efectivo',
-            value: '- ${formatMoney(resumen.salidasEfectivo)}',
-          ),
-          LabelValue(
-            label: 'Salidas QR',
-            value: '- ${formatMoney(resumen.salidasQr)}',
+            label: 'Salidas de caja',
+            value:
+                '- ${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
           ),
           const Divider(height: 22),
           LabelValue(
@@ -713,7 +714,10 @@ class _CashPageState extends State<CashPage> {
           TextField(
             controller: _observacion,
             maxLines: 2,
-            decoration: appInput(label: 'Observación (opcional)'),
+            decoration: appInput(
+              label: 'Observación (obligatoria)',
+              hint: 'Describe el cierre del turno',
+            ),
           ),
           const SizedBox(height: 14),
           SizedBox(
@@ -735,14 +739,9 @@ class _CashPageState extends State<CashPage> {
 }
 
 class _SalidaInput {
-  const _SalidaInput({
-    required this.monto,
-    required this.metodo,
-    this.descripcion,
-  });
+  const _SalidaInput({required this.monto, this.descripcion});
 
   final double monto;
-  final String metodo;
   final String? descripcion;
 }
 
@@ -757,7 +756,6 @@ class _SalidaDialogState extends State<_SalidaDialog> {
   final _formKey = GlobalKey<FormState>();
   final _monto = TextEditingController();
   final _descripcion = TextEditingController();
-  String _metodo = 'EFECTIVO';
 
   @override
   void dispose() {
@@ -778,17 +776,6 @@ class _SalidaDialogState extends State<_SalidaDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String>(
-                initialValue: _metodo,
-                decoration: appInput(label: 'Método de pago'),
-                items: const [
-                  DropdownMenuItem(value: 'EFECTIVO', child: Text('Efectivo')),
-                  DropdownMenuItem(value: 'QR', child: Text('QR')),
-                ],
-                onChanged: (value) =>
-                    setState(() => _metodo = value ?? 'EFECTIVO'),
-              ),
-              const SizedBox(height: 12),
               TextFormField(
                 controller: _monto,
                 inputFormatters: [decimalAmountInputFormatter],
@@ -830,7 +817,6 @@ class _SalidaDialogState extends State<_SalidaDialog> {
               context,
               _SalidaInput(
                 monto: parseAmount(_monto.text),
-                metodo: _metodo,
                 descripcion: _descripcion.text,
               ),
             );
@@ -872,7 +858,7 @@ class _CajaHistorialRow extends StatelessWidget {
         Text(
           'Efectivo ${formatMoney(resumen.ventasEfectivo)} · '
           'QR ${formatMoney(resumen.ventasQr)} · '
-          'Salida ${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
+          'Salidas ${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
       ],

@@ -595,22 +595,69 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   Future<void> _anularVenta(Pedido pedido) async {
-    final confirmado = await confirmAction(
-      context,
-      title: 'Anular venta',
-      message:
-          'Se anulará el pedido #${pedido.id} por ${formatMoney(pedido.total)}. '
-          'La venta y su anulación quedarán registradas en el historial, y el '
-          'monto se descontará de la caja del turno.',
-      confirmLabel: 'Anular venta',
-      destructive: true,
-    );
-    if (!confirmado) return;
+    final motivoController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    String? motivo;
+    try {
+      motivo = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          scrollable: true,
+          title: const Text('Anular venta'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Se anulará el pedido #${pedido.id} por '
+                  '${formatMoney(pedido.total)}. La venta y su anulación '
+                  'quedarán registradas en el historial.',
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: motivoController,
+                  autofocus: true,
+                  maxLines: 3,
+                  decoration: appInput(label: 'Motivo (obligatorio)'),
+                  validator: (value) =>
+                      value == null || value.trim().isEmpty
+                      ? 'Ingresa el motivo de la anulación'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              onPressed: () {
+                if (!formKey.currentState!.validate()) return;
+                Navigator.pop(context, motivoController.text.trim());
+              },
+              child: const Text('Anular venta'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      motivoController.dispose();
+    }
+    if (motivo == null) return;
     setState(() => _saving = true);
     try {
       await _salesRepository.anularPedido(
         pedido.id,
         usuarioId: widget.usuario.id,
+        motivo: motivo,
       );
       if (!mounted) return;
       setState(() {
@@ -656,8 +703,6 @@ class _SalesPageState extends State<SalesPage> {
                             _filtros(context, data),
                             const SizedBox(height: 14),
                             _catalogo(context, data),
-                            const SizedBox(height: 16),
-                            _historialVentas(context, data),
                           ],
                         ),
                       ),
@@ -667,7 +712,14 @@ class _SalesPageState extends State<SalesPage> {
                       width: pedidoWidth,
                       height: constraints.maxHeight - padding * 2,
                       child: SingleChildScrollView(
-                        child: _carrito(context, data),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _carrito(context, data),
+                            const SizedBox(height: 16),
+                            _historialVentas(context, data),
+                          ],
+                        ),
                       ),
                     ),
                   ],
