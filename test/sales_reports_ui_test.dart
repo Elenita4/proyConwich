@@ -285,7 +285,7 @@ void main() {
     expect(reportes!.single.total, 10);
     expect(reportes.single.efectivo, 7);
     expect(reportes.single.qr, 3);
-    expect(find.text('Nota de venta'), findsOneWidget);
+    expect(find.text('Fichas del pedido'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -601,6 +601,72 @@ void main() {
     expect(find.text('Cobrar'), findsNothing);
     expect(find.text('Anular'), findsNothing);
     expect(find.text('Agregar'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ventas abre el detalle con el ojo y permite cancelar/anular', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final catalogo = (await tester.runAsync(sembrarCatalogo))!;
+    final ((platoId, _), cajaId) = catalogo;
+    await tester.runAsync(
+      () => SalesRepository().crearPedido(
+        usuarioId: admin.id,
+        cajaId: cajaId,
+        lineas: [
+          CartLine(
+            productoId: platoId,
+            nombre: 'Plato uno',
+            precio: 10,
+            cantidad: 1,
+          ),
+        ],
+        pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 10)],
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SalesPage(usuario: admin, refreshToken: 0)),
+      ),
+    );
+    await asentar(tester);
+
+    final pedido = find.text('#1');
+    await tester.ensureVisible(pedido);
+    final ojo = find.byTooltip('Ver detalle');
+    await tester.ensureVisible(ojo);
+    await tester.tap(ojo);
+    await asentar(tester);
+    expect(find.text('Pedido #1'), findsOneWidget);
+    expect(find.textContaining('Plato uno'), findsWidgets);
+    await tester.tap(find.text('Cerrar'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(find.text('ANULAR'));
+    await tester.tap(find.text('ANULAR'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancelar'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('ANULAR'));
+    await tester.pumpAndSettle();
+    final motivo = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextFormField),
+    );
+    await tester.enterText(motivo, 'Prueba de anulación');
+    await tester.tap(find.text('Anular venta'));
+    await asentar(tester);
+    await tester.ensureVisible(find.text('ANULADA'));
+    expect(find.text('ANULADA'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

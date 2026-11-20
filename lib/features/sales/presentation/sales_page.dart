@@ -651,10 +651,7 @@ class _SalesPageState extends State<SalesPage> {
                 puedeAnular:
                     widget.usuario.puede(Permiso.ventas) && !pedido.anulado,
                 onAnular: () => _anularVenta(pedido),
-                cargarDetalle: () =>
-                    _salesRepository.getPedido(pedido.id),
-                cargarDevoluciones: () =>
-                    _salesRepository.getDevolucionesPedido(pedido.id),
+                onVerDetalle: () => _verDetalleVenta(pedido),
               ),
             ),
         ],
@@ -662,64 +659,36 @@ class _SalesPageState extends State<SalesPage> {
     );
   }
 
-  Future<void> _anularVenta(Pedido pedido) async {
-    final motivoController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    String? motivo;
+  Future<void> _verDetalleVenta(Pedido pedido) async {
     try {
-      motivo = await showDialog<String>(
+      final detalle = await _salesRepository.getPedido(pedido.id);
+      final devoluciones = await _salesRepository.getDevolucionesPedido(
+        pedido.id,
+      );
+      if (!mounted) return;
+      await showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          scrollable: true,
-          title: const Text('Anular venta'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Se anulará el pedido #${pedido.id} por '
-                  '${formatMoney(pedido.total)}. La venta y su anulación '
-                  'quedarán registradas en el historial.',
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: motivoController,
-                  autofocus: true,
-                  maxLines: 3,
-                  decoration: appInput(label: 'Motivo (obligatorio)'),
-                  validator: (value) =>
-                      value == null || value.trim().isEmpty
-                      ? 'Ingresa el motivo de la anulación'
-                      : null,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.error,
-                foregroundColor: Theme.of(context).colorScheme.onError,
-              ),
-              onPressed: () {
-                if (!formKey.currentState!.validate()) return;
-                Navigator.pop(context, motivoController.text.trim());
-              },
-              child: const Text('Anular venta'),
-            ),
-          ],
+        builder: (_) => _VentaDetalleDialog(
+          detalle: detalle,
+          devoluciones: devoluciones,
         ),
       );
-    } finally {
-      motivoController.dispose();
+    } catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        'No se pudo cargar el detalle: $error',
+        error: true,
+      );
     }
-    if (motivo == null) return;
+  }
+
+  Future<void> _anularVenta(Pedido pedido) async {
+    final motivo = await showDialog<String>(
+      context: context,
+      builder: (_) => _AnularVentaDialog(pedido: pedido),
+    );
+    if (motivo == null || !mounted) return;
     setState(() => _saving = true);
     try {
       await _salesRepository.anularPedido(
@@ -771,6 +740,8 @@ class _SalesPageState extends State<SalesPage> {
                             _filtros(context, data),
                             const SizedBox(height: 14),
                             _catalogo(context, data),
+                            const SizedBox(height: 16),
+                            _historialVentas(context, data),
                           ],
                         ),
                       ),
@@ -785,7 +756,7 @@ class _SalesPageState extends State<SalesPage> {
                           children: [
                             _carrito(context, data),
                             const SizedBox(height: 16),
-                            _historialVentas(context, data),
+                            _productosAgotados(context, data),
                           ],
                         ),
                       ),
@@ -837,6 +808,8 @@ class _SalesPageState extends State<SalesPage> {
                     _carrito(context, data),
                     const SizedBox(height: 16),
                     _historialVentas(context, data),
+                    const SizedBox(height: 16),
+                    _productosAgotados(context, data),
                   ],
                 ],
               ),
@@ -930,14 +903,18 @@ class _SalesPageState extends State<SalesPage> {
     );
   }
 
-  Widget _catalogo(BuildContext context, _SalesData data) {
-    final filtrados = data.productos.where((producto) {
+  List<_SaleProduct> _productosFiltrados(_SalesData data) {
+    final term = _search.trim().toLowerCase();
+    return data.productos.where((producto) {
       if (_categoria != null && producto.categoriaNombre != _categoria) {
         return false;
       }
-      final term = _search.trim().toLowerCase();
       return term.isEmpty || producto.nombre.toLowerCase().contains(term);
     }).toList();
+  }
+
+  Widget _catalogo(BuildContext context, _SalesData data) {
+    final filtrados = _productosFiltrados(data);
     if (filtrados.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
@@ -949,27 +926,24 @@ class _SalesPageState extends State<SalesPage> {
     final vendibles = filtrados
         .where((producto) => producto.vendible)
         .toList();
-    final noDisponibles = filtrados
+    if (vendibles.isEmpty) {
+      return const EmptyState(
+        icon: Icons.no_food_outlined,
+        title: 'No hay productos disponibles',
+        message: 'Revisa el menú del día o rehabilita un producto agotado.',
+      );
+    }
+    return _gridProductos(context, data, vendibles);
+  }
+
+  /// Sección de agotados/fuera del menú, separada del catálogo para poder
+  /// colocarla debajo del pedido en tablet.
+  Widget _productosAgotados(BuildContext context, _SalesData data) {
+    final noDisponibles = _productosFiltrados(data)
         .where((producto) => !producto.vendible)
         .toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (vendibles.isNotEmpty)
-          _gridProductos(context, data, vendibles)
-        else
-          const EmptyState(
-            icon: Icons.no_food_outlined,
-            title: 'No hay productos disponibles',
-            message:
-                'Revisa el menú del día o rehabilita un producto agotado.',
-          ),
-        if (noDisponibles.isNotEmpty) ...[
-          if (vendibles.isNotEmpty) const SizedBox(height: 16),
-          _fueraDelMenu(context, data, noDisponibles),
-        ],
-      ],
-    );
+    if (noDisponibles.isEmpty) return const SizedBox.shrink();
+    return _fueraDelMenu(context, data, noDisponibles);
   }
 
   Widget _gridProductos(
@@ -1616,61 +1590,27 @@ class _PresentacionPicker extends StatelessWidget {
   }
 }
 
-class _VentaDetalle {
-  const _VentaDetalle({required this.detalle, required this.devoluciones});
-
-  final PedidoDetalle detalle;
-  final List<Devolucion> devoluciones;
-}
-
-/// Fila del historial de ventas del día. El encabezado muestra el pedido y el
-/// botón ANULAR; al desplegarlo se cargan las líneas, los pagos y la
-/// devolución registrada.
-class _VentaTile extends StatefulWidget {
+/// Fila del historial de ventas del día. El detalle se abre con el botón de ojo.
+class _VentaTile extends StatelessWidget {
   const _VentaTile({
     super.key,
     required this.pedido,
     required this.puedeAnular,
     required this.onAnular,
-    required this.cargarDetalle,
-    required this.cargarDevoluciones,
+    required this.onVerDetalle,
   });
 
   final Pedido pedido;
   final bool puedeAnular;
   final VoidCallback onAnular;
-  final Future<PedidoDetalle> Function() cargarDetalle;
-  final Future<List<Devolucion>> Function() cargarDevoluciones;
-
-  @override
-  State<_VentaTile> createState() => _VentaTileState();
-}
-
-class _VentaTileState extends State<_VentaTile> {
-  bool _abierto = false;
-  Future<_VentaDetalle>? _futuro;
-
-  void _toggle() {
-    setState(() {
-      _abierto = !_abierto;
-      if (_abierto) _futuro ??= _cargar();
-    });
-  }
-
-  Future<_VentaDetalle> _cargar() async {
-    final detalle = await widget.cargarDetalle();
-    final devoluciones = await widget.cargarDevoluciones();
-    return _VentaDetalle(detalle: detalle, devoluciones: devoluciones);
-  }
+  final VoidCallback onVerDetalle;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final anulada = widget.pedido.anulado;
-    final fecha = parseSqlDateTime(widget.pedido.fecha);
-    final hora = fecha == null
-        ? widget.pedido.fecha
-        : formatTimeShort(fecha);
+    final anulada = pedido.anulado;
+    final fecha = parseSqlDateTime(pedido.fecha);
+    final hora = fecha == null ? pedido.fecha : formatTimeShort(fecha);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -1682,143 +1622,141 @@ class _VentaTileState extends State<_VentaTile> {
         ),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: _toggle,
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Row(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.receipt_long_outlined,
+              size: 20,
+              color: anulada ? scheme.error : scheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.receipt_long_outlined,
-                    size: 20,
-                    color: anulada ? scheme.error : scheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              '#${widget.pedido.id}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            if (anulada) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: scheme.error,
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  'ANULADA',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
-                                        color: scheme.onError,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '$hora · ${widget.pedido.usuarioNombre}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                  Row(
                     children: [
                       Text(
-                        formatMoney(widget.pedido.total),
+                        '#${pedido.id}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      if (widget.puedeAnular)
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            foregroundColor: scheme.error,
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(horizontal: 6),
-                            minimumSize: const Size(0, 28),
+                      if (anulada) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
                           ),
-                          onPressed: widget.onAnular,
-                          child: const Text('ANULAR'),
-                        )
-                      else
-                        Text(
-                          anulada ? 'Anulada' : 'Pagada',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
+                          decoration: BoxDecoration(
+                            color: scheme.error,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            'ANULADA',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: scheme.onError,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
                         ),
+                      ],
                     ],
                   ),
-                  Icon(_abierto ? Icons.expand_less : Icons.expand_more),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$hora · ${pedido.usuarioNombre}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
                 ],
               ),
             ),
-          ),
-          if (_abierto) _detalle(context),
-        ],
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  formatMoney(pedido.total),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                if (puedeAnular)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: scheme.error,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: const Size(0, 28),
+                    ),
+                    onPressed: onAnular,
+                    child: const Text('ANULAR'),
+                  )
+                else
+                  Text(
+                    anulada ? 'Anulada' : 'Pagada',
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
+            IconButton(
+              tooltip: 'Ver detalle',
+              onPressed: onVerDetalle,
+              icon: const Icon(Icons.visibility_outlined),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _detalle(BuildContext context) {
+/// Detalle de una venta en un emergente, abierto desde el botón de ojo.
+class _VentaDetalleDialog extends StatelessWidget {
+  const _VentaDetalleDialog({
+    required this.detalle,
+    required this.devoluciones,
+  });
+
+  final PedidoDetalle detalle;
+  final List<Devolucion> devoluciones;
+
+  @override
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return FutureBuilder<_VentaDetalle>(
-      future: _futuro,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.all(12),
-            child: LinearProgressIndicator(),
-          );
-        }
-        if (snapshot.hasError) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: Text(
-              'No se pudo cargar el detalle: ${snapshot.error}',
-              style: TextStyle(color: scheme.error),
-            ),
-          );
-        }
-        final data = snapshot.data;
-        if (data == null) return const SizedBox.shrink();
-        final lineas = data.detalle.lineas
-            .where((linea) => !linea.esComponente)
-            .toList();
-        final motivo = data.devoluciones
-            .map((devolucion) => devolucion.motivo ?? '')
-            .firstWhere((texto) => texto.isNotEmpty, orElse: () => '');
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+    final lineas = detalle.lineas
+        .where((linea) => !linea.esComponente)
+        .toList();
+    final motivo = devoluciones
+        .map((devolucion) => devolucion.motivo ?? '')
+        .firstWhere((texto) => texto.isNotEmpty, orElse: () => '');
+    final pedido = detalle.pedido;
+    final fecha = parseSqlDateTime(pedido.fecha);
+    final fechaTexto = fecha == null
+        ? pedido.fecha
+        : formatDateTimeShort(fecha);
+
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+      title: Text(
+        'Pedido #${pedido.id}${pedido.anulado ? ' · ANULADA' : ''}',
+      ),
+      content: DialogSurface(
+        maxWidth: 520,
+        child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Divider(height: 1),
-              const SizedBox(height: 8),
+              Text(
+                fechaTexto,
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const Divider(height: 18),
               ...lineas.map(
                 (linea) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1861,7 +1799,7 @@ class _VentaTileState extends State<_VentaTile> {
                   ),
                   const Spacer(),
                   Text(
-                    formatMoney(data.detalle.pedido.total),
+                    formatMoney(pedido.total),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -1873,7 +1811,7 @@ class _VentaTileState extends State<_VentaTile> {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              ...data.detalle.pagos.map(
+              ...detalle.pagos.map(
                 (pago) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(
@@ -1900,7 +1838,7 @@ class _VentaTileState extends State<_VentaTile> {
                   ),
                 ),
               ),
-              if (data.devoluciones.isNotEmpty) ...[
+              if (devoluciones.isNotEmpty) ...[
                 const Divider(height: 16),
                 Text(
                   'Devolución registrada',
@@ -1909,7 +1847,7 @@ class _VentaTileState extends State<_VentaTile> {
                     color: scheme.error,
                   ),
                 ),
-                ...data.devoluciones.map(
+                ...devoluciones.map(
                   (devolucion) => Padding(
                     padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Row(
@@ -1939,8 +1877,87 @@ class _VentaTileState extends State<_VentaTile> {
               ],
             ],
           ),
-        );
-      },
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Diálogo de anulación. El controlador y el formulario viven en el Estado
+/// del diálogo para no disponerlos mientras la ruta todavía se está cerrando.
+class _AnularVentaDialog extends StatefulWidget {
+  const _AnularVentaDialog({required this.pedido});
+
+  final Pedido pedido;
+
+  @override
+  State<_AnularVentaDialog> createState() => _AnularVentaDialogState();
+}
+
+class _AnularVentaDialogState extends State<_AnularVentaDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _motivo = TextEditingController();
+
+  @override
+  void dispose() {
+    _motivo.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      scrollable: true,
+      title: Text('Anular venta #${widget.pedido.id}'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Se anulará el pedido #${widget.pedido.id} por '
+              '${formatMoney(widget.pedido.total)}. La venta y su anulación '
+              'quedarán registradas en el historial.',
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _motivo,
+              autofocus: true,
+              maxLines: 3,
+              decoration: appInput(label: 'Motivo (obligatorio)'),
+              validator: (value) =>
+                  value == null || value.trim().isEmpty
+                  ? 'Ingresa el motivo de la anulación'
+                  : null,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+          ),
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) return;
+            Navigator.pop(context, _motivo.text.trim());
+          },
+          child: const Text('Anular venta'),
+        ),
+      ],
     );
   }
 }

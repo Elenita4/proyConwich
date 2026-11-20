@@ -111,12 +111,14 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   sección "Pedidos pendientes de pago".
 - Ventas (tablet/escritorio): el panel **Pedido** queda fijo a la **derecha** (~25%) y el catálogo ocupa
   el resto (~65%) con **3 productos por columna**; en teléfono el pedido se apila abajo. Debajo
-  del catálogo está el **historial de ventas del día** con pedido, hora, usuario, total, botón
-  **ANULAR** y detalle desplegable (líneas, pagos y devolución). ANULAR no borra: marca el pedido
-  y sus pagos como `ANULADO`, registra la devolución en `devoluciones` y mantiene la venta en el
-  historial. Puede anular cualquiera con `Permiso.ventas`. El switch **Agotado** de cada tarjeta
-  oculta el producto de Ventas y se refleja en `productos.agotado` + `menu_dia_items`; desde el
-  Menú se rehabilita.
+  del catálogo (columna izquierda) está el **historial de ventas del día** con pedido, hora,
+  usuario, total, botón **ANULAR** y un botón de **ojo** que abre el detalle en un emergente
+  (líneas, pagos y devolución). La sección de **productos agotados/fuera del menú** queda debajo
+  del panel Pedido, en la columna derecha (en teléfono va al final). ANULAR no borra: marca el
+  pedido y sus pagos como `ANULADO`, registra la devolución en `devoluciones` y mantiene la venta
+  en el historial; pide un motivo obligatorio en un diálogo con estado propio. Puede anular
+  cualquiera con `Permiso.ventas`. El switch **Agotado** de cada tarjeta oculta el producto de
+  Ventas y se refleja en `productos.agotado` + `menu_dia_items`; desde el Menú se rehabilita.
 - Caja: se muestra un único **"Total esperado del turno"** (`efectivo + QR − salidas`) y el
   cierre pide un **"Sobrante del turno"** con signo (negativo = faltante). `cerrarCaja` guarda
   `cajas.sobrante` y `cajas.total_esperado`; el efectivo contado y el QR verificado quedaron
