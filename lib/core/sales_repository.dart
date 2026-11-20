@@ -674,10 +674,11 @@ class SalesRepository {
         }
         final platoRows = await db.rawQuery(
           '''
-          SELECT mi.menu_dia_id, mi.disponible,
+          SELECT mi.menu_dia_id, mi.disponible, m.precio_almuerzo,
                  p.nombre, p.precio, p.tipo, p.costo_unitario, p.activo,
                  c.nombre AS categoria_nombre
           FROM menu_dia_items mi
+          INNER JOIN menus_dia m ON m.id = mi.menu_dia_id
           INNER JOIN productos p ON p.id = mi.producto_id
           INNER JOIN categorias_producto c ON c.id = p.categoria_id
           WHERE mi.id = ? AND mi.producto_id = ?
@@ -720,12 +721,13 @@ class SalesRepository {
         final sopa = sopaRows.first;
         final precioPlato = (plato['precio'] as num).toDouble();
         final precioSopa = (sopa['precio'] as num).toDouble();
+        final precioFijo = (plato['precio_almuerzo'] as num?)?.toDouble();
         result.add(
           CartLine(
             productoId: linea.productoId,
             menuDiaItemId: linea.menuDiaItemId,
             nombre: plato['nombre']! as String,
-            precio: precioPlato + precioSopa,
+            precio: precioFijo ?? (precioPlato + precioSopa),
             cantidad: linea.cantidad,
             observacion: linea.observacion,
             tipo: plato['tipo']! as String,

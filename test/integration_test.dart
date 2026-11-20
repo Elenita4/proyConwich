@@ -1094,6 +1094,33 @@ void main() {
     final menuRepo = MenuRepository();
     final fecha = DateTime.now();
     final menu = await menuRepo.crearMenu(fecha, 'ALMUERZO', admin.id);
+    expect(menu.habilitado, isTrue);
+    final db = await AppDatabase.instance.database;
+    expect(
+      (await db.query(
+        'menus_dia',
+        columns: ['estado'],
+        where: 'id = ?',
+        whereArgs: [menu.id],
+      )).single['estado'],
+      'HABILITADO',
+    );
+    await db.update(
+      'menus_dia',
+      {'estado': 'BORRADOR'},
+      where: 'id = ?',
+      whereArgs: [menu.id],
+    );
+    expect((await menuRepo.getMenu(fecha, 'ALMUERZO'))?.habilitado, isTrue);
+    expect(
+      (await db.query(
+        'menus_dia',
+        columns: ['estado'],
+        where: 'id = ?',
+        whereArgs: [menu.id],
+      )).single['estado'],
+      'HABILITADO',
+    );
     await menuRepo.agregarProducto(menu.id, productoId);
     var items = await menuRepo.getItems(menu.id);
     expect(items.length, 1);
@@ -1104,6 +1131,12 @@ void main() {
     await menuRepo.agregarProducto(menu.id, productoId);
     items = await menuRepo.getItems(menu.id);
     expect(items.length, 1);
+    expect((await menuRepo.getMenu(fecha, 'ALMUERZO'))?.habilitado, isTrue);
+    expect(
+      (await menuRepo.getMenuHabilitado(fecha, 'ALMUERZO'))
+          .map((item) => item.productoId),
+      contains(productoId),
+    );
   });
 
   test('las categorías base son planas y usan los nombres nuevos', () async {
@@ -2109,6 +2142,60 @@ void main() {
     expect(ventasPorNombre['Sopa de maní (incluida)']!.ventas, 0);
     expect(ventasPorNombre['Sopa de maní (incluida)']!.completos, 1);
     expect(reporte.fold<double>(0, (suma, item) => suma + item.ventas), 26);
+
+    await menuRepo.setPrecioAlmuerzo(menu.id, 12);
+    final pedidoPrecioFijoId = await SalesRepository().crearPedido(
+      usuarioId: admin.id,
+      cajaId: caja.id,
+      menuDiaId: menu.id,
+      lineas: [
+        CartLine(
+          productoId: silpanchoId,
+          menuDiaItemId: items
+              .singleWhere((item) => item.productoId == silpanchoId)
+              .id,
+          nombre: 'Silpancho',
+          precio: 12,
+          cantidad: 1,
+          modalidadVenta: 'COMPLETO',
+          productoSopaId: sopaId,
+          menuDiaSopaItemId: sopaItem.id,
+        ),
+      ],
+      pagos: const [PagoInput(metodo: 'EFECTIVO', monto: 12)],
+    );
+    final pedidoPrecioFijo = await SalesRepository().getPedido(
+      pedidoPrecioFijoId,
+    );
+    expect(pedidoPrecioFijo.pedido.total, 12);
+    expect(pedidoPrecioFijo.pedido.estadoPago, 'PAGADO');
+    expect(pedidoPrecioFijo.pagos.single.monto, 12);
+    final lineaCompletaPrecioFijo = pedidoPrecioFijo.lineas.singleWhere(
+      (linea) => linea.modalidadVenta == 'COMPLETO',
+    );
+    expect(lineaCompletaPrecioFijo.precioUnitario, 12);
+    expect(lineaCompletaPrecioFijo.precioSopaUnitario, 4);
+    final inicioDia = DateTime(fecha.year, fecha.month, fecha.day);
+    final pedidosReporte = await ReportRepository().getPedidos(
+      inicioDia,
+      inicioDia.add(const Duration(days: 1)),
+    );
+    final pedidoFijoReporte = pedidosReporte.singleWhere(
+      (pedido) => pedido.id == pedidoPrecioFijoId,
+    );
+    expect(pedidoFijoReporte.total, 12);
+    expect(pedidoFijoReporte.efectivo, 12);
+    expect(pedidoFijoReporte.qr, 0);
+    final productosReporteFijo = await ReportRepository().getProductos(
+      inicioDia,
+      inicioDia.add(const Duration(days: 1)),
+    );
+    expect(
+      productosReporteFijo
+          .singleWhere((producto) => producto.nombre == 'Silpancho (completo)')
+          .ventas,
+      12,
+    );
 
     await menuRepo.limpiarMenu(menu.id);
     expect(await menuRepo.getItems(menu.id), isEmpty);
