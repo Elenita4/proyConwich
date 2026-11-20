@@ -1772,44 +1772,34 @@ class _ReportsPageState extends State<ReportsPage> {
                 DataColumn(label: Text('Faltante'), numeric: true),
                 DataColumn(label: Text('Costo'), numeric: true),
               ],
-              rows: [
-                ...data.faltantes.map(
-                  (item) => DataRow(
-                    cells: [
-                      DataCell(Text(formatDateTimeShort(item.fecha))),
-                      DataCell(Text(item.referencia ?? '—')),
-                      DataCell(Text(item.producto)),
-                      DataCell(Text(item.insumo)),
-                      DataCell(
-                        Text('${formatQty(item.requerido)} ${item.unidad}'),
-                      ),
-                      DataCell(
-                        Text('${formatQty(item.disponible)} ${item.unidad}'),
-                      ),
-                      DataCell(
-                        Text(
-                          '${formatQty(item.faltante)} ${item.unidad}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: scheme.error,
+              rows: data.faltantes
+                  .map(
+                    (item) => DataRow(
+                      cells: [
+                        DataCell(Text(formatDateTimeShort(item.fecha))),
+                        DataCell(Text(item.referencia ?? '—')),
+                        DataCell(Text(item.producto)),
+                        DataCell(Text(item.insumo)),
+                        DataCell(
+                          Text('${formatQty(item.requerido)} ${item.unidad}'),
+                        ),
+                        DataCell(
+                          Text('${formatQty(item.disponible)} ${item.unidad}'),
+                        ),
+                        DataCell(
+                          Text(
+                            '${formatQty(item.faltante)} ${item.unidad}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: scheme.error,
+                            ),
                           ),
                         ),
-                      ),
-                      DataCell(Text(formatMoney(item.costoFaltante))),
-                    ],
-                  ),
-                ),
-                _filaTotal([
-                  'TOTAL',
-                  '—',
-                  '—',
-                  '—',
-                  '—',
-                  '—',
-                  '—',
-                  formatMoney(total),
-                ]),
-              ],
+                        DataCell(Text(formatMoney(item.costoFaltante))),
+                      ],
+                    ),
+                  )
+                  .toList(),
             ),
           ),
         ),

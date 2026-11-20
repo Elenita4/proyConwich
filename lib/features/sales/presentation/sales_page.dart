@@ -68,11 +68,7 @@ class _SaleProduct {
 
   /// Solo lo que está en el menú habilitado se puede vender.
   bool get vendible =>
-      activo &&
-      enMenu &&
-      disponible &&
-      !agotado &&
-      (!esDirecto || stock > 0);
+      activo && enMenu && disponible && !agotado && (!esDirecto || stock > 0);
 
   String get razon {
     if (!activo) return 'Producto inactivo';
@@ -121,6 +117,12 @@ class SalesPage extends StatefulWidget {
 }
 
 class _SalesPageState extends State<SalesPage> {
+  static const _categoriasParaLlevar = {
+    'CAFE Y MAS',
+    'MATES',
+    'JUGOS',
+    'FRAPEES',
+  };
   final _cashRepository = CashRepository();
   final _catalogRepository = CatalogRepository();
   final _menuRepository = MenuRepository();
@@ -133,6 +135,7 @@ class _SalesPageState extends State<SalesPage> {
   String? _categoria;
   bool _saving = false;
   bool _mostrarFueraMenu = false;
+  bool _paraLlevar = false;
 
   @override
   void initState() {
@@ -267,7 +270,10 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   double get _total =>
-      _cart.values.fold<double>(0, (sum, line) => sum + line.subtotal);
+      calcularTotalPedido(_cart.values, paraLlevar: _paraLlevar);
+
+  bool _aplicaRecargoParaLlevar(String categoria) =>
+      _categoriasParaLlevar.contains(categoria.trim().toUpperCase());
 
   int get _unidades =>
       _cart.values.fold<int>(0, (sum, line) => sum + line.cantidad.round());
@@ -313,6 +319,9 @@ class _SalesPageState extends State<SalesPage> {
       precio: completo ? precioCompleto : producto.precio,
       cantidad: 1,
       tipo: producto.tipo,
+      aplicaRecargoParaLlevar: _aplicaRecargoParaLlevar(
+        producto.categoriaNombre,
+      ),
       modalidadVenta: modalidad,
       productoSopaId: completo ? sopa!.productoId : null,
       menuDiaSopaItemId: completo ? sopa!.menuDiaItemId : null,
@@ -374,6 +383,9 @@ class _SalesPageState extends State<SalesPage> {
       tipo: producto.tipo,
       modalidadVenta: 'NORMAL',
       presentacionId: presentacion.id,
+      aplicaRecargoParaLlevar: _aplicaRecargoParaLlevar(
+        producto.categoriaNombre,
+      ),
     );
     setState(() {
       final line = _cart[nuevaLinea.key];
@@ -392,6 +404,7 @@ class _SalesPageState extends State<SalesPage> {
   void _limpiarCarrito() {
     setState(() {
       _cart.clear();
+      _paraLlevar = false;
       _referencia.clear();
       _observacion.clear();
     });
@@ -417,7 +430,10 @@ class _SalesPageState extends State<SalesPage> {
         menuDiaId: data.menu?.habilitado == true ? data.menu!.id : null,
         referencia: _referencia.text,
         observacion: _observacion.text,
-        lineas: _cart.values.toList(),
+        lineas: lineasConRecargoParaLlevar(
+          _cart.values,
+          paraLlevar: _paraLlevar,
+        ),
         pagos: pagos,
       );
       final detalle = await _salesRepository.getPedido(pedidoId);
@@ -585,10 +601,7 @@ class _SalesPageState extends State<SalesPage> {
       );
       if (!confirmado) return;
     }
-    await _catalogRepository.setProductoAgotado(
-      producto.productoId,
-      agotado,
-    );
+    await _catalogRepository.setProductoAgotado(producto.productoId, agotado);
     final menuItemId = producto.menuDiaItemId;
     if (menuItemId != null) {
       await _menuRepository.setDisponible(
@@ -622,9 +635,8 @@ class _SalesPageState extends State<SalesPage> {
                   'Ventas del día',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
               const SizedBox(width: 8),
@@ -668,10 +680,8 @@ class _SalesPageState extends State<SalesPage> {
       if (!mounted) return;
       await showDialog<void>(
         context: context,
-        builder: (_) => _VentaDetalleDialog(
-          detalle: detalle,
-          devoluciones: devoluciones,
-        ),
+        builder: (_) =>
+            _VentaDetalleDialog(detalle: detalle, devoluciones: devoluciones),
       );
     } catch (error) {
       if (!mounted) return;
@@ -705,7 +715,11 @@ class _SalesPageState extends State<SalesPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
-      showAppMessage(context, 'No se pudo anular la venta: $error', error: true);
+      showAppMessage(
+        context,
+        'No se pudo anular la venta: $error',
+        error: true,
+      );
     }
   }
 
@@ -923,9 +937,7 @@ class _SalesPageState extends State<SalesPage> {
       );
     }
 
-    final vendibles = filtrados
-        .where((producto) => producto.vendible)
-        .toList();
+    final vendibles = filtrados.where((producto) => producto.vendible).toList();
     if (vendibles.isEmpty) {
       return const EmptyState(
         icon: Icons.no_food_outlined,
@@ -1052,8 +1064,7 @@ class _SalesPageState extends State<SalesPage> {
                     producto.agotado ||
                     (producto.enMenu && !producto.disponible),
                 accion:
-                    producto.enMenu &&
-                        widget.usuario.puede(Permiso.agotamiento)
+                    producto.enMenu && widget.usuario.puede(Permiso.agotamiento)
                     ? Tooltip(
                         message: producto.agotado || !producto.disponible
                             ? 'Rehabilitar producto'
@@ -1122,6 +1133,9 @@ class _SalesPageState extends State<SalesPage> {
 
   Widget _carrito(BuildContext context, _SalesData data) {
     final scheme = Theme.of(context).colorScheme;
+    final tieneProductosParaLlevar = _cart.values.any(
+      (linea) => linea.aplicaRecargoParaLlevar,
+    );
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1174,6 +1188,16 @@ class _SalesPageState extends State<SalesPage> {
               message: 'Toca un producto para agregarlo al pedido.',
             )
           else ...[
+            if (tieneProductosParaLlevar)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Para llevar'),
+                subtitle: const Text('+ Bs 0,50 por pedido'),
+                value: _paraLlevar,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() => _paraLlevar = value),
+              ),
             ..._cart.values.map(
               (line) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -1264,6 +1288,17 @@ class _SalesPageState extends State<SalesPage> {
               ),
             ),
             const Divider(height: 20),
+            if (_paraLlevar && tieneProductosParaLlevar)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Text('Recargo para llevar'),
+                    const Spacer(),
+                    Text(formatMoney(recargoParaLlevarPorPedido)),
+                  ],
+                ),
+              ),
             Row(
               children: [
                 Text('Total', style: Theme.of(context).textTheme.titleMedium),
@@ -1742,9 +1777,7 @@ class _VentaDetalleDialog extends StatelessWidget {
 
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-      title: Text(
-        'Pedido #${pedido.id}${pedido.anulado ? ' · ANULADA' : ''}',
-      ),
+      title: Text('Pedido #${pedido.id}${pedido.anulado ? ' · ANULADA' : ''}'),
       content: DialogSurface(
         maxWidth: 520,
         child: SingleChildScrollView(
@@ -1778,9 +1811,7 @@ class _VentaDetalleDialog extends StatelessWidget {
                               Text(
                                 'Incluye ${linea.nombreSopa}',
                                 style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: scheme.onSurfaceVariant,
-                                    ),
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
                           ],
                         ),
@@ -1807,9 +1838,8 @@ class _VentaDetalleDialog extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'Pagos',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               ...detalle.pagos.map(
                 (pago) => Padding(
@@ -1870,9 +1900,8 @@ class _VentaDetalleDialog extends StatelessWidget {
                 if (motivo.isNotEmpty)
                   Text(
                     'Motivo: $motivo',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
               ],
             ],
@@ -1933,8 +1962,7 @@ class _AnularVentaDialogState extends State<_AnularVentaDialog> {
               autofocus: true,
               maxLines: 3,
               decoration: appInput(label: 'Motivo (obligatorio)'),
-              validator: (value) =>
-                  value == null || value.trim().isEmpty
+              validator: (value) => value == null || value.trim().isEmpty
                   ? 'Ingresa el motivo de la anulación'
                   : null,
             ),
