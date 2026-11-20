@@ -240,13 +240,13 @@ class ReceiptService {
           fila('Fecha', formatDateShort(parseSqlDate(caja.fecha))),
           fila('Cajero', cajero),
           pw.Divider(),
-          fila('Ventas efectivo', formatMoney(resumen.ventasEfectivo)),
-          fila('Ventas QR', formatMoney(resumen.ventasQr)),
+          fila('Ventas efectivo', formatSignedMoney(resumen.ventasEfectivo)),
+          fila('Ventas QR', formatSignedMoney(resumen.ventasQr)),
           fila(
             'Salidas de caja',
-            formatMoney(resumen.salidasEfectivo + resumen.salidasQr),
+            '-${formatMoney(resumen.salidasEfectivo + resumen.salidasQr)}',
           ),
-          fila('Sobrante del turno', formatMoney(sobrante)),
+          fila('Sobrante del turno', formatSignedMoney(sobrante)),
           pw.Divider(),
           fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), fuerte: true),
           fila(

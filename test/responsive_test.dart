@@ -187,6 +187,85 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Nuevo combo permite buscar y filtrar productos por categoría',
+    (tester) async {
+      final catalog = CatalogRepository();
+      final categorias = await tester.runAsync(catalog.getCategorias);
+      final categoriaRefrescos = categorias!.firstWhere(
+        (categoria) => categoria.nombre == 'REFRESCOS',
+      );
+      final productosIniciales = await tester.runAsync(catalog.getProductos);
+      final categoriaInicial = productosIniciales!.first.categoriaNombre;
+      await tester.runAsync(
+        () => catalog.saveProducto(
+          Producto(
+            nombre: 'Bebida destacada',
+            categoriaId: categoriaRefrescos.id!,
+            categoriaNombre: categoriaRefrescos.nombre,
+            categoriaColor: categoriaRefrescos.color,
+            precio: 8,
+            tipo: 'PREPARADO',
+            stockMinimo: 0,
+            costoUnitario: 0,
+            activo: true,
+            stock: 0,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ProductsPage(usuario: admin, refreshToken: 0)),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Nuevo combo'));
+      await tester.pumpAndSettle();
+
+      // El diálogo comparte el label 'Buscar producto' con el buscador de la
+      // página, así que se acota el finder al AlertDialog para no ambiguar.
+      final buscador = find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField &&
+              widget.decoration?.labelText == 'Buscar producto',
+        ),
+      );
+      await tester.enterText(buscador, 'Bebida');
+      await tester.pump();
+      expect(
+        find.widgetWithText(CheckboxListTile, 'Bebida destacada'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(CheckboxListTile, 'Almuerzo del día'),
+        findsNothing,
+      );
+
+      await tester.enterText(buscador, '');
+      await tester.pump();
+      final chipCategoria = find.widgetWithText(ChoiceChip, categoriaInicial);
+      await tester.ensureVisible(chipCategoria);
+      await tester.tap(chipCategoria);
+      await tester.pump();
+      expect(
+        find.widgetWithText(CheckboxListTile, 'Almuerzo del día'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(CheckboxListTile, 'Bebida destacada'),
+        findsNothing,
+      );
+    },
+  );
+
   testWidgets('pantallas operativas no desbordan en 360x640', (tester) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;

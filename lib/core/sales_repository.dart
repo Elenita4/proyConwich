@@ -5,6 +5,8 @@ import 'catalog_repository.dart';
 import 'date_utils.dart';
 import 'menu_repository.dart';
 
+const recargoParaLlevarPorPedido = 0.50;
+
 class PagoInput {
   const PagoInput({required this.metodo, required this.monto, this.referencia});
 
@@ -32,6 +34,7 @@ class CartLine {
     this.costoSopaUnitario = 0,
     this.tipoSopa,
     this.presentacionId,
+    this.aplicaRecargoParaLlevar = false,
   });
 
   final int productoId;
@@ -54,18 +57,24 @@ class CartLine {
   /// Presentación elegida de un producto con variantes (por ejemplo, el tamaño
   /// de un refresco). Solo se usa para diferenciar líneas del carrito.
   final int? presentacionId;
+  final bool aplicaRecargoParaLlevar;
 
   double get subtotal => precio * cantidad;
   String get key =>
       '${productoId}_${modalidadVenta}_${productoSopaId ?? 0}_'
       '${presentacionId ?? 0}';
 
-  CartLine copyWith({double? cantidad, String? observacion}) => CartLine(
+  CartLine copyWith({
+    String? nombre,
+    double? precio,
+    double? cantidad,
+    String? observacion,
+  }) => CartLine(
     productoId: productoId,
     menuDiaItemId: menuDiaItemId,
     menuDiaComboId: menuDiaComboId,
-    nombre: nombre,
-    precio: precio,
+    nombre: nombre ?? this.nombre,
+    precio: precio ?? this.precio,
     cantidad: cantidad ?? this.cantidad,
     observacion: observacion ?? this.observacion,
     tipo: tipo,
@@ -78,7 +87,45 @@ class CartLine {
     costoSopaUnitario: costoSopaUnitario,
     tipoSopa: tipoSopa,
     presentacionId: presentacionId,
+    aplicaRecargoParaLlevar: aplicaRecargoParaLlevar,
   );
+}
+
+double calcularTotalPedido(
+  Iterable<CartLine> lineas, {
+  required bool paraLlevar,
+}) {
+  var total = 0.0;
+  var recargoAplicado = false;
+  for (final linea in lineas) {
+    total += linea.subtotal;
+    if (paraLlevar &&
+        !recargoAplicado &&
+        linea.cantidad > 0 &&
+        linea.aplicaRecargoParaLlevar) {
+      total += recargoParaLlevarPorPedido;
+      recargoAplicado = true;
+    }
+  }
+  return total;
+}
+
+List<CartLine> lineasConRecargoParaLlevar(
+  Iterable<CartLine> lineas, {
+  required bool paraLlevar,
+}) {
+  final resultado = lineas.toList();
+  if (!paraLlevar) return resultado;
+  final indice = resultado.indexWhere(
+    (linea) => linea.cantidad > 0 && linea.aplicaRecargoParaLlevar,
+  );
+  if (indice < 0) return resultado;
+  final linea = resultado[indice];
+  resultado[indice] = linea.copyWith(
+    nombre: '${linea.nombre} (Para llevar)',
+    precio: linea.precio + recargoParaLlevarPorPedido / linea.cantidad,
+  );
+  return resultado;
 }
 
 class Pedido {
@@ -780,9 +827,7 @@ class SalesRepository {
         CartLine(
           productoId: linea.productoId,
           menuDiaItemId: linea.menuDiaItemId,
-          nombre: esPresentacion
-              ? linea.nombre
-              : row['nombre']! as String,
+          nombre: esPresentacion ? linea.nombre : row['nombre']! as String,
           precio: esPresentacion
               ? linea.precio
               : (row['precio'] as num).toDouble(),
