@@ -514,7 +514,7 @@ class SalesRepository {
   Future<void> anularPedido(
     int pedidoId, {
     int? usuarioId,
-    String? motivo,
+    required String motivo,
   }) async {
     final db = await AppDatabase.instance.database;
     final pedidoRows = await db.query(
@@ -529,6 +529,9 @@ class SalesRepository {
     final estadoPago = pedido['estado_pago'] as String?;
     final estadoEntrega = pedido['estado_entrega'] as String?;
     if (estadoPago == 'ANULADO' || estadoEntrega == 'ANULADO') return;
+    if (motivo.trim().isEmpty) {
+      throw ArgumentError('El motivo de anulación es obligatorio.');
+    }
 
     final usuario = usuarioId ?? (pedido['usuario_id'] as num).toInt();
     final cajaId = (pedido['caja_id'] as num).toInt();
@@ -674,10 +677,11 @@ class SalesRepository {
         }
         final platoRows = await db.rawQuery(
           '''
-          SELECT mi.menu_dia_id, mi.disponible,
+          SELECT mi.menu_dia_id, mi.disponible, m.precio_almuerzo,
                  p.nombre, p.precio, p.tipo, p.costo_unitario, p.activo,
                  c.nombre AS categoria_nombre
           FROM menu_dia_items mi
+          INNER JOIN menus_dia m ON m.id = mi.menu_dia_id
           INNER JOIN productos p ON p.id = mi.producto_id
           INNER JOIN categorias_producto c ON c.id = p.categoria_id
           WHERE mi.id = ? AND mi.producto_id = ?
@@ -720,12 +724,13 @@ class SalesRepository {
         final sopa = sopaRows.first;
         final precioPlato = (plato['precio'] as num).toDouble();
         final precioSopa = (sopa['precio'] as num).toDouble();
+        final precioFijo = (plato['precio_almuerzo'] as num?)?.toDouble();
         result.add(
           CartLine(
             productoId: linea.productoId,
             menuDiaItemId: linea.menuDiaItemId,
             nombre: plato['nombre']! as String,
-            precio: precioPlato + precioSopa,
+            precio: precioFijo ?? (precioPlato + precioSopa),
             cantidad: linea.cantidad,
             observacion: linea.observacion,
             tipo: plato['tipo']! as String,

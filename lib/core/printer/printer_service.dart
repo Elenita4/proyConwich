@@ -469,11 +469,12 @@ class PrinterService {
     );
     b.line(_fila('Ventas QR', formatMoney(resumen.ventasQr), _ancho));
     b.line(
-      _fila('Salida efectivo', formatMoney(resumen.salidasEfectivo), _ancho),
+      _fila(
+        'Salidas de caja',
+        formatMoney(resumen.salidasEfectivo + resumen.salidasQr),
+        _ancho,
+      ),
     );
-    if (resumen.salidasQr > 0) {
-      b.line(_fila('Salida QR', formatMoney(resumen.salidasQr), _ancho));
-    }
     b.line(
       _fila('Sobrante del turno', formatMoney(sobrante), _ancho),
     );

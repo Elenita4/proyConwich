@@ -7,6 +7,7 @@ import 'package:test_code_02/core/auth_repository.dart';
 import 'package:test_code_02/core/cash_repository.dart';
 import 'package:test_code_02/core/catalog_repository.dart';
 import 'package:test_code_02/core/menu_repository.dart';
+import 'package:test_code_02/core/report_repository.dart';
 import 'package:test_code_02/core/sales_repository.dart';
 import 'package:test_code_02/core/session.dart';
 import 'package:test_code_02/data/database/app_database.dart';
@@ -153,6 +154,141 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Ventas fija Pedido al 25% derecho en escritorio', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final catalogo = (await tester.runAsync(sembrarCatalogo))!;
+    final ((platoId, _), _) = catalogo;
+    final catalog = CatalogRepository();
+    final categoria = (await tester.runAsync(() => catalog.getCategorias()))!
+        .firstWhere((item) => item.nombre == 'PLATOS SUELTOS');
+    final menuRepository = MenuRepository();
+    await tester.runAsync(() async {
+      final menu = await menuRepository.crearMenu(
+        DateTime.now(),
+        MenuRepository.tipoMenu,
+        admin.id,
+      );
+      await menuRepository.agregarProducto(menu.id, platoId);
+      for (var index = 0; index < 10; index++) {
+        final productoId = await catalog.saveProducto(
+          Producto(
+            nombre: 'Plato largo $index',
+            categoriaId: categoria.id!,
+            categoriaNombre: categoria.nombre,
+            categoriaColor: categoria.color,
+            precio: 10,
+            tipo: 'PREPARADO',
+            stockMinimo: 0,
+            costoUnitario: 0,
+            activo: true,
+            stock: 0,
+          ),
+        );
+        await menuRepository.agregarProducto(menu.id, productoId);
+      }
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SalesPage(usuario: admin, refreshToken: 0)),
+      ),
+    );
+    await asentar(tester);
+
+    final pedido = find.text('Pedido');
+    for (var index = 0; index < 60 && pedido.evaluate().isEmpty; index++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+    expect(pedido, findsOneWidget);
+    final producto = find.text('Plato uno').first;
+    final posicionPedido = tester.getTopLeft(pedido);
+    expect(posicionPedido.dx, greaterThan(tester.getTopLeft(producto).dx));
+    final panelScroll = find
+        .ancestor(of: pedido, matching: find.byType(SingleChildScrollView))
+        .first;
+    expect(tester.getSize(panelScroll).width, closeTo(300, 0.1));
+
+    await tester.drag(
+      find.byType(SingleChildScrollView).first,
+      const Offset(0, -500),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(pedido).dy, closeTo(posicionPedido.dy, 0.1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ventas pregunta por la nota tras un pago mixto', (tester) async {
+    tester.view.physicalSize = const Size(360, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final catalogo = (await tester.runAsync(sembrarCatalogo))!;
+    final ((platoId, _), _) = catalogo;
+    final menuRepository = MenuRepository();
+    await tester.runAsync(() async {
+      final menu = await menuRepository.crearMenu(
+        DateTime.now(),
+        MenuRepository.tipoMenu,
+        admin.id,
+      );
+      await menuRepository.agregarProducto(menu.id, platoId);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SalesPage(usuario: admin, refreshToken: 0)),
+      ),
+    );
+    await asentar(tester);
+    expect(tester.takeException(), isNull, reason: 'al cargar Ventas');
+    await tester.tap(find.text('Plato uno').first);
+    await tester.pump();
+    expect(tester.takeException(), isNull, reason: 'al agregar un producto');
+    await tester.ensureVisible(find.text('Pagado'));
+    await tester.tap(find.text('Pagado'));
+    await tester.pumpAndSettle();
+    final cobroError = tester.takeException();
+    expect(cobroError, isNull, reason: 'al abrir el cobro');
+
+    final camposPago = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    expect(camposPago, findsNWidgets(2));
+    await tester.enterText(camposPago.first, '7');
+    await tester.pump();
+    expect(tester.takeException(), isNull, reason: 'al editar el efectivo');
+    expect(tester.widget<TextField>(camposPago.last).controller?.text, '3.00');
+    await tester.tap(find.text('Confirmar pago'));
+    await asentar(tester);
+    expect(tester.takeException(), isNull, reason: 'al registrar el pago');
+
+    final hoy = DateTime.now();
+    final inicio = DateTime(hoy.year, hoy.month, hoy.day);
+    final reportes = await tester.runAsync(
+      () => ReportRepository().getPedidos(
+        inicio,
+        inicio.add(const Duration(days: 1)),
+      ),
+    );
+    expect(reportes, hasLength(1));
+    expect(reportes!.single.total, 10);
+    expect(reportes.single.efectivo, 7);
+    expect(reportes.single.qr, 3);
+    expect(find.text('Nota de venta'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Ventas agrega el completo al precio automático con un toque', (
     tester,
   ) async {
@@ -267,6 +403,7 @@ void main() {
     await tester.tap(checkbox);
     // El toque guarda al instante en la base: ya no hay botón "Listo".
     await esperarItems(tester, menuId, 2);
+    await asentar(tester);
     expect(tester.widget<Checkbox>(checkbox).value, isTrue);
     final items = (await tester.runAsync(
       () => menuRepository.getItems(menuId),
@@ -282,7 +419,108 @@ void main() {
     await tester.pump();
     await tester.tap(checkbox);
     await esperarItems(tester, menuId, 0);
+    await asentar(tester);
     expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Menú muestra todas las categorías y habilita en Ventas', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.runAsync(sembrarCatalogo);
+    final catalog = CatalogRepository();
+    await tester.runAsync(
+      () => catalog.saveCategoria(
+        const CategoriaProducto(
+          nombre: 'POSTRES',
+          color: 0xFFCA8A04,
+          siempreDisponible: false,
+          orden: 7,
+          activo: true,
+        ),
+      ),
+    );
+    final categorias = (await tester.runAsync(catalog.getCategorias))!;
+    const nombresCategorias = [
+      'REFRESCOS',
+      'BEBIDAS CALIENTES',
+      'FRAPPES',
+      'COMBOS',
+      'POSTRES',
+    ];
+    final productos = <String, int>{};
+    for (final nombreCategoria in nombresCategorias) {
+      final categoria = categorias.firstWhere(
+        (item) => item.nombre == nombreCategoria,
+      );
+      final productoId = (await tester.runAsync(
+        () => catalog.saveProducto(
+          Producto(
+            nombre: 'Producto $nombreCategoria',
+            categoriaId: categoria.id!,
+            categoriaNombre: categoria.nombre,
+            categoriaColor: categoria.color,
+            precio: 5,
+            tipo: 'PREPARADO',
+            stockMinimo: 0,
+            costoUnitario: 0,
+            activo: true,
+            stock: 0,
+          ),
+        ),
+      ))!;
+      productos[nombreCategoria] = productoId;
+    }
+    final menuRepository = MenuRepository();
+    final menuId = (await tester.runAsync(() async {
+      final menu = await menuRepository.crearMenu(
+        DateTime.now(),
+        MenuRepository.tipoMenu,
+        admin.id,
+      );
+      return menu.id;
+    }))!;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MenuPage(usuario: admin, refreshToken: 0)),
+      ),
+    );
+    await asentar(tester);
+
+    for (var index = 0; index < nombresCategorias.length; index++) {
+      final nombre = 'Producto ${nombresCategorias[index]}';
+      final producto = find.text(nombre);
+      expect(producto, findsOneWidget);
+      await tester.ensureVisible(producto);
+      await tester.tap(producto);
+      await esperarItems(tester, menuId, index + 1);
+      await asentar(tester);
+    }
+    expect(
+      (await tester.runAsync(
+        () => menuRepository.getMenuHabilitado(
+          DateTime.now(),
+          MenuRepository.tipoMenu,
+        ),
+      ))!.map((item) => item.productoId).toSet(),
+      containsAll(productos.values),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SalesPage(usuario: admin, refreshToken: 0)),
+      ),
+    );
+    await asentar(tester);
+    for (final nombreCategoria in nombresCategorias) {
+      expect(find.text('Producto $nombreCategoria'), findsWidgets);
+    }
     expect(tester.takeException(), isNull);
   });
 

@@ -431,9 +431,7 @@ class _SalesPageState extends State<SalesPage> {
         context,
         'Venta registrada por ${formatMoney(_totalAnterior(pagos))}.',
       );
-      if (detalle.pedido.pagadoCompleto) {
-        await _ofrecerImprimir(detalle, caja);
-      }
+      await _ofrecerImprimir(detalle, caja);
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -665,22 +663,69 @@ class _SalesPageState extends State<SalesPage> {
   }
 
   Future<void> _anularVenta(Pedido pedido) async {
-    final confirmado = await confirmAction(
-      context,
-      title: 'Anular venta',
-      message:
-          'Se anulará el pedido #${pedido.id} por ${formatMoney(pedido.total)}. '
-          'La venta y su anulación quedarán registradas en el historial, y el '
-          'monto se descontará de la caja del turno.',
-      confirmLabel: 'Anular venta',
-      destructive: true,
-    );
-    if (!confirmado) return;
+    final motivoController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    String? motivo;
+    try {
+      motivo = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          scrollable: true,
+          title: const Text('Anular venta'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Se anulará el pedido #${pedido.id} por '
+                  '${formatMoney(pedido.total)}. La venta y su anulación '
+                  'quedarán registradas en el historial.',
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: motivoController,
+                  autofocus: true,
+                  maxLines: 3,
+                  decoration: appInput(label: 'Motivo (obligatorio)'),
+                  validator: (value) =>
+                      value == null || value.trim().isEmpty
+                      ? 'Ingresa el motivo de la anulación'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              onPressed: () {
+                if (!formKey.currentState!.validate()) return;
+                Navigator.pop(context, motivoController.text.trim());
+              },
+              child: const Text('Anular venta'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      motivoController.dispose();
+    }
+    if (motivo == null) return;
     setState(() => _saving = true);
     try {
       await _salesRepository.anularPedido(
         pedido.id,
         usuarioId: widget.usuario.id,
+        motivo: motivo,
       );
       if (!mounted) return;
       setState(() {
@@ -701,36 +746,73 @@ class _SalesPageState extends State<SalesPage> {
       future: _future,
       builder: (context, snapshot) {
         final data = snapshot.data;
-        return SingleChildScrollView(
-          padding: EdgeInsets.all(
-            esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              PageHeader(
-                title: 'Ventas',
-                subtitle: 'Toca el producto para agregarlo al pedido. Solo se venden los del menú habilitado.',
-                actions: [
-                  OutlinedButton.icon(
-                    onPressed: () => setState(_reload),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Actualizar'),
-                  ),
-                ],
-              ),
-              if (snapshot.connectionState == ConnectionState.waiting)
-                const LoadingView()
-              else if (snapshot.hasError)
-                ErrorView(
-                  message: '${snapshot.error}',
-                  onRetry: () => setState(_reload),
-                )
-              else if (data == null)
-                const SizedBox.shrink()
-              else if (data.caja == null)
-                Column(
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final ancho = constraints.maxWidth >= 860;
+            if (ancho &&
+                data != null &&
+                !snapshot.hasError &&
+                data.caja != null) {
+              const padding = 24.0;
+              final pedidoWidth = constraints.maxWidth * 0.25;
+              return Padding(
+                padding: const EdgeInsets.all(padding),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _encabezadoVentas(),
+                            _estadoMenu(context, data),
+                            const SizedBox(height: 14),
+                            _filtros(context, data),
+                            const SizedBox(height: 14),
+                            _catalogo(context, data),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: pedidoWidth,
+                      height: constraints.maxHeight - padding * 2,
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _carrito(context, data),
+                            const SizedBox(height: 16),
+                            _historialVentas(context, data),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(
+                esAngosto(MediaQuery.sizeOf(context).width) ? 12 : 24,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _encabezadoVentas(),
+                  if (snapshot.connectionState == ConnectionState.waiting)
+                    const LoadingView()
+                  else if (snapshot.hasError)
+                    ErrorView(
+                      message: '${snapshot.error}',
+                      onRetry: () => setState(_reload),
+                    )
+                  else if (data == null)
+                    const SizedBox.shrink()
+                  else if (data.caja == null)
                     EmptyState(
                       icon: Icons.lock_outline,
                       title: 'No hay caja abierta',
@@ -744,63 +826,38 @@ class _SalesPageState extends State<SalesPage> {
                               ),
                               label: const Text('Ir a Caja'),
                             ),
-                    ),
+                    )
+                  else ...[
+                    _estadoMenu(context, data),
+                    const SizedBox(height: 14),
+                    _filtros(context, data),
+                    const SizedBox(height: 14),
+                    _catalogo(context, data),
+                    const SizedBox(height: 16),
+                    _carrito(context, data),
+                    const SizedBox(height: 16),
+                    _historialVentas(context, data),
                   ],
-                )
-              else ...[
-                _estadoMenu(context, data),
-                const SizedBox(height: 14),
-                _filtros(context, data),
-                const SizedBox(height: 14),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    // En tablet/escritorio el pedido queda fijo a la izquierda;
-                    // solo en teléfono se acomoda abajo.
-                    final horizontal = !esAngosto(
-                      MediaQuery.sizeOf(context).width,
-                      limite: 860,
-                    );
-                    final catalogo = Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _catalogo(context, data),
-                        const SizedBox(height: 16),
-                        _historialVentas(context, data),
-                      ],
-                    );
-                    final carrito = _carrito(context, data);
-                    if (horizontal) {
-                      final pedidoWidth = (constraints.maxWidth * 0.30).clamp(
-                        320.0,
-                        420.0,
-                      );
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(width: pedidoWidth, child: carrito),
-                          const SizedBox(width: 16),
-                          Expanded(child: catalogo),
-                        ],
-                      );
-                    }
-                    return Column(
-                      children: [
-                        _catalogo(context, data),
-                        const SizedBox(height: 16),
-                        carrito,
-                        const SizedBox(height: 16),
-                        _historialVentas(context, data),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ],
-          ),
+                ],
+              ),
+            );
+          },
         );
       },
     );
   }
+
+  Widget _encabezadoVentas() => PageHeader(
+    title: 'Ventas',
+    subtitle: 'Toca el producto para agregarlo al pedido. Solo se venden los del menú habilitado.',
+    actions: [
+      OutlinedButton.icon(
+        onPressed: () => setState(_reload),
+        icon: const Icon(Icons.refresh),
+        label: const Text('Actualizar'),
+      ),
+    ],
+  );
 
   Widget _estadoMenu(BuildContext context, _SalesData data) {
     final scheme = Theme.of(context).colorScheme;
@@ -1095,21 +1152,45 @@ class _SalesPageState extends State<SalesPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Icon(Icons.shopping_cart_outlined, color: scheme.primary),
-              const SizedBox(width: 8),
-              Text(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final titulo = Text(
                 'Pedido',
                 style: Theme.of(context).textTheme.titleMedium
                     ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Text(
+              );
+              final cantidad = Text(
                 '$_unidades ítem(s)',
                 style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
-            ],
+              );
+              if (constraints.maxWidth < 360) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.shopping_cart_outlined,
+                          color: scheme.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        titulo,
+                      ],
+                    ),
+                    Align(alignment: Alignment.centerRight, child: cantidad),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Icon(Icons.shopping_cart_outlined, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  titulo,
+                  const Spacer(),
+                  cantidad,
+                ],
+              );
+            },
           ),
           const SizedBox(height: 10),
           if (_cart.isEmpty)
@@ -1335,10 +1416,12 @@ class _PaymentDialogState extends State<_PaymentDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                spacing: 8,
+                runSpacing: 4,
                 children: [
                   Text('Total a cobrar'),
-                  const Spacer(),
                   Text(
                     formatMoney(widget.total),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -1407,7 +1490,10 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 ),
               ),
               const Divider(),
-              Row(
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                spacing: 8,
+                runSpacing: 4,
                 children: [
                   Text(
                     _restante > 0.004
@@ -1421,7 +1507,6 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                           : scheme.error,
                     ),
                   ),
-                  const Spacer(),
                   Text(
                     formatMoney(_restante.abs()),
                     style: TextStyle(

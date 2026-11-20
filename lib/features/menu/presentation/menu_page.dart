@@ -552,8 +552,6 @@ class _MenuPageState extends State<MenuPage> {
         return 'Habilitado';
       case 'CERRADO':
         return 'Cerrado';
-      case 'BORRADOR':
-        return 'Borrador';
       default:
         return 'Sin menú';
     }
@@ -811,7 +809,7 @@ class _MenuPageState extends State<MenuPage> {
     for (final producto in data.productos) {
       if (!producto.activo ||
           producto.esCompuesto ||
-          !MenuRepository.esCategoriaPlatoSuelto(producto.categoriaNombre)) {
+          !MenuRepository.esCategoriaProductoMenu(producto.categoriaNombre)) {
         continue;
       }
       relevantes.add(producto.categoriaId);
@@ -1124,14 +1122,16 @@ class _MenuPageState extends State<MenuPage> {
       return term.isEmpty || producto.nombre.toLowerCase().contains(term);
     }
 
-    // El menú solo gestiona platos sueltos y sopas. Las bebidas y los combos
-    // se venden como "siempre disponibles" desde Ventas.
-    final platos = data.productos
+    // Las sopas tienen su selector propio; las demás categorías se agregan
+    // desde este catálogo.
+    final seleccionables = data.productos
         .where(
           (producto) =>
               producto.activo &&
               !producto.esCompuesto &&
-              MenuRepository.esCategoriaPlatoSuelto(producto.categoriaNombre),
+              MenuRepository.esCategoriaProductoMenu(
+                producto.categoriaNombre,
+              ),
         )
         .where(coincide)
         .toList();
@@ -1140,25 +1140,21 @@ class _MenuPageState extends State<MenuPage> {
           (producto) =>
               !producto.activo &&
               !producto.esCompuesto &&
-              (MenuRepository.esCategoriaPlatoSuelto(
-                    producto.categoriaNombre,
-                  ) ||
-                  MenuRepository.esCategoriaSopa(producto.categoriaNombre)) &&
               coincide(producto),
         )
         .toList()
       ..sort(_compararProductos);
 
-    if (platos.isEmpty && deshabilitados.isEmpty) {
+    if (seleccionables.isEmpty && deshabilitados.isEmpty) {
       return const EmptyState(
         icon: Icons.search_off,
         title: 'Sin productos',
-        message: 'No hay platos sueltos o sopas activas que coincidan.',
+        message: 'No hay productos activos que coincidan.',
       );
     }
 
     final grupos = <int, List<Producto>>{};
-    for (final producto in platos) {
+    for (final producto in seleccionables) {
       grupos.putIfAbsent(producto.categoriaId, () => []).add(producto);
     }
     final ordenCategorias = {
@@ -1180,7 +1176,7 @@ class _MenuPageState extends State<MenuPage> {
     for (final categoriaId in categorias) {
       final categoria = ordenCategorias[categoriaId];
       final productosVisibles = grupos[categoriaId]!..sort(_compararProductos);
-      final todosCategoria = platos
+      final todosCategoria = seleccionables
           .where((producto) => producto.categoriaId == categoriaId)
           .toList()
         ..sort(_compararProductos);

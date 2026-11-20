@@ -1352,7 +1352,6 @@ class _NuevaCategoriaDialogState extends State<_NuevaCategoriaDialog> {
             children: [
               TextFormField(
                 controller: _controller,
-                inputFormatters: [decimalAmountInputFormatter],
                 autofocus: true,
                 textCapitalization: TextCapitalization.characters,
                 decoration: appInput(

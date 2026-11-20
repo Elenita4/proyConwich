@@ -152,8 +152,11 @@ class CashRepository {
     double? sobrante,
     double? efectivoContado,
     double? qrVerificado,
-    String? observacion,
+    required String observacion,
   }) async {
+    if (observacion.trim().isEmpty) {
+      throw ArgumentError('La observación de caja es obligatoria.');
+    }
     final db = await AppDatabase.instance.database;
     final resumen = await getResumen(cajaId);
     await db.update(
@@ -166,7 +169,7 @@ class CashRepository {
         'usuario_cierre_id': usuarioId,
         'fecha_cierre': sqlNow(),
         'estado': 'CERRADA',
-        'observacion': observacion,
+        'observacion': observacion.trim(),
       },
       where: 'id = ?',
       whereArgs: [cajaId],
@@ -178,7 +181,6 @@ class CashRepository {
     required int cajaId,
     required int usuarioId,
     required double monto,
-    required String metodoPago,
     String? descripcion,
   }) async {
     if (monto <= 0) throw StateError('El monto debe ser mayor a cero.');
@@ -189,7 +191,7 @@ class CashRepository {
       'usuario_id': usuarioId,
       'fecha': sqlNow(),
       'monto': monto,
-      'metodo_pago': metodoPago,
+      'metodo_pago': 'EFECTIVO',
       'caja_id': cajaId,
       'descripcion': descripcion?.trim().isEmpty == true
           ? null

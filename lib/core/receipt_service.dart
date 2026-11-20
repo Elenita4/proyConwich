@@ -242,9 +242,10 @@ class ReceiptService {
           pw.Divider(),
           fila('Ventas efectivo', formatMoney(resumen.ventasEfectivo)),
           fila('Ventas QR', formatMoney(resumen.ventasQr)),
-          fila('Salida efectivo', formatMoney(resumen.salidasEfectivo)),
-          if (resumen.salidasQr > 0)
-            fila('Salida QR', formatMoney(resumen.salidasQr)),
+          fila(
+            'Salidas de caja',
+            formatMoney(resumen.salidasEfectivo + resumen.salidasQr),
+          ),
           fila('Sobrante del turno', formatMoney(sobrante)),
           pw.Divider(),
           fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), fuerte: true),

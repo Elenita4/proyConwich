@@ -102,6 +102,9 @@ class MenuRepository {
   static bool esCategoriaPlatoSuelto(String nombre) =>
       nombre.trim().toUpperCase() == 'PLATOS SUELTOS';
 
+  static bool esCategoriaProductoMenu(String nombre) =>
+      !esCategoriaSopa(nombre);
+
   Future<MenuDia?> getMenu(DateTime fecha, String tipo) async {
     final db = await AppDatabase.instance.database;
     final rows = await db.query(
@@ -111,7 +114,19 @@ class MenuRepository {
       limit: 1,
     );
     if (rows.isEmpty) return null;
-    return _fromRow(rows.first);
+    final row = rows.first;
+    if (row['estado'] == 'BORRADOR') {
+      await habilitar(row['id']! as int);
+      return MenuDia(
+        id: row['id']! as int,
+        fecha: row['fecha']! as String,
+        tipo: row['tipo']! as String,
+        estado: 'HABILITADO',
+        observacion: row['observacion'] as String?,
+        precioAlmuerzo: (row['precio_almuerzo'] as num?)?.toDouble(),
+      );
+    }
+    return _fromRow(row);
   }
 
   Future<MenuDia> crearMenu(
@@ -126,16 +141,17 @@ class MenuRepository {
     final id = await db.insert('menus_dia', {
       'fecha': sqlDate(fecha),
       'tipo': tipo,
-      'estado': 'BORRADOR',
+      'estado': 'HABILITADO',
       'usuario_id': usuarioId,
       'observacion': observacion,
+      'habilitado_en': sqlNow(),
       'creado_en': sqlNow(),
     });
     return MenuDia(
       id: id,
       fecha: sqlDate(fecha),
       tipo: tipo,
-      estado: 'BORRADOR',
+      estado: 'HABILITADO',
       observacion: observacion,
     );
   }
@@ -177,6 +193,7 @@ class MenuRepository {
       [anterior.id],
     );
     var yaCopioSopa = false;
+    var copioItems = false;
     for (final item in items) {
       final esSopa = esCategoriaSopa(item['categoria_nombre'] as String);
       if (esSopa && yaCopioSopa) continue;
@@ -187,12 +204,13 @@ class MenuRepository {
         'disponible': 1,
         'orden': item['orden'],
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      copioItems = true;
     }
     // Los combos antiguos quedan como historial, pero no se copian: el
     // completo ahora se calcula al vender a partir del plato y la sopa del día.
-    // El menú del día siguiente conserva la publicación anterior para que se
-    // pueda vender sin volver a publicarlo. Un borrador sigue siendo borrador.
-    if (anterior.habilitado) {
+    // Si el anterior tenía productos, el menú copiado queda habilitado aunque
+    // el estado anterior todavía fuera BORRADOR por una versión antigua.
+    if (anterior.habilitado || copioItems) {
       await db.update(
         'menus_dia',
         {'estado': 'HABILITADO', 'habilitado_en': sqlNow()},
@@ -356,7 +374,7 @@ class MenuRepository {
   /// Devuelve el id del item para poder actualizarlo sin recargar la pantalla.
   Future<int> agregarProducto(int menuDiaId, int productoId) async {
     final db = await AppDatabase.instance.database;
-    return db.transaction((txn) async {
+    final itemId = await db.transaction((txn) async {
       final productoRows = await txn.rawQuery(
         '''
         SELECT c.nombre AS categoria_nombre
@@ -421,6 +439,8 @@ class MenuRepository {
         'orden': orden,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     });
+    await habilitar(menuDiaId);
+    return itemId;
   }
 
   /// Selecciona o quita todos los productos de una categoría del menú.
@@ -576,6 +596,9 @@ class MenuRepository {
         }
       }
     });
+    if (productoIds.isNotEmpty) {
+      await habilitar(menuDiaId);
+    }
   }
 
   /// Deja el menú sin sopa ni platos, conservando las filas que ya tienen
