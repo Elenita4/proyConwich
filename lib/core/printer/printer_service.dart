@@ -59,6 +59,29 @@ class PrinterService {
   bool get disponible =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+  /// Devuelve la MAC guardada en `app_meta`, o `null` si no hay impresora.
+  Future<String?> macConfigurada() async {
+    final meta = await AppDatabase.instance.leerAppMeta();
+    final mac = (meta?['impresora_mac'] as String?)?.trim() ?? '';
+    return mac.isEmpty ? null : mac;
+  }
+
+  Future<String> _macRequerida() async {
+    if (!disponible) {
+      throw StateError(
+        'La impresión directa solo está disponible en la app de Android.',
+      );
+    }
+    final mac = await macConfigurada();
+    if (mac == null) {
+      throw StateError(
+        'No hay impresora configurada. Abre la pantalla Impresora, '
+        'selecciona el dispositivo y guárdalo.',
+      );
+    }
+    return mac;
+  }
+
   Future<bool> encendido() async {
     if (!disponible) return false;
     try {
@@ -80,8 +103,9 @@ class PrinterService {
   Future<List<ImpresoraDispositivo>> vinculados() async {
     if (!disponible) return const [];
     try {
-      final lista = await _channel
-          .invokeListMethod<Map<Object?, Object?>>('listBondedDevices');
+      final lista = await _channel.invokeListMethod<Map<Object?, Object?>>(
+        'listBondedDevices',
+      );
       if (lista == null) return const [];
       return lista
           .map((fila) {
@@ -112,8 +136,9 @@ class PrinterService {
   Future<List<ImpresoraDispositivo>> escanearBle() async {
     if (!disponible) return const [];
     try {
-      final lista = await _channel
-          .invokeListMethod<Map<Object?, Object?>>('scanBleDevices');
+      final lista = await _channel.invokeListMethod<Map<Object?, Object?>>(
+        'scanBleDevices',
+      );
       if (lista == null) return const [];
       return lista
           .map((fila) {
@@ -178,6 +203,20 @@ class PrinterService {
     );
   }
 
+  /// Imprime las fichas usando la impresora guardada en `app_meta`.
+  Future<void> imprimirNotaVentaConfigurada({
+    required PedidoDetalle detalle,
+    required String cajero,
+  }) async {
+    final mac = await _macRequerida();
+    await imprimirNotaVenta(
+      detalle: detalle,
+      turno: '',
+      cajero: cajero,
+      mac: mac,
+    );
+  }
+
   /// Bytes de las dos fichas. Se expone para probar el orden de impresión y
   /// corte sin depender de la impresora física.
   @visibleForTesting
@@ -219,14 +258,43 @@ class PrinterService {
     );
   }
 
+  /// Imprime el movimiento del turno usando la impresora de `app_meta`.
+  Future<void> imprimirMovimientoTurnoConfigurado({
+    required Caja caja,
+    required CajaResumen resumen,
+    required double sobrante,
+    required String cajero,
+  }) async {
+    final mac = await _macRequerida();
+    await imprimirMovimientoTurno(
+      caja: caja,
+      resumen: resumen,
+      sobrante: sobrante,
+      cajero: cajero,
+      mac: mac,
+    );
+  }
+
   /// Prueba real: imprime "CONWICH" y luego avanza y corta el papel, todo en
   /// un solo envío para conservar el orden.
   Future<void> imprimirPrueba({required String mac}) async {
-    await conectar(mac);
+    await _conectarConReintento(mac);
     try {
       await enviarBytes(_testComando);
     } finally {
       await desconectar();
+    }
+  }
+
+  /// Si la impresora conserva una conexión vieja, la cierra y vuelve a
+  /// conectar antes de rendirse. El envío de bytes no se reintenta aquí para
+  /// no duplicar una ficha que ya pudo haber salido.
+  Future<void> _conectarConReintento(String mac) async {
+    try {
+      await conectar(mac);
+    } catch (_) {
+      await desconectar();
+      await conectar(mac);
     }
   }
 
@@ -235,9 +303,14 @@ class PrinterService {
     String mac, {
     bool mantenerConexion = false,
   }) async {
-    await conectar(mac);
+    await _conectarConReintento(mac);
     try {
       await enviarBytes(bytes);
+    } catch (_) {
+      // Si falló el envío, se cierra la conexión para que el reintento no
+      // reutilice un GATT que quedó en mal estado.
+      await desconectar();
+      rethrow;
     } finally {
       if (!mantenerConexion) await desconectar();
     }
@@ -287,9 +360,7 @@ class PrinterService {
   }) {
     final pedido = detalle.pedido;
     final fecha = parseSqlDateTime(pedido.fecha);
-    final fechaTexto = fecha == null
-        ? pedido.fecha
-        : formatDateShort(fecha);
+    final fechaTexto = fecha == null ? pedido.fecha : formatDateShort(fecha);
     final horaTexto = fecha == null ? '' : formatTimeShort(fecha);
 
     final b = _Ticket();
@@ -323,9 +394,7 @@ class PrinterService {
   }) {
     final pedido = detalle.pedido;
     final fecha = parseSqlDateTime(pedido.fecha);
-    final fechaTexto = fecha == null
-        ? pedido.fecha
-        : formatDateShort(fecha);
+    final fechaTexto = fecha == null ? pedido.fecha : formatDateShort(fecha);
     final horaTexto = fecha == null ? '' : formatTimeShort(fecha);
 
     final b = _Ticket();
@@ -407,11 +476,7 @@ class PrinterService {
     }
   }
 
-  Uint8List _empaquetarRaster(
-    Uint8List rgba,
-    int width,
-    int height,
-  ) {
+  Uint8List _empaquetarRaster(Uint8List rgba, int width, int height) {
     final bytesPerRow = (width + 7) ~/ 8;
     final data = Uint8List(bytesPerRow * height);
     for (var y = 0; y < height; y++) {
@@ -420,8 +485,7 @@ class PrinterService {
       for (var x = 0; x < width; x++) {
         final i = fila + x * 4;
         if (rgba[i + 3] < 40) continue;
-        final lum =
-            0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+        final lum = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
         if (lum < 160) {
           data[salida + (x >> 3)] |= 0x80 >> (x & 7);
         }
@@ -471,9 +535,7 @@ class PrinterService {
         _ancho,
       ),
     );
-    b.line(
-      _fila('Ventas QR', formatSignedMoney(resumen.ventasQr), _ancho),
-    );
+    b.line(_fila('Ventas QR', formatSignedMoney(resumen.ventasQr), _ancho));
     b.line(
       _fila(
         'Salidas de caja',
@@ -481,14 +543,10 @@ class PrinterService {
         _ancho,
       ),
     );
-    b.line(
-      _fila('Sobrante del turno', formatSignedMoney(sobrante), _ancho),
-    );
+    b.line(_fila('Sobrante del turno', formatSignedMoney(sobrante), _ancho));
     b.line(b.separador(_ancho));
     b.bold(true);
-    b.line(
-      _fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), _ancho),
-    );
+    b.line(_fila('TOTAL ESPERADO', formatMoney(resumen.totalEsperado), _ancho));
     b.line(
       _fila(
         'TOTAL EN CAJA',

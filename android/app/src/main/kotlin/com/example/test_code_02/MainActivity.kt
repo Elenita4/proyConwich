@@ -306,6 +306,23 @@ class MainActivity : FlutterActivity() {
         return manager?.adapter
     }
 
+    private fun gattConnectionState(): Int {
+        val gatt = bluetoothGatt ?: return BluetoothProfile.STATE_DISCONNECTED
+        return try {
+            val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            manager?.getConnectionState(gatt.device, BluetoothProfile.GATT)
+                ?: BluetoothProfile.STATE_DISCONNECTED
+        } catch (_: Exception) {
+            BluetoothProfile.STATE_DISCONNECTED
+        }
+    }
+
+    private fun bleListaParaEscribir(): Boolean =
+        bleConnected &&
+            bluetoothGatt != null &&
+            bleWriteChar != null &&
+            gattConnectionState() == BluetoothProfile.STATE_CONNECTED
+
     private fun ensureBluetoothConnectPermission(
         result: MethodChannel.Result,
         action: String,
@@ -379,7 +396,7 @@ class MainActivity : FlutterActivity() {
             result.error("no_bluetooth", "Este dispositivo no tiene Bluetooth.", null)
             return
         }
-        if (bleConnected && bleAddress == address) {
+        if (bleAddress == address && bleListaParaEscribir()) {
             result.success(true)
             return
         }
@@ -395,7 +412,9 @@ class MainActivity : FlutterActivity() {
             result.error("invalid_args", error.message ?: "Dirección inválida.", null)
             return
         }
-        disconnectBle()
+        // Cierra cualquier conexión BLE o SPP anterior: si quedó un socket
+        // viejo abierto, la impresora rechaza la conexión nueva.
+        disconnectPrinter()
         bleAddress = address
         bleConnectResult = result
         bleFallbackDone = false
@@ -627,12 +646,14 @@ class MainActivity : FlutterActivity() {
                     "onCharacteristicWrite status=$status; NO_RESPONSE status=$st; " +
                         "offset=$bleWriteOffset/${data.size}",
                 )
+                disconnectBle()
                 return
             }
             completeBlePrint(
                 false,
                 "onCharacteristicWrite status=$status; offset=$bleWriteOffset",
             )
+            disconnectBle()
         }
     }
 
@@ -655,6 +676,7 @@ class MainActivity : FlutterActivity() {
                 "GATT no disponible (gatt=${gatt != null}, " +
                     "char=${char != null}, data=${data != null}).",
             )
+            disconnectBle()
             return
         }
         if (bleWriteOffset >= data.size) {
@@ -694,6 +716,7 @@ class MainActivity : FlutterActivity() {
                 "Escritura rechazada: DEFAULT status=$stDefault, " +
                     "NO_RESPONSE status=$stNoResp, offset=$bleWriteOffset/${data.size}",
             )
+            disconnectBle()
         }
     }
 
@@ -751,8 +774,12 @@ class MainActivity : FlutterActivity() {
             result.error("invalid_args", "Faltan los datos a imprimir.", null)
             return
         }
-        // 1) BLE GATT.
-        if (bleConnected && bluetoothGatt != null && bleWriteChar != null) {
+        // 1) BLE GATT. Si la conexión quedó marcada como activa pero el GATT
+        // ya no responde, se limpia para forzar una reconexión.
+        if (bleConnected && !bleListaParaEscribir()) {
+            disconnectBle()
+        }
+        if (bleListaParaEscribir()) {
             if (blePrintResult != null) {
                 result.error("busy", "Ya hay una impresión en curso.", null)
                 return

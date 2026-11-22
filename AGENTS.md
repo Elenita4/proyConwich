@@ -181,8 +181,8 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
 ## Impresión
 - `lib/core/receipt_service.dart` genera la **nota de venta en PDF de 80 mm** con fuente
   **Roboto embebida** (`assets/fonts/Roboto-Regular.ttf` y `-Bold.ttf`) para que acentos y ñ se
-  impriman bien; el alto de página se ajusta al contenido. Sirve para el diálogo de impresión
-  del sistema.
+  impriman bien; el alto de página se ajusta al contenido. La UI ya no lo usa para imprimir:
+  queda para exportaciones/pruebas y como generador de PDF del mismo formato.
 - Impresora térmica **Bluetooth de 80 mm** por ESC/POS: `lib/core/printer/printer_service.dart`
   arma los bytes (48 columnas) y usa el `MethodChannel`
   `com.example.test_code_02/bluetooth_printer` implementado en `MainActivity.kt`. La Golden Sky
@@ -209,11 +209,13 @@ Flutter app (POS de restaurante "Conwich"). Paquete Dart: `test_code_02` — los
   esta impresora provocaba desconexiones `status=22`. La conexión se mantiene abierta
   después de imprimir para reutilizarla en la siguiente venta. El logo raster se cachea
   de forma estática y se envía una sola vez por tamaño. Si la impresora se desconecta
-  a mitad de la impresión, la app pregunta **Reintentar / Abrir PDF / Cancelar** en vez
-  de abrir el PDF automáticamente.
-- Al cobrar se mantiene el diálogo "¿Imprimir las fichas del pedido?": si hay impresora
-  configurada, imprime por Bluetooth; si no, abre el PDF. Al cerrar caja se ofrece imprimir
-  el **movimiento del turno** por la misma vía.
+  a mitad de la impresión, la app pregunta **Reintentar / Cancelar**; el PDF ya no se
+  abre automáticamente.
+- Al cobrar se mantiene el diálogo "¿Imprimir las fichas del pedido?" y al cerrar caja
+  se ofrece imprimir el **movimiento del turno**: ambos usan **solo la impresora directa**
+  configurada en `app_meta`. Si no hay impresora guardada o la conexión falla, se muestra
+  un error para configurarla/reintentar; no se abre PDF. Reportes → Pedidos usa la misma
+  impresión directa para reimprimir la nota.
 
 ## Convenciones / gotchas
 - **Regla: el sistema nunca depende de que los productos tengan receta.** Un `PREPARADO` sin

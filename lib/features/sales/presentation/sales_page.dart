@@ -7,10 +7,8 @@ import '../../../core/catalog_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/menu_repository.dart';
 import '../../../core/printer/printer_service.dart';
-import '../../../core/receipt_service.dart';
 import '../../../core/sales_repository.dart';
 import '../../../core/session.dart';
-import '../../../data/database/app_database.dart';
 import '../../../ui/common.dart';
 import '../../../ui/producto_catalogo_card.dart';
 
@@ -447,7 +445,7 @@ class _SalesPageState extends State<SalesPage> {
         context,
         'Venta registrada por ${formatMoney(_totalAnterior(pagos))}.',
       );
-      await _ofrecerImprimir(detalle, caja);
+      await _ofrecerImprimir(detalle);
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -458,7 +456,7 @@ class _SalesPageState extends State<SalesPage> {
   double _totalAnterior(List<PagoInput> pagos) =>
       pagos.fold<double>(0, (sum, pago) => sum + pago.monto);
 
-  Future<void> _ofrecerImprimir(PedidoDetalle detalle, Caja caja) async {
+  Future<void> _ofrecerImprimir(PedidoDetalle detalle) async {
     final imprimir = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -481,80 +479,49 @@ class _SalesPageState extends State<SalesPage> {
       ),
     );
     if (imprimir != true) return;
-    final meta = await AppDatabase.instance.leerAppMeta();
-    final mac = (meta?['impresora_mac'] as String?) ?? '';
     final printer = PrinterService();
-    if (mac.isEmpty || !printer.disponible) {
-      await _abrirPdf(detalle, caja);
-      return;
-    }
     while (true) {
       _mostrarEnviandoImpresora();
       try {
-        await printer.imprimirNotaVenta(
+        await printer.imprimirNotaVentaConfigurada(
           detalle: detalle,
-          turno: caja.turnoLabel,
           cajero: widget.usuario.nombre,
-          mac: mac,
         );
         _cerrarProgreso();
         return;
       } catch (error) {
         _cerrarProgreso();
         if (!mounted) return;
-        final accion = await _preguntarFalloImpresora('$error');
-        if (accion == 'retry') continue;
-        if (accion == 'pdf') {
-          await _abrirPdf(detalle, caja);
-        }
-        return;
+        final reintentar = await _preguntarFalloImpresora('$error');
+        if (!reintentar) return;
       }
     }
   }
 
-  Future<void> _abrirPdf(PedidoDetalle detalle, Caja caja) async {
-    try {
-      await ReceiptService().imprimirNotaVenta(
-        detalle: detalle,
-        turno: caja.turnoLabel,
-        cajero: widget.usuario.nombre,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'No se pudo generar la nota de venta: $error',
-        error: true,
-      );
-    }
-  }
-
-  Future<String?> _preguntarFalloImpresora(String error) {
-    return showDialog<String>(
+  Future<bool> _preguntarFalloImpresora(String error) async {
+    final accion = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('No se pudo terminar la impresión'),
         content: Text(
-          'La primera ficha pudo haber salido. Verifica el papel antes de '
-          'reintentar para no duplicarla.\n\nDetalle: $error',
+          'Verifica que la impresora esté encendida, vinculada y guardada en '
+          'la pantalla Impresora. Si la primera ficha ya salió, no reintentes '
+          'para no duplicarla.\n\nDetalle: $error',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancelar'),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'pdf'),
-            child: const Text('Abrir PDF'),
-          ),
           FilledButton.icon(
-            onPressed: () => Navigator.pop(context, 'retry'),
+            onPressed: () => Navigator.pop(context, true),
             icon: const Icon(Icons.refresh),
             label: const Text('Reintentar'),
           ),
         ],
       ),
     );
+    return accion == true;
   }
 
   void _mostrarEnviandoImpresora() {

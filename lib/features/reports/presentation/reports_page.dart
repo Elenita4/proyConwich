@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/cash_repository.dart';
 import '../../../core/date_utils.dart';
-import '../../../core/receipt_service.dart';
+import '../../../core/printer/printer_service.dart';
 import '../../../core/report_exporter.dart';
 import '../../../core/report_repository.dart';
 import '../../../core/sales_repository.dart';
@@ -275,10 +275,7 @@ class _ReportsPageState extends State<ReportsPage> {
     final pedidos = await _repository.getPedidos(range.start, range.end);
     final faltantes = await _repository.getFaltantes(range.start, range.end);
     final compras = await _repository.getCompras(range.start, range.end);
-    final cajas = await CashRepository().getCajasEntre(
-      range.start,
-      range.end,
-    );
+    final cajas = await CashRepository().getCajasEntre(range.start, range.end);
     final devoluciones = await _repository.getDevoluciones(
       range.start,
       range.end,
@@ -611,10 +608,7 @@ class _ReportsPageState extends State<ReportsPage> {
                     icon: Icon(Icons.lunch_dining_outlined),
                     text: 'Productos',
                   ),
-                  Tab(
-                    icon: Icon(Icons.point_of_sale_outlined),
-                    text: 'Cajas',
-                  ),
+                  Tab(icon: Icon(Icons.point_of_sale_outlined), text: 'Cajas'),
                   Tab(
                     icon: Icon(Icons.assignment_return_outlined),
                     text: 'Anulados',
@@ -688,11 +682,7 @@ class _ReportsPageState extends State<ReportsPage> {
             );
             if (constraints.maxWidth < 760) {
               return Column(
-                children: [
-                  ventas,
-                  const SizedBox(height: 12),
-                  salidas,
-                ],
+                children: [ventas, const SizedBox(height: 12), salidas],
               );
             }
             return Row(
@@ -805,11 +795,10 @@ class _ReportsPageState extends State<ReportsPage> {
           const SizedBox(height: 6),
           Text(
             formatMoney(resumen.ganancia),
-            style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: resumen.ganancia >= 0 ? scheme.primary : scheme.error,
-                ),
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: resumen.ganancia >= 0 ? scheme.primary : scheme.error,
+            ),
           ),
           Text(
             '${resumen.pedidos} pedido(s) · ticket promedio ${formatMoney(resumen.ticketPromedio)}',
@@ -1337,12 +1326,11 @@ class _ReportsPageState extends State<ReportsPage> {
       grupo.turnos++;
       grupo.efectivo += item.resumen.ventasEfectivo;
       grupo.qr += item.resumen.ventasQr;
-      grupo.salidas +=
-          item.resumen.salidasEfectivo + item.resumen.salidasQr;
+      grupo.salidas += item.resumen.salidasEfectivo + item.resumen.salidasQr;
       grupo.esperado += item.resumen.totalEsperado;
       grupo.sobrante += item.caja.sobrante ?? 0;
-      final rol = Perfil.nombres[item.caja.perfilApertura] ??
-          item.caja.perfilApertura;
+      final rol =
+          Perfil.nombres[item.caja.perfilApertura] ?? item.caja.perfilApertura;
       grupo.cajeros.add(
         '${item.caja.usuarioApertura}${rol.isEmpty ? '' : ' ($rol)'}',
       );
@@ -1467,8 +1455,8 @@ class _ReportsPageState extends State<ReportsPage> {
         const SizedBox(height: 8),
         ...data.cajas.map((item) {
           final caja = item.caja;
-          final rol = Perfil.nombres[caja.perfilApertura] ??
-              caja.perfilApertura;
+          final rol =
+              Perfil.nombres[caja.perfilApertura] ?? caja.perfilApertura;
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: AppCard(
@@ -1482,9 +1470,7 @@ class _ReportsPageState extends State<ReportsPage> {
                         caja.abierta
                             ? Icons.lock_open
                             : Icons.check_circle_outline,
-                        color: caja.abierta
-                            ? scheme.tertiary
-                            : scheme.primary,
+                        color: caja.abierta ? scheme.tertiary : scheme.primary,
                         size: 20,
                       ),
                       const SizedBox(width: 8),
@@ -1494,9 +1480,7 @@ class _ReportsPageState extends State<ReportsPage> {
                           '${caja.turnoLabel} · '
                           '${caja.usuarioApertura}'
                           '${rol.isEmpty ? '' : ' ($rol)'}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
                       Chip(
@@ -1591,9 +1575,7 @@ class _ReportsPageState extends State<ReportsPage> {
                         DataCell(Text(devolucion.usuarioNombre)),
                         DataCell(
                           Text(
-                            devolucion.metodo == 'EFECTIVO'
-                                ? 'Efectivo'
-                                : 'QR',
+                            devolucion.metodo == 'EFECTIVO' ? 'Efectivo' : 'QR',
                           ),
                         ),
                         DataCell(Text(formatMoney(devolucion.monto))),
@@ -1607,14 +1589,7 @@ class _ReportsPageState extends State<ReportsPage> {
                       ],
                     ),
                   ),
-                  _filaTotal([
-                    'TOTAL',
-                    '—',
-                    '—',
-                    '—',
-                    formatMoney(total),
-                    '—',
-                  ]),
+                  _filaTotal(['TOTAL', '—', '—', '—', formatMoney(total), '—']),
                 ],
               ),
             ),
@@ -1867,14 +1842,7 @@ class _ReportsPageState extends State<ReportsPage> {
                     ],
                   ),
                 ),
-                _filaTotal([
-                  'TOTAL',
-                  '—',
-                  '—',
-                  '—',
-                  '—',
-                  formatMoney(total),
-                ]),
+                _filaTotal(['TOTAL', '—', '—', '—', '—', formatMoney(total)]),
               ],
             ),
           ),
@@ -1884,21 +1852,88 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   Future<void> _imprimirPedido(PedidoReporte pedido) async {
+    final printer = PrinterService();
+    final PedidoDetalle detalle;
     try {
-      final detalle = await SalesRepository().getPedido(pedido.id);
-      await ReceiptService().imprimirNotaVenta(
-        detalle: detalle,
-        turno: pedido.turnoLabel,
-        cajero: pedido.usuario,
-      );
+      detalle = await SalesRepository().getPedido(pedido.id);
     } catch (error) {
       if (!mounted) return;
       showAppMessage(
         context,
-        'No se pudo generar la nota de venta: $error',
+        'No se pudo cargar el pedido: $error',
         error: true,
       );
+      return;
     }
+    while (true) {
+      _mostrarEnviandoImpresora();
+      try {
+        await printer.imprimirNotaVentaConfigurada(
+          detalle: detalle,
+          cajero: pedido.usuario,
+        );
+        _cerrarProgreso();
+        return;
+      } catch (error) {
+        _cerrarProgreso();
+        if (!mounted) return;
+        final reintentar = await _preguntarFalloImpresora('$error');
+        if (!reintentar) return;
+      }
+    }
+  }
+
+  Future<bool> _preguntarFalloImpresora(String error) async {
+    final accion = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('No se pudo imprimir la nota'),
+        content: Text(
+          'Verifica que la impresora esté encendida y vinculada.\n\n'
+          'Detalle: $error',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
+    return accion == true;
+  }
+
+  void _mostrarEnviandoImpresora() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('Enviando a la impresora…')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _cerrarProgreso() {
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
   }
 
   Widget _pedidosTab(BuildContext context, _ReportData data) {

@@ -6,9 +6,7 @@ import '../../../core/backup/drive_backup_service.dart';
 import '../../../core/cash_repository.dart';
 import '../../../core/date_utils.dart';
 import '../../../core/printer/printer_service.dart';
-import '../../../core/receipt_service.dart';
 import '../../../core/session.dart';
-import '../../../data/database/app_database.dart';
 import '../../../ui/common.dart';
 
 class _CashData {
@@ -267,43 +265,78 @@ class _CashPageState extends State<CashPage> {
       ),
     );
     if (imprimir != true) return;
-    final meta = await AppDatabase.instance.leerAppMeta();
-    final mac = (meta?['impresora_mac'] as String?) ?? '';
     final printer = PrinterService();
-    if (mac.isNotEmpty && printer.disponible) {
+    while (true) {
+      _mostrarEnviandoImpresora();
       try {
-        await printer.imprimirMovimientoTurno(
+        await printer.imprimirMovimientoTurnoConfigurado(
           caja: caja,
           resumen: resumen,
           sobrante: sobrante,
           cajero: widget.usuario.nombre,
-          mac: mac,
         );
+        _cerrarProgreso();
         return;
       } catch (error) {
+        _cerrarProgreso();
         if (!mounted) return;
-        showAppMessage(
-          context,
-          'No se pudo imprimir por Bluetooth: $error. Se abrirá el PDF.',
-          error: true,
-        );
+        final reintentar = await _preguntarFalloImpresora('$error');
+        if (!reintentar) return;
       }
     }
-    try {
-      await ReceiptService().imprimirMovimientoTurno(
-        caja: caja,
-        resumen: resumen,
-        sobrante: sobrante,
-        cajero: widget.usuario.nombre,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'No se pudo generar el movimiento del turno: $error',
-        error: true,
-      );
-    }
+  }
+
+  Future<bool> _preguntarFalloImpresora(String error) async {
+    final accion = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('No se pudo imprimir el movimiento'),
+        content: Text(
+          'Verifica que la impresora esté encendida y vinculada.\n\n'
+          'Detalle: $error',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
+    return accion == true;
+  }
+
+  void _mostrarEnviandoImpresora() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('Enviando a la impresora…')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _cerrarProgreso() {
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
   }
 
   void _respaldarDriveEnSegundoPlano() {
